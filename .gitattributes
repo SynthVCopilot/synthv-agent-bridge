@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.lua text eol=lf
+*.ts text eol=lf
+*.mjs text eol=lf
