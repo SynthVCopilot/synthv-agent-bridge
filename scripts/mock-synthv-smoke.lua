@@ -173,7 +173,7 @@ local selection={selectedNotes={},selectedGroups={}}
 function selection:getSelectedNotes() return arrayCopy(self.selectedNotes) end
 function selection:getSelectedGroups() return arrayCopy(self.selectedGroups) end
 local mainEditor={}
-function mainEditor:getCurrentTrack() return project.traacks[1] end
+function mainEditor:getCurrentTrack() return project.tracks[1] end
 function mainEditor:getCurrentGroup() return project.tracks[1].refs[1] end
 function mainEditor:getSelection() return selection end
 local arrangementSelection={}
@@ -193,7 +193,7 @@ function SV:blick2Quarter(b) return b/self.QUARTER end
 function SV:setTimeout(_,callback) scheduled=callback end
 function SV:finish() scheduled=nil end
 function SV:print(_) end
-function SV::showMessageBox(_,message) error(message) end
+function SV:showMessageBox(_,message) error(message) end
 
 dofile(assert(os.getenv("BRIDGE_SCRIPT")))
 main()
@@ -204,7 +204,7 @@ local function callRaw(action,payload)
     seq=seq+1
     local id=string.format("00000000-0000-4000-8000-%012d",seq)
     local f=assert(io.open(requestFile,"wb"))
-    f:write('{"protocolVersion":1,"requestId":"'..id..'","action":"'..action..'","createdAt":"2026-07-26T00:00:00.000Z","payload":'..payload.'}')
+    f:write('{"protocolVersion":1,"requestId":"'..id..'","action":"'..action..'","createdAt":"2026-07-26T00:00:00.000Z","payload":'..payload..'}')
     f:close()
     assert(scheduled,"bridge stopped unexpectedly")
     local callback=scheduled; scheduled=nil; callback()
