@@ -1,0 +1,247 @@
+# SynthV Agent Bridge
+
+A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that lets compatible AI clients inspect and control the project currently open in **Synthesizer V Studio 2 Pro**.
+
+The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse or rewrite `.svp` files, open a network port, or call an AI API by itself.
+
+> Status: **v0.1 foundation**. The protocol, safety guards, and core editor operations are implemented. Test on copies of important projects while the project is still pre-release.
+
+## What it can do
+
+- Read project metadata, playback state, tracks, note groups, notes, current selection, automation curves, and track mixer state.
+- Add tracks and notes.
+- Safely edit or delete notes using fresh note fingerprints.
+- Add, replace, or clear automation points such as pitch deviation, loudness, tension, breathiness, voicing, gender, and Vocal Mode curves.
+- Control gain, pan, mute, solo, play, pause, stop, seek, and loop.
+- Put each successful write call into one SynthV undo record.
+
+## Architecture
+
+```text
+Codex / another local stdio MCP host
+                    │
+                    │ MCP over stdio
+                    ▼
+         TypeScript MCP server
+                    │
+                    │ correlated JSON file IPC
+                    ▼
+       SynthVAgentBridge.lua (persistent)
+                    │
+                    │ SynthV scripting API
+                    ▼
+       Open Synthesizer V Studio project
+```
+
+File IPC is deliberately used for the first version because it works within SynthV's documented Lua environment and is easy to inspect and recover. See [docs/architecture.md](docs/architecture.md).
+
+## Requirements
+
+- Synthesizer V Studio **2 Pro 2.1.1 or later**.
+- Node.js **20.10 or later**.
+- An MCP host that supports local stdio servers, such as Codex CLI or another compatible local client.
+
+This project targets the scripting environment in Synthesizer V Studio 2 Pro; it does not target the Basic edition.
+
+## Installation
+
+### 1. Build the MCP server
+
+```bash
+git clone https://github.com/zhoupengjie/synthv-agent-bridge.git
+cd synthv-agent-bridge
+npm install
+npm run build
+```
+
+### 2. Install the SynthV scripts
+
+In Synthesizer V Studio, use **Scripts → Open Scripts Folder**, then pass that directory to the installer:
+
+```bash
+npm run install:synthv -- --target "/path/to/Synthesizer V Studio 2/scripts"
+```
+
+The installer copies these files into a `SynthV Agent Bridge` subfolder of the directory you selected:
+
+- `SynthVAgentBridge.lua`
+- `StopSynthVAgentBridge.lua`
+
+Alternatively, set `SYNTHV_SCRIPTS_DIR` to the scripts directory before running `npm run install:synthv`. The installer creates a `SynthV Agent Bridge` subfolder. After copying the files, choose **Scripts → Rescan**.
+
+### 3. Start the in-editor bridge
+
+In Synthesizer V Studio, run:
+
+```text
+Scripts → SynthV Agent Bridge → Start SynthV Agent Bridge
+```
+
+The script remains active and writes a heartbeat while SynthV is running. To stop it, run **Stop SynthV Agent Bridge**, or use SynthV's **Abort All Running Scripts** command.
+
+### 4. Connect an MCP host
+
+#### Codex CLI
+
+Use an absolute path to the built entry point:
+
+```bash
+codex mcp add synthv-agent-bridge -- node "/absolute/path/to/synthv-agent-bridge/dist/src/cli.js"
+```
+
+Then verify the registration:
+
+```bash
+codex mcp list
+```
+
+A complete TOML example is available at [examples/codex-config.toml](examples/codex-config.toml). Other local MCP hosts can use the same `node .../dist/src/cli.js` command when they support **STDIO** servers.
+
+### 5. Verify the connection
+
+Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by `get_project_info`. A healthy status contains:
+
+```json
+{
+  "connected": true,
+  "fresh": true
+}
+```
+
+## Available MCP tools
+
+| Tool | Access | Purpose |
+|---|---:|---|
+| `bridge_status` | Read | Read the heartbeat without requiring a round trip. |
+| `ping` | Read | Test the complete Node → Lua → Node path. |
+| `get_project_info` | Read | Project, timing, playback, host, and current editor location. |
+| `list_tracks` | Read | Track summaries, group counts, note counts, and mixer state. |
+| `get_track_notes` | Read | Groups, UUIDs, notes, attributes, offsets, and safe-write fingerprints. |
+| `get_selection` | Read | Current group, selected notes, and selected groups. |
+| `add_track` | Write | Create a track and its main group. |
+| `add_notes` | Write | Add notes to a specific group. |
+| `edit_notes` | Write | Edit fingerprint-verified notes. |
+| `delete_notes` | Destructive | Delete fingerprint-verified notes. |
+| `get_automation` | Read | Read a parameter definition and every control point. |
+| `set_automation_points` | Write | Add/update points, optionally clearing all or a range first. |
+| `clear_automation` | Destructive | Clear a complete curve or a selected range. |
+| `get_track_mixer` | Read | Read gain, pan, mute, and solo. |
+| `set_track_mixer` | Write | Change gain, pan, mute, and solo. |
+| `playback` | Control | Read status, play, pause, stop, seek, or loop. |
+
+All track, group, and note indices are **1-based**, matching the SynthV Lua API. Note and automation coordinates are group-local blicks unless the returned field explicitly says `absolute`. Playback positions are seconds.
+
+## Safe editing workflow
+
+The server instructions tell an agent to follow this sequence:
+
+1. Read the project, track, group, or current selection immediately before editing.
+2. Present or internally construct a small, reviewable change.
+3. Copy `groupUuid` and each target note's `fingerprint` from that latest read.
+4. Call `edit_notes` or `delete_notes` with those values.
+5. If SynthV reports `STALE_GROUP` or `STALE_NOTE`, read again rather than guessing.
+
+A fingerprint includes the group UUID, note index, onset, duration, pitch, detune, lyrics, and phonemes. This prevents an agent from applying an old plan to a note that the user has already changed.
+
+## Example requests
+
+```text
+Read the notes currently selected in SynthV. Show the planned change, then extend
+only the final note by half a quarter note. Use the fingerprints from the latest read.
+```
+
+```text
+Read the current group's loudness automation. Add a gentle 3 dB crescendo across
+the selected phrase without deleting points outside that phrase.
+```
+
+```text
+Read track 1 and create a new harmony track a minor third below the selected notes.
+Do not apply anything until you have listed the resulting pitches and warned about
+notes outside MIDI 0–127.
+```
+
+More examples are in [examples/prompts.md](examples/prompts.md).
+
+## Configuration
+
+The Node server and SynthV script must resolve the **same physical IPC directory**.
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| `SYNTHV_AGENT_BRIDGE_DIR` | OS temporary directory | Shared IPC directory. |
+| `SYNTHV_AGENT_BRIDGE_TIMEOUT_MS` | `15000` | Maximum response wait. |
+| `SYNTHV_AGENT_BRIDGE_POLL_MS` | `50` | Node response polling interval. |
+| `SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS` | `30000` | Age at which abandoned request files and locks can be recovered. Must be greater than the response timeout. |
+| `SYNTHV_AGENT_BRIDGE_STATUS_STALE_MS` | `5000` | Maximum heartbeat age considered connected. |
+
+When a custom IPC directory is used, create it before starting the SynthV script. The Node process also creates the directory, but the documented startup order starts SynthV first.
+
+### Windows and WSL
+
+The simplest setup is to run the MCP server with **Windows Node.js** when SynthV runs on Windows. When Codex runs inside WSL, point Node at the existing Windows temporary directory that SynthV uses by default:
+
+- SynthV/Windows: leave `SYNTHV_AGENT_BRIDGE_DIR` unset so the script uses `%TEMP%`.
+- Node/WSL: set `SYNTHV_AGENT_BRIDGE_DIR=/mnt/c/Users/you/AppData/Local/Temp`.
+
+For a dedicated subdirectory, create it first and set equivalent Windows and WSL path spellings for the two processes. The SynthV GUI must inherit its Windows environment variable, so restart SynthV after changing it. The MCP server can receive its own value through the `env` table in Codex configuration.
+
+## Development
+
+```bash
+npm run typecheck
+npm test
+npm run check
+npm run inspector
+```
+
+Lua syntax can be checked with:
+
+```bash
+luac5.4 -p synthv/SynthVAgentBridge.lua synthv/StopSynthVAgentBridge.lua
+```
+
+CI runs TypeScript tests on Node 20 and 22, parses both production Lua files with Lua 5.4, and exercises the Lua bridge through a mock SynthV integration harness.
+
+## Current limitations
+
+- One request may be in flight at a time.
+- A client-side timeout is ambiguous: SynthV may still finish the operation. The processing marker remains until the Lua host completes, and the agent should read the current project before deciding whether to retry a write.
+- Multi-call preview/commit transactions are planned but not implemented in v0.1.
+- There is no SynthV side-panel UI yet.
+- Rendering, reference-audio analysis, phoneme alignment, and semantic expression presets are not implemented yet.
+- The bridge has not yet been validated against every SynthV 2.x patch and every voice database.
+- ChatGPT does not connect directly to this local stdio server. Use Codex or another local MCP host; a future remote adapter would need explicit authentication and transport security.
+
+See [docs/roadmap.md](docs/roadmap.md).
+
+## Security and privacy
+
+This is a local control bridge. It does not upload project data. However, any connected MCP host can receive project metadata and can request edits, so connect only trusted clients and review destructive tool calls. See [SECURITY.md](SECURITY.md).
+
+## Acknowledgements
+
+The architecture was inspired by Haruki Okada's proof-of-concept [`ocadaruma/mcp-svstudio`](https://github.com/ocadaruma/mcp-svstudio), which demonstrated that a local MCP server and a persistent SynthV Lua script can communicate through files. This repository reimplements the bridge around request correlation, validation, stale-context protection, undo records, cross-platform paths, tests, and a broader tool surface.
+
+Synthesizer V and Synthesizer V Studio are products and trademarks of Dreamtonics. This independent project is not affiliated with or endorsed by Dreamtonics.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
+
+---
+
+## 中文快速说明
+
+这是一个本地 MCP 控制桥：Codex 或其他支持本地 stdio 的 MCP 客户端通过 Node.js 服务发出结构化命令，SynthV 内部常驻的 Lua 脚本再调用官方脚本 API 修改当前工程。
+
+最小安装流程：
+
+```bash
+npm install
+npm run build
+npm run install:synthv -- --target "/SynthV/脚本目录"
+codex mcp add synthv-agent-bridge -- node "/绝对路径/dist/src/cli.js"
+```
+
+然后在 SynthV 中执行 **脚本 → 重新扫描 → SynthV Agent Bridge → Start SynthV Agent Bridge**。首次使用建议先复制工程，并让 AI 每次修改前先读取当前选区、展示修改计划，再执行写操作。

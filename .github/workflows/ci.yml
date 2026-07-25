@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  node:
+    strategy:
+      matrix:
+        node-version: [20, 22]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: npm install --ignore-scripts
+      - run: npm run check
+
+  lua:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install --yes lua5.4
+      - run: luac -p synthv/SynthVAgentBridge.lua
+      - run: luac -p synthv/StopSynthVAgentBridge.lua
+      - name: Run mock SynthV integration smoke test
+        env:
+          SYNTHV_AGENT_BRIDGE_DIR: ${{ github.workspace }}/.mock-ipc
+          BRIDGE_SCRIPT: ${{ github.workspace }}/synthv/SynthVAgentBridge.lua
+        run: |
+          mkdir -p "$SYNTHV_AGENT_BRIDGE_DIR"
+          lua5.4 scripts/mock-synthv-smoke.lua

@@ -1,0 +1,51 @@
+import assert from "node:assert/strict";
+import path from "node:path";
+import test from "node:test";
+
+import { loadConfig } from "../src/config.js";
+
+test("loadConfig builds all IPC paths from a shared directory", () => {
+  const config = loadConfig(
+    {
+      SYNTHV_AGENT_BRIDGE_DIR: "./relative-ipc",
+      SYNTHV_AGENT_BRIDGE_TIMEOUT_MS: "1234",
+      SYNTHV_AGENT_BRIDGE_POLL_MS: "7",
+      SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS: "4567",
+      SYNTHV_AGENT_BRIDGE_STATUS_STALE_MS: "890",
+    },
+    "/unused",
+  );
+
+  assert.equal(config.paths.directory, path.resolve("./relative-ipc"));
+  assert.equal(config.paths.requestFile.endsWith("synthv-agent-bridge.request.json"), true);
+  assert.equal(config.paths.processingFile.endsWith("synthv-agent-bridge.processing.json"), true);
+  assert.equal(config.timeoutMs, 1234);
+  assert.equal(config.pollIntervalMs, 7);
+  assert.equal(config.staleRequestMs, 4567);
+  assert.equal(config.statusStaleMs, 890);
+});
+
+test("loadConfig rejects invalid positive integer settings", () => {
+  assert.throws(
+    () => loadConfig({ SYNTHV_AGENT_BRIDGE_TIMEOUT_MS: "0" }, "/tmp"),
+    /must be a positive integer/,
+  );
+  assert.throws(
+    () => loadConfig({ SYNTHV_AGENT_BRIDGE_POLL_MS: "1.5" }, "/tmp"),
+    /must be a positive integer/,
+  );
+});
+
+test("loadConfig requires stale recovery to outlive the response timeout", () => {
+  assert.throws(
+    () =>
+      loadConfig(
+        {
+          SYNTHV_AGENT_BRIDGE_TIMEOUT_MS: "5000",
+          SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS: "5000",
+        },
+        "/tmp",
+      ),
+    /must be greater than SYNTHV_AGENT_BRIDGE_TIMEOUT_MS/,
+  );
+});

@@ -1,0 +1,10 @@
+# Copy this table into ~/.codex/config.toml, then replace the absolute path.
+[mcp_servers.synthv-agent-bridge]
+command = "node"
+args = ["/absolute/path/to/synthv-agent-bridge/dist/src/cli.js"]
+startup_timeout_sec = 10
+tool_timeout_sec = 30
+
+# Optional when Node and SynthV do not resolve the same temporary directory:
+# WSL example: point at the existing Windows temporary directory used by SynthV.
+# env = { SYNTHV_AGENT_BRIDGE_DIR = "/mnt/c/Users/you/AppData/Local/Temp" }
