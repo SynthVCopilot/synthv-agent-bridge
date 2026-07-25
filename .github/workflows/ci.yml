@@ -27,7 +27,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes lua5.4
+      - name: Install Lua 5.4
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes -qq lua5.4
       - run: luac -p synthv/SynthVAgentBridge.lua
       - run: luac -p synthv/StopSynthVAgentBridge.lua
       - name: Run mock SynthV integration smoke test
