@@ -4,7 +4,7 @@ A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server 
 
 The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse or rewrite `.svp` files, open a network port, or call an AI API by itself.
 
-> Status: **v0.1.1 foundation**. The protocol, safety guards, editor lifecycle operations, and time-axis tools are implemented. Test on copies of important projects while the project is still pre-release.
+> Status: **v0.1.2 foundation**. The protocol, safety guards, editor lifecycle operations, and time-axis tools are implemented. Test on copies of important projects while the project is still pre-release.
 
 ## What it can do
 

@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 local SCRIPT_NAME = "Start SynthV Agent Bridge"
-local BRIDGE_VERSION = "0.1.1"
+local BRIDGE_VERSION = "0.1.2"
 local PROTOCOL_VERSION = 1
 local MIN_EDITOR_VERSION = 131329 -- Synthesizer V Studio 2.1.1
 local POLL_INTERVAL_MS = 100

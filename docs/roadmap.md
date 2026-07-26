@@ -1,6 +1,6 @@
 # Roadmap
 
-## v0.1–v0.1.1 — reliable control foundation
+## v0.1–v0.1.2 — reliable control foundation
 
 - Project, track, group, note, selection, mixer, automation, and playback reads.
 - Track creation/update/clone/delete and note add/edit/delete.
