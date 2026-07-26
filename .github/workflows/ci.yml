@@ -21,6 +21,7 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
       - run: npm ci --ignore-scripts
+      - run: npm audit --omit=dev --audit-level=moderate
       - run: npm run check
 
   lua:

@@ -39,6 +39,11 @@
     "tsx": "4.20.3",
     "typescript": "5.8.3"
   },
+  "overrides": {
+    "@modelcontextprotocol/sdk": {
+      "@hono/node-server": "2.0.12"
+    }
+  },
   "keywords": [
     "synthesizer-v",
     "synthv",

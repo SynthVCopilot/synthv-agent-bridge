@@ -4,6 +4,12 @@ All notable changes will be documented in this file.
 
 ## Unreleased
 
+### Security
+
+- Override the MCP SDK's vulnerable transitive `@hono/node-server` dependency
+  with `2.0.12`, and fail CI on moderate-or-higher production dependency
+  vulnerabilities.
+
 ## 0.1.3 - 2026-07-26
 
 ### Added
