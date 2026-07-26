@@ -10,3 +10,4 @@ Thumbs.db
 .vscode/
 .idea/
 .mock-ipc/
+.mock-ipc-local/
