@@ -46,6 +46,8 @@
 - Note onset and pitch values are local to their note group.
 - Read responses also include absolute onset, end, and pitch after applying group-reference offsets.
 - Automation point positions are group-local blicks.
+- Smart Pitch anchor positions and curve-point offsets are group-local blicks.
+- Editor view time coordinates are blicks and screen coordinates are pixels.
 - Playback positions are seconds.
 - Time-axis tempo positions are project-global blicks; time-signature positions are zero-based measure numbers.
 
@@ -54,10 +56,15 @@
 Protocol v1 keeps concurrency fields optional for backward compatibility. New clients should always echo the latest applicable values:
 
 - `groupUuid` for every Group write.
-- `fingerprint` for note edits/deletes and automation/time-axis writes.
+- `referenceFingerprint` for reference updates/deletes, especially instrumental references without a Group UUID.
+- `fingerprint` for note and Smart Pitch edits/deletes.
+- `expectedFingerprint` for automation, time-axis, and library-group writes.
 - `trackFingerprint` for track updates, clones, deletes, and mixer writes.
 
-The bridge reports `STALE_GROUP`, `STALE_NOTE`, `STALE_TRACK`, `STALE_AUTOMATION`, or `STALE_TIME_AXIS` before creating an undo record when a supplied guard no longer matches.
+The bridge reports `STALE_GROUP`, `STALE_GROUP_REFERENCE`,
+`STALE_LIBRARY_GROUP`, `STALE_NOTE`, `STALE_PITCH_CONTROL`, `STALE_TRACK`,
+`STALE_AUTOMATION`, or `STALE_TIME_AXIS` before creating an undo record when a
+supplied guard no longer matches.
 
 ## Serialization rules
 
@@ -67,6 +74,18 @@ The bridge reports `STALE_GROUP`, `STALE_NOTE`, `STALE_TRACK`, `STALE_AUTOMATION
 - A protocol-version mismatch fails closed.
 - New action names and optional payload fields may be added without changing the v1 envelope.
 - Unknown fields may be added to read responses in minor releases; clients should ignore fields they do not recognize.
+
+### Additive v1 actions
+
+Protocol v1 permits new action names without changing the request/response
+envelope. The expanded action set includes reusable note-group library
+operations, linked/deep group references, Smart Pitch CRUD, Bridge-tracked
+Retakes, automation sampling/simplification, full selection control, viewport
+navigation, host clipboard/dialog helpers, coordinate conversion, and
+namespaced script data.
+
+`script_data` only exposes keys beginning with `synthv-agent-bridge.`. It never
+lists, clears, or overwrites another script's namespace.
 
 ### Track color compatibility
 

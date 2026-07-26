@@ -93,11 +93,55 @@ const automationPointSchema = z.object({
   value: z.number().finite(),
 });
 
+const libraryGroupLocatorShape = {
+  libraryIndex: indexSchema.optional(),
+  groupUuid: groupUuidSchema.optional(),
+  expectedFingerprint: fingerprintSchema.optional(),
+};
+
+const pitchControlCurvePointSchema = z.object({
+  offset: z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
+  value: z.number().finite().min(-127).max(127),
+});
+
+const pitchControlCreateSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("point"),
+    position: blickSchema,
+    pitch: z.number().finite().min(-127).max(127),
+  }),
+  z.object({
+    kind: z.literal("curve"),
+    position: blickSchema,
+    pitch: z.number().finite().min(-127).max(127),
+    points: z.array(pitchControlCurvePointSchema).max(10000),
+  }),
+]);
+
+const pitchControlChangesSchema = z
+  .object({
+    position: blickSchema.optional(),
+    pitch: z.number().finite().min(-127).max(127).optional(),
+    points: z.array(pitchControlCurvePointSchema).max(10000).optional(),
+  })
+  .refine(
+    (value) => Object.values(value).some((entry) => entry !== undefined),
+    { message: "At least one pitch-control field must be changed." },
+  );
+
+const retakeNoteShape = {
+  ...groupLocatorShape,
+  noteIndex: indexSchema,
+};
+
+const editorViewSchema = z.enum(["mainEditor", "arrangement"]);
+
 const convertTimeInputSchema = z
   .object({
     blicks: blickSchema.optional(),
     quarters: z.number().finite().min(0).optional(),
     seconds: z.number().finite().min(0).optional(),
+    roundInterval: z.number().int().min(1).optional(),
   })
   .refine(
     (value) =>
@@ -206,7 +250,7 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     {
       instructions:
-        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, automation, or selection immediately before writing. All indices are 1-based. Copy groupUuid, trackFingerprint, automation fingerprint, and note fingerprints from the latest applicable read; never invent fingerprints or UUIDs. Each write call becomes one SynthV undo record. Prefer small, reviewable edits.",
+        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, library, automation, Smart Pitch state, or selection immediately before writing. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits.",
     },
   );
 
@@ -237,6 +281,81 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async () => runTool(async () => client.send("ping")),
+  );
+
+  server.registerTool(
+    "get_host_info",
+    {
+      title: "Get SynthV Host Info",
+      description:
+        "Read the running SynthV host version, OS, language, project file name, and bridge IPC location.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => runTool(async () => client.send("get_host_info")),
+  );
+
+  server.registerTool(
+    "host_clipboard",
+    {
+      title: "Use SynthV Host Clipboard",
+      description:
+        "Read text from or write text to the system clipboard through SynthV's official host API.",
+      inputSchema: {
+        operation: z.enum(["read", "write"]),
+        text: z.string().optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("host_clipboard", input)),
+  );
+
+  server.registerTool(
+    "show_dialog",
+    {
+      title: "Show SynthV Dialog",
+      description:
+        "Show an official SynthV message, input, confirmation, or custom form dialog and return the user's response.",
+      inputSchema: {
+        kind: z.enum(["message", "input", "okCancel", "yesNoCancel", "custom"]),
+        title: z.string().max(500).optional(),
+        message: z.string().max(10000).optional(),
+        defaultText: z.string().max(10000).optional(),
+        form: z.record(z.string(), z.unknown()).optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => runTool(async () => client.send("show_dialog", input)),
+  );
+
+  server.registerTool(
+    "convert_pitch",
+    {
+      title: "Convert SynthV Pitch",
+      description:
+        "Convert exactly one MIDI pitch or frequency value and report the corresponding value and keyboard-key type.",
+      inputSchema: {
+        pitch: z.number().finite().optional(),
+        frequency: z.number().finite().positive().optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) => runTool(async () => client.send("convert_pitch", input)),
   );
 
   server.registerTool(
@@ -274,7 +393,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Convert SynthV Time",
       description:
-        "Convert exactly one position expressed as blicks, quarter notes, or seconds using the current tempo map.",
+        "Convert exactly one position expressed as blicks, quarter notes, or seconds using the current tempo map, with optional official blick-grid rounding.",
       inputSchema: convertTimeInputSchema,
       annotations: {
         readOnlyHint: true,
@@ -317,6 +436,142 @@ export function createServer(config: BridgeConfig): McpServer {
   );
 
   server.registerTool(
+    "list_note_groups",
+    {
+      title: "List SynthV Note-Group Library",
+      description:
+        "List reusable note groups in the project library with UUIDs, fingerprints, note counts, pitch-control counts, and reference counts.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => runTool(async () => client.send("list_note_groups")),
+  );
+
+  server.registerTool(
+    "create_note_group",
+    {
+      title: "Create SynthV Library Note Group",
+      description:
+        "Create a reusable note group in the project library, optionally populated with notes, as one undo record.",
+      inputSchema: {
+        name: z.string().min(1).max(200).default("New Group"),
+        suggestedIndex: indexSchema.optional(),
+        notes: z.array(noteCreateSchema).max(512).default([]),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("create_note_group", input)),
+  );
+
+  server.registerTool(
+    "clone_note_group",
+    {
+      title: "Clone SynthV Note Group",
+      description:
+        "Deep-clone either a track group or a library group into the reusable note-group library.",
+      inputSchema: {
+        ...libraryGroupLocatorShape,
+        trackIndex: indexSchema.optional(),
+        groupIndex: indexSchema.optional(),
+        name: z.string().min(1).max(200).optional(),
+        suggestedIndex: indexSchema.optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("clone_note_group", input)),
+  );
+
+  server.registerTool(
+    "delete_note_group",
+    {
+      title: "Delete SynthV Library Note Group",
+      description:
+        "Delete one fingerprint-verified library group and all references that point to it.",
+      inputSchema: libraryGroupLocatorShape,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("delete_note_group", input)),
+  );
+
+  server.registerTool(
+    "add_group_reference",
+    {
+      title: "Add SynthV Group Reference",
+      description:
+        "Place a reusable library group on a track with timing, transpose, mute, visible range, and voice settings.",
+      inputSchema: {
+        ...trackGuardShape,
+        targetGroupUuid: groupUuidSchema.optional(),
+        targetLibraryIndex: indexSchema.optional(),
+        targetFingerprint: fingerprintSchema.optional(),
+        timeOffset: blickSchema.optional(),
+        pitchOffset: z.number().int().min(-127).max(127).optional(),
+        muted: z.boolean().optional(),
+        timeRange: z
+          .object({ onset: blickSchema, duration: durationSchema })
+          .optional(),
+        voice: z.record(z.string(), z.unknown()).optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("add_group_reference", input)),
+  );
+
+  server.registerTool(
+    "clone_group_reference",
+    {
+      title: "Clone SynthV Group Reference",
+      description:
+        "Copy a vocal group reference to another track, either linked to the same library group or deep-copied into a new library group.",
+      inputSchema: {
+        sourceTrackIndex: indexSchema,
+        sourceGroupIndex: indexSchema.default(1),
+        sourceGroupUuid: groupUuidSchema.optional(),
+        sourceReferenceFingerprint: fingerprintSchema.optional(),
+        targetTrackIndex: indexSchema,
+        targetTrackFingerprint: fingerprintSchema.optional(),
+        linked: z.boolean().default(true),
+        name: z.string().min(1).max(200).optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("clone_group_reference", input)),
+  );
+
+  server.registerTool(
     "get_track_notes",
     {
       title: "Get SynthV Track Notes",
@@ -341,14 +596,72 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Get SynthV Selection",
       description:
-        "Get the current piano-roll track, group, selected notes, and their safe-write fingerprints.",
-      inputSchema: {},
+        "Get selected groups, notes, Smart Pitch controls, requested automation points, and unfinished-edit state.",
+      inputSchema: {
+        automationParameters: z.array(z.string().min(1)).max(64).default([]),
+      },
       annotations: {
         readOnlyHint: true,
         openWorldHint: false,
       },
     },
-    async () => runTool(async () => client.send("get_selection")),
+    async (input) =>
+      runTool(async () => client.send("get_selection", input)),
+  );
+
+  server.registerTool(
+    "set_selection",
+    {
+      title: "Set SynthV Selection",
+      description:
+        "Replace, add, remove, or clear arrangement or piano-roll selections for non-main groups, notes, Smart Pitch controls, or automation points.",
+      inputSchema: {
+        scope: z.enum(["pianoRoll", "arrangement"]).default("pianoRoll"),
+        operation: z.enum(["replace", "add", "remove", "clear"]),
+        kind: z.enum(["all", "groups", "notes", "pitchControls", "automationPoints"]),
+        trackIndex: indexSchema.optional(),
+        groupIndex: indexSchema.optional(),
+        groupUuid: groupUuidSchema.optional(),
+        groups: z
+          .array(
+            z.object({
+              trackIndex: indexSchema,
+              groupIndex: indexSchema.default(1),
+              groupUuid: groupUuidSchema.optional(),
+            }),
+          )
+          .max(512)
+          .optional(),
+        notes: z
+          .array(
+            z.object({
+              noteIndex: indexSchema,
+              fingerprint: fingerprintSchema.optional(),
+            }),
+          )
+          .max(512)
+          .optional(),
+        pitchControls: z
+          .array(
+            z.object({
+              pitchControlIndex: indexSchema,
+              fingerprint: fingerprintSchema.optional(),
+            }),
+          )
+          .max(512)
+          .optional(),
+        parameter: z.string().min(1).optional(),
+        positions: z.array(blickSchema).max(10000).optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("set_selection", input)),
   );
 
   server.registerTool(
@@ -464,9 +777,10 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Update SynthV Group",
       description:
-        "Rename a note group or edit its reference mute, offset, visible time range, and default voice-expression properties.",
+        "Rename a vocal note group or edit a vocal/instrumental reference's mute, offset, transpose, visible range, and supported voice properties.",
       inputSchema: {
         ...groupLocatorShape,
+        referenceFingerprint: fingerprintSchema.optional(),
         name: z.string().min(1).max(200).optional(),
         muted: z.boolean().optional(),
         timeOffset: blickSchema.optional(),
@@ -494,8 +808,11 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Delete SynthV Group Reference",
       description:
-        "Remove one non-main group reference from a track. The underlying library group is preserved.",
-      inputSchema: groupLocatorShape,
+        "Remove one fingerprint-verified non-main vocal or instrumental group reference. The underlying library group is preserved.",
+      inputSchema: {
+        ...groupLocatorShape,
+        referenceFingerprint: fingerprintSchema.optional(),
+      },
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -585,6 +902,196 @@ export function createServer(config: BridgeConfig): McpServer {
   );
 
   server.registerTool(
+    "get_note_retakes",
+    {
+      title: "Get SynthV Note Retakes",
+      description:
+        "Read a note's retake count and the take IDs previously generated and tracked by this bridge.",
+      inputSchema: retakeNoteShape,
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("get_note_retakes", input)),
+  );
+
+  server.registerTool(
+    "generate_note_retake",
+    {
+      title: "Generate SynthV Note Retake",
+      description:
+        "Generate a fingerprint-verified AI retake with independent duration, pitch, and timbre variation controls.",
+      inputSchema: {
+        ...retakeNoteShape,
+        fingerprint: fingerprintSchema,
+        newDuration: z.boolean().default(true),
+        newPitch: z.boolean().default(true),
+        newTimbre: z.boolean().default(true),
+        activate: z.boolean().default(false),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("generate_note_retake", input)),
+  );
+
+  server.registerTool(
+    "activate_note_retake",
+    {
+      title: "Activate SynthV Note Retake",
+      description:
+        "Activate the default take or a take ID generated and tracked by this bridge.",
+      inputSchema: {
+        ...retakeNoteShape,
+        fingerprint: fingerprintSchema,
+        takeId: z.number().int().min(0),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("activate_note_retake", input)),
+  );
+
+  server.registerTool(
+    "delete_note_retake",
+    {
+      title: "Delete SynthV Note Retake",
+      description:
+        "Delete a non-default take ID generated and tracked by this bridge.",
+      inputSchema: {
+        ...retakeNoteShape,
+        fingerprint: fingerprintSchema,
+        takeId: z.number().int().min(1),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("delete_note_retake", input)),
+  );
+
+  server.registerTool(
+    "get_pitch_controls",
+    {
+      title: "Get SynthV Smart Pitch Controls",
+      description:
+        "Read all point and curve Smart Pitch controls in one vocal group with safe-write fingerprints.",
+      inputSchema: {
+        ...groupLocatorShape,
+        sampleOffsets: z
+          .array(
+            z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
+          )
+          .min(1)
+          .max(10000)
+          .optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("get_pitch_controls", input)),
+  );
+
+  server.registerTool(
+    "add_pitch_controls",
+    {
+      title: "Add SynthV Smart Pitch Controls",
+      description:
+        "Add point or curve Smart Pitch controls to one vocal group in one undo record.",
+      inputSchema: {
+        ...groupLocatorShape,
+        pitchControls: z.array(pitchControlCreateSchema).min(1).max(512),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("add_pitch_controls", input)),
+  );
+
+  server.registerTool(
+    "edit_pitch_controls",
+    {
+      title: "Edit SynthV Smart Pitch Controls",
+      description:
+        "Edit fingerprint-verified point or curve Smart Pitch controls atomically.",
+      inputSchema: {
+        ...groupLocatorShape,
+        edits: z
+          .array(
+            z.object({
+              pitchControlIndex: indexSchema,
+              fingerprint: fingerprintSchema,
+              changes: pitchControlChangesSchema,
+            }),
+          )
+          .min(1)
+          .max(512),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("edit_pitch_controls", input)),
+  );
+
+  server.registerTool(
+    "delete_pitch_controls",
+    {
+      title: "Delete SynthV Smart Pitch Controls",
+      description:
+        "Delete fingerprint-verified Smart Pitch controls from one group atomically.",
+      inputSchema: {
+        ...groupLocatorShape,
+        pitchControls: z
+          .array(
+            z.object({
+              pitchControlIndex: indexSchema,
+              fingerprint: fingerprintSchema,
+            }),
+          )
+          .min(1)
+          .max(512),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("delete_pitch_controls", input)),
+  );
+
+  server.registerTool(
     "get_automation",
     {
       title: "Get SynthV Automation",
@@ -593,6 +1100,8 @@ export function createServer(config: BridgeConfig): McpServer {
       inputSchema: {
         ...groupLocatorShape,
         parameter: z.string().min(1),
+        rangeBegin: blickSchema.optional(),
+        rangeEnd: blickSchema.optional(),
       },
       annotations: {
         readOnlyHint: true,
@@ -600,6 +1109,52 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async (input) => runTool(async () => client.send("get_automation", input)),
+  );
+
+  server.registerTool(
+    "sample_automation",
+    {
+      title: "Sample SynthV Automation",
+      description:
+        "Evaluate a group automation curve at requested positions using native or forced-linear interpolation.",
+      inputSchema: {
+        ...groupLocatorShape,
+        parameter: z.string().min(1),
+        positions: z.array(blickSchema).min(1).max(10000),
+        interpolation: z.enum(["native", "linear"]).default("native"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("sample_automation", input)),
+  );
+
+  server.registerTool(
+    "simplify_automation",
+    {
+      title: "Simplify SynthV Automation",
+      description:
+        "Remove insignificant automation points within a range using SynthV's official curve simplifier.",
+      inputSchema: {
+        ...groupLocatorShape,
+        parameter: z.string().min(1),
+        expectedFingerprint: fingerprintSchema.optional(),
+        beginPosition: blickSchema,
+        endPosition: blickSchema,
+        threshold: z.number().finite().min(0).optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("simplify_automation", input)),
   );
 
   server.registerTool(
@@ -654,6 +1209,131 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     async (input) =>
       runTool(async () => client.send("clear_automation", input)),
+  );
+
+  server.registerTool(
+    "get_editor_view",
+    {
+      title: "Get SynthV Editor View",
+      description:
+        "Read the visible time/value ranges and pixel scales of the main editor or arrangement.",
+      inputSchema: {
+        view: editorViewSchema.default("mainEditor"),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("get_editor_view", input)),
+  );
+
+  server.registerTool(
+    "set_editor_view",
+    {
+      title: "Set SynthV Editor View",
+      description:
+        "Move or scale the visible main-editor or arrangement viewport without changing project data.",
+      inputSchema: {
+        view: editorViewSchema.default("mainEditor"),
+        timeLeft: z.number().finite().optional(),
+        timeRight: z.number().finite().optional(),
+        timeScale: z.number().finite().positive().optional(),
+        valueCenter: z.number().finite().optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("set_editor_view", input)),
+  );
+
+  server.registerTool(
+    "snap_position",
+    {
+      title: "Snap SynthV Position",
+      description:
+        "Round a blick position using the selected editor view's current snapping settings.",
+      inputSchema: {
+        view: editorViewSchema.default("mainEditor"),
+        position: z.number().finite(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("snap_position", input)),
+  );
+
+  server.registerTool(
+    "convert_editor_coordinates",
+    {
+      title: "Convert SynthV Editor Coordinates",
+      description:
+        "Convert between musical time/value coordinates and on-screen x/y coordinates for an editor view.",
+      inputSchema: {
+        view: editorViewSchema.default("mainEditor"),
+        time: z.number().finite().optional(),
+        x: z.number().finite().optional(),
+        value: z.number().finite().optional(),
+        y: z.number().finite().optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("convert_editor_coordinates", input)),
+  );
+
+  server.registerTool(
+    "script_data",
+    {
+      title: "Use SynthV Bridge Metadata",
+      description:
+        "List, read, set, or remove JSON metadata on a SynthV object. Keys are restricted to the synthv-agent-bridge namespace.",
+      inputSchema: {
+        operation: z.enum(["list", "get", "set", "remove"]),
+        objectType: z.enum([
+          "project",
+          "timeAxis",
+          "track",
+          "mixer",
+          "group",
+          "reference",
+          "note",
+          "retakes",
+          "automation",
+          "pitchControl",
+        ]),
+        key: z.string().min(1).optional(),
+        value: z.unknown().optional(),
+        trackIndex: indexSchema.optional(),
+        trackFingerprint: fingerprintSchema.optional(),
+        groupIndex: indexSchema.optional(),
+        groupUuid: groupUuidSchema.optional(),
+        referenceFingerprint: fingerprintSchema.optional(),
+        noteIndex: indexSchema.optional(),
+        fingerprint: fingerprintSchema.optional(),
+        parameter: z.string().min(1).optional(),
+        expectedFingerprint: fingerprintSchema.optional(),
+        pitchControlIndex: indexSchema.optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => runTool(async () => client.send("script_data", input)),
   );
 
   server.registerTool(

@@ -3,9 +3,9 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 local SCRIPT_NAME = "Start SynthV Agent Bridge"
-local BRIDGE_VERSION = "0.1.2"
+local BRIDGE_VERSION = "0.1.3"
 local PROTOCOL_VERSION = 1
-local MIN_EDITOR_VERSION = 131329 -- Synthesizer V Studio 2.1.1
+local MIN_EDITOR_VERSION = 131330 -- Synthesizer V Studio 2.1.2
 local POLL_INTERVAL_MS = 100
 local HEARTBEAT_EVERY_POLLS = 10
 local MAX_REQUEST_BYTES = 8 * 1024 * 1024
@@ -784,7 +784,7 @@ local function resolveTrack(payload)
     return project, track, trackIndex
 end
 
-local function resolveGroup(payload)
+local function resolveReference(payload)
     local project, track, trackIndex = resolveTrack(payload)
     local groupIndex = optionalInteger(payload.groupIndex, "groupIndex", 1, track:getNumGroups(), 1)
     local reference = track:getGroupReference(groupIndex)
@@ -794,26 +794,34 @@ local function resolveGroup(payload)
             groupIndex = groupIndex
         })
     end
+
+    local instrumental = reference:isInstrumental()
+    local group = instrumental and nil or reference:getTarget()
+
+    local expectedUuid = optionalString(payload.groupUuid, "groupUuid", false)
+    if expectedUuid then
+        local actualUuid = group and group:getUUID() or nil
+        if expectedUuid ~= actualUuid then
+            raiseBridgeError("STALE_GROUP", "groupUuid no longer matches the target group", {
+                expected = expectedUuid,
+                actual = actualUuid or JSON_NULL,
+                trackIndex = trackIndex,
+                groupIndex = groupIndex
+            })
+        end
+    end
+
+    return project, track, trackIndex, reference, group, groupIndex
+end
+
+local function resolveGroup(payload)
+    local project, track, trackIndex, reference, group, groupIndex = resolveReference(payload)
     if reference:isInstrumental() then
         raiseBridgeError("INSTRUMENTAL_GROUP", "The selected group is an instrumental audio group")
     end
-
-    local group = reference:getTarget()
     if not group then
         raiseBridgeError("GROUP_NOT_FOUND", "The selected group has no note-group target")
     end
-
-    local expectedUuid = optionalString(payload.groupUuid, "groupUuid", false)
-    local actualUuid = group:getUUID()
-    if expectedUuid and expectedUuid ~= actualUuid then
-        raiseBridgeError("STALE_GROUP", "groupUuid no longer matches the target group", {
-            expected = expectedUuid,
-            actual = actualUuid,
-            trackIndex = trackIndex,
-            groupIndex = groupIndex
-        })
-    end
-
     return project, track, trackIndex, reference, group, groupIndex
 end
 
@@ -885,6 +893,9 @@ local function makeNoteFingerprint(groupUuid, noteIndex, note)
     local rapAccent = safeCall(function()
         return note:getRapAccent()
     end, "") or ""
+    local retakeCount = safeCall(function()
+        return note:getRetakes():getNumTakes()
+    end, 0) or 0
     local parts = {
         groupUuid,
         tostring(noteIndex),
@@ -898,6 +909,7 @@ local function makeNoteFingerprint(groupUuid, noteIndex, note)
         tostring(#musicalType) .. ":" .. musicalType,
         tostring(pitchAutoMode),
         tostring(#rapAccent) .. ":" .. rapAccent,
+        tostring(retakeCount),
         tostring(#attributes) .. ":" .. attributes
     }
     return table.concat(parts, "|")
@@ -1038,6 +1050,131 @@ local function serializeMainGroupLocator(track, trackIndex)
     }
 end
 
+local function makeReferenceFingerprint(reference)
+    local instrumental = reference:isInstrumental()
+    local targetUuid = nil
+    if not instrumental then
+        local target = reference:getTarget()
+        targetUuid = target and target:getUUID() or ""
+    end
+    return table.concat({
+        instrumental and "instrumental" or "vocal",
+        targetUuid or "",
+        tostring(safeCall(function()
+            return reference:isMain()
+        end, false)),
+        tostring(safeCall(function()
+            return reference:isMuted()
+        end, false)),
+        tostring(safeCall(function()
+            return reference:getTimeOffset()
+        end, 0)),
+        tostring(safeCall(function()
+            return reference:getPitchOffset()
+        end, 0)),
+        tostring(safeCall(function()
+            return reference:getOnset()
+        end, 0)),
+        tostring(safeCall(function()
+            return reference:getDuration()
+        end, 0)),
+        json.encode(sanitizeForJson(safeCall(function()
+            return reference:getVoice()
+        end, {})))
+    }, "|")
+end
+
+local function serializePitchControl(group, control, controlIndex)
+    local position = control:getPosition()
+    local pitch = control:getPitch()
+    local pointsOk, rawPoints = pcall(function()
+        return control:getPoints()
+    end)
+    local result = {
+        pitchControlIndex = controlIndex,
+        kind = pointsOk and "curve" or "point",
+        position = position,
+        pitch = pitch
+    }
+    if pointsOk then
+        local points = json.array()
+        for index = 1, #rawPoints do
+            points[#points + 1] = {
+                offset = rawPoints[index][1],
+                value = rawPoints[index][2]
+            }
+        end
+        result.points = points
+    end
+    result.fingerprint = table.concat({
+        group:getUUID(),
+        tostring(controlIndex),
+        result.kind,
+        tostring(position),
+        tostring(pitch),
+        result.points and json.encode(result.points) or ""
+    }, "|")
+    return result
+end
+
+local function serializePitchControls(group)
+    local controls = json.array()
+    local count = safeCall(function()
+        return group:getNumPitchControls()
+    end, 0)
+    for controlIndex = 1, count do
+        controls[#controls + 1] =
+            serializePitchControl(group, group:getPitchControl(controlIndex), controlIndex)
+    end
+    return controls
+end
+
+local function makeLibraryGroupFingerprint(group)
+    local noteFingerprints = json.array()
+    for noteIndex = 1, group:getNumNotes() do
+        noteFingerprints[#noteFingerprints + 1] =
+            makeNoteFingerprint(group:getUUID(), noteIndex, group:getNote(noteIndex))
+    end
+    return json.encode({
+        groupUuid = group:getUUID(),
+        name = group:getName(),
+        notes = noteFingerprints,
+        pitchControls = serializePitchControls(group)
+    })
+end
+
+local function countGroupReferences(project, group)
+    local count = 0
+    local groupUuid = group:getUUID()
+    for trackIndex = 1, project:getNumTracks() do
+        local track = project:getTrack(trackIndex)
+        for groupIndex = 1, track:getNumGroups() do
+            local reference = track:getGroupReference(groupIndex)
+            if reference and not reference:isInstrumental() then
+                local target = reference:getTarget()
+                if target and target:getUUID() == groupUuid then
+                    count = count + 1
+                end
+            end
+        end
+    end
+    return count
+end
+
+local function serializeLibraryGroup(project, group, libraryIndex)
+    return {
+        libraryIndex = libraryIndex,
+        groupUuid = group:getUUID(),
+        fingerprint = makeLibraryGroupFingerprint(group),
+        name = group:getName(),
+        noteCount = group:getNumNotes(),
+        pitchControlCount = safeCall(function()
+            return group:getNumPitchControls()
+        end, 0),
+        referenceCount = countGroupReferences(project, group)
+    }
+end
+
 local function serializeTrackSummary(track, trackIndex)
     local rawDisplayColor = safeCall(function()
         return track:getDisplayColor()
@@ -1072,16 +1209,27 @@ end
 local function serializeGroup(reference, groupIndex, offset, limit)
     local result = {
         groupIndex = groupIndex,
+        referenceFingerprint = makeReferenceFingerprint(reference),
         instrumental = reference:isInstrumental(),
         main = reference:isMain(),
         muted = safeCall(function()
             return reference:isMuted()
         end, false),
-        timeOffset = reference:getTimeOffset(),
-        pitchOffset = reference:getPitchOffset(),
-        onset = reference:getOnset(),
-        duration = reference:getDuration(),
-        endPosition = reference:getEnd()
+        timeOffset = safeCall(function()
+            return reference:getTimeOffset()
+        end, 0),
+        pitchOffset = safeCall(function()
+            return reference:getPitchOffset()
+        end, 0),
+        onset = safeCall(function()
+            return reference:getOnset()
+        end, 0),
+        duration = safeCall(function()
+            return reference:getDuration()
+        end, 0),
+        endPosition = safeCall(function()
+            return reference:getEnd()
+        end, 0)
     }
 
     if result.instrumental then
@@ -1210,6 +1358,84 @@ local function validateExpectedFingerprint(actual, expected, staleCode, message)
             actual = actual
         })
     end
+end
+
+local function validateReferenceFingerprint(reference, expected, trackIndex, groupIndex)
+    if not expected then
+        return
+    end
+    local actual = makeReferenceFingerprint(reference)
+    if actual ~= expected then
+        raiseBridgeError("STALE_GROUP_REFERENCE", "The group reference changed after it was read", {
+            trackIndex = trackIndex,
+            groupIndex = groupIndex,
+            expected = expected,
+            actual = actual
+        })
+    end
+end
+
+local function resolveLibraryGroup(payload)
+    local project = getProject()
+    local group = nil
+    local libraryIndex = nil
+    if isProvided(payload.groupUuid) then
+        local groupUuid = requireString(payload.groupUuid, "groupUuid", false)
+        group = safeCall(function()
+            return project:getNoteGroup(groupUuid)
+        end, nil)
+        if group then
+            libraryIndex = safeCall(function()
+                return group:getIndexInParent()
+            end, nil)
+        end
+    elseif isProvided(payload.libraryIndex) then
+        libraryIndex = requireInteger(
+            payload.libraryIndex,
+            "libraryIndex",
+            1,
+            project:getNumNoteGroupsInLibrary()
+        )
+        group = project:getNoteGroup(libraryIndex)
+    else
+        raiseBridgeError("INVALID_ARGUMENT", "Supply groupUuid or libraryIndex")
+    end
+
+    if not group then
+        raiseBridgeError("GROUP_NOT_FOUND", "The note group is not present in the project library")
+    end
+    if not libraryIndex then
+        local groupUuid = group:getUUID()
+        for index = 1, project:getNumNoteGroupsInLibrary() do
+            if project:getNoteGroup(index):getUUID() == groupUuid then
+                libraryIndex = index
+                break
+            end
+        end
+    end
+
+    validateExpectedFingerprint(
+        makeLibraryGroupFingerprint(group),
+        optionalString(payload.expectedFingerprint, "expectedFingerprint", false),
+        "STALE_LIBRARY_GROUP",
+        "The library note group changed after it was read"
+    )
+    return project, group, libraryIndex
+end
+
+local function resolvePitchControl(payload)
+    local project, track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
+    local count = group:getNumPitchControls()
+    local controlIndex = requireInteger(payload.pitchControlIndex, "pitchControlIndex", 1, count)
+    local control = group:getPitchControl(controlIndex)
+    local serialized = serializePitchControl(group, control, controlIndex)
+    validateExpectedFingerprint(
+        serialized.fingerprint,
+        optionalString(payload.fingerprint, "fingerprint", false),
+        "STALE_PITCH_CONTROL",
+        "The pitch control changed after it was read"
+    )
+    return project, track, trackIndex, reference, group, groupIndex, control, controlIndex, serialized
 end
 
 local function locateReference(reference)
@@ -1470,6 +1696,383 @@ local function prepareNoteChanges(note, changes, path)
     return prepared
 end
 
+local function createNoteFromInput(input, path)
+    input = requireObject(input, path)
+    local note = SV:create("Note")
+    note:setTimeRange(
+        requireInteger(input.onset, path .. ".onset", 0),
+        requireInteger(input.duration, path .. ".duration", 1)
+    )
+    note:setPitch(requireInteger(input.pitch, path .. ".pitch", 0, 127))
+    note:setLyrics(optionalString(input.lyrics, path .. ".lyrics", true) or "la")
+    if isProvided(input.phonemes) then
+        note:setPhonemes(requireString(input.phonemes, path .. ".phonemes", true))
+    end
+    if isProvided(input.detune) then
+        note:setDetune(requireFiniteNumber(input.detune, path .. ".detune"))
+    end
+    if isProvided(input.languageOverride) then
+        local languageOverride = requireString(input.languageOverride, path .. ".languageOverride", true)
+        local allowedLanguages = {
+            [""] = true,
+            mandarin = true,
+            japanese = true,
+            english = true,
+            cantonese = true
+        }
+        if not allowedLanguages[languageOverride] then
+            raiseBridgeError("INVALID_ARGUMENT", path .. ".languageOverride is unsupported")
+        end
+        note:setLanguageOverride(languageOverride)
+    end
+    if isProvided(input.musicalType) then
+        local musicalType = requireString(input.musicalType, path .. ".musicalType", false)
+        if musicalType ~= "sing" and musicalType ~= "rap" then
+            raiseBridgeError("INVALID_ARGUMENT", path .. ".musicalType must be sing or rap")
+        end
+        note:setMusicalType(musicalType)
+    end
+    if isProvided(input.pitchAutoMode) then
+        applyPitchAutoMode(
+            note,
+            requireBoolean(input.pitchAutoMode, path .. ".pitchAutoMode"),
+            path .. ".pitchAutoMode"
+        )
+    end
+    if isProvided(input.rapAccent) then
+        local rapAccent = requireString(input.rapAccent, path .. ".rapAccent", true)
+        if rapAccent ~= "" and not rapAccent:match("^[1-5]$") then
+            raiseBridgeError("INVALID_ARGUMENT", path .. ".rapAccent must be empty or 1..5")
+        end
+        note:setRapAccent(rapAccent)
+    end
+    if isProvided(input.attributes) then
+        note:setAttributes(requireObject(input.attributes, path .. ".attributes"))
+    end
+    return note
+end
+
+local function preparePitchControlInput(input, path, expectedKind)
+    input = requireObject(input, path)
+    local kind = expectedKind or requireString(input.kind, path .. ".kind", false)
+    if kind ~= "point" and kind ~= "curve" then
+        raiseBridgeError("INVALID_ARGUMENT", path .. ".kind must be point or curve")
+    end
+    local prepared = {
+        kind = kind,
+        position = requireInteger(input.position, path .. ".position", 0),
+        pitch = requireFiniteNumber(input.pitch, path .. ".pitch", -127, 127)
+    }
+    if kind == "curve" then
+        local rawPoints = requireArray(input.points, path .. ".points", 0, 10000)
+        local points = {}
+        for pointIndex = 1, #rawPoints do
+            local point = requireObject(rawPoints[pointIndex], path .. ".points[" .. pointIndex .. "]")
+            points[#points + 1] = {
+                requireInteger(point.offset, path .. ".points[" .. pointIndex .. "].offset"),
+                requireFiniteNumber(point.value, path .. ".points[" .. pointIndex .. "].value", -127, 127)
+            }
+        end
+        table.sort(points, function(left, right)
+            return left[1] < right[1]
+        end)
+        prepared.points = points
+    elseif isProvided(input.points) then
+        raiseBridgeError("INVALID_ARGUMENT", path .. ".points is only valid for curve controls")
+    end
+    return prepared
+end
+
+local function createPitchControl(prepared)
+    local objectType = prepared.kind == "curve" and "PitchControlCurve" or "PitchControlPoint"
+    local control = SV:create(objectType)
+    control:setPosition(prepared.position)
+    control:setPitch(prepared.pitch)
+    if prepared.kind == "curve" then
+        control:setPoints(prepared.points)
+    end
+    return control
+end
+
+local function applyPitchControlChanges(control, changes, kind, path)
+    changes = requireObject(changes, path)
+    local supported = {
+        position = true,
+        pitch = true,
+        points = kind == "curve"
+    }
+    for key, _value in pairs(changes) do
+        if not supported[key] then
+            raiseBridgeError("INVALID_ARGUMENT", path .. " contains an unsupported field", {
+                field = key
+            })
+        end
+    end
+    local prepared = {}
+    if isProvided(changes.position) then
+        prepared.position = requireInteger(changes.position, path .. ".position", 0)
+    end
+    if isProvided(changes.pitch) then
+        prepared.pitch = requireFiniteNumber(changes.pitch, path .. ".pitch", -127, 127)
+    end
+    if isProvided(changes.points) then
+        local rawPoints = requireArray(changes.points, path .. ".points", 0, 10000)
+        local points = {}
+        for pointIndex = 1, #rawPoints do
+            local point = requireObject(rawPoints[pointIndex], path .. ".points[" .. pointIndex .. "]")
+            points[#points + 1] = {
+                requireInteger(point.offset, path .. ".points[" .. pointIndex .. "].offset"),
+                requireFiniteNumber(point.value, path .. ".points[" .. pointIndex .. "].value", -127, 127)
+            }
+        end
+        table.sort(points, function(left, right)
+            return left[1] < right[1]
+        end)
+        prepared.points = points
+    end
+    if next(prepared) == nil then
+        raiseBridgeError("INVALID_ARGUMENT", path .. " must change at least one field")
+    end
+
+    local function apply(target)
+        if prepared.position ~= nil then
+            target:setPosition(prepared.position)
+        end
+        if prepared.pitch ~= nil then
+            target:setPitch(prepared.pitch)
+        end
+        if prepared.points ~= nil then
+            target:setPoints(prepared.points)
+        end
+    end
+    local candidate = control:clone()
+    local ok, validationError = pcall(function()
+        apply(candidate)
+    end)
+    if not ok then
+        raiseBridgeError("INVALID_ARGUMENT", "SynthV rejected the requested pitch-control changes", {
+            cause = tostring(validationError)
+        })
+    end
+    return apply
+end
+
+local function getNavigation(viewName)
+    local view
+    if viewName == "mainEditor" then
+        view = SV:getMainEditor()
+    elseif viewName == "arrangement" then
+        view = SV:getArrangement()
+    else
+        raiseBridgeError("INVALID_ARGUMENT", "view must be mainEditor or arrangement")
+    end
+    local navigation = safeCall(function()
+        return view:getNavigation()
+    end, nil)
+    if not navigation then
+        raiseBridgeError("UNSUPPORTED_HOST_CAPABILITY", "This SynthV host does not expose editor navigation", {
+            capability = viewName .. ".getNavigation"
+        })
+    end
+    return navigation
+end
+
+local function serializeNavigation(viewName, navigation)
+    return {
+        view = viewName,
+        timeViewRange = sanitizeForJson(navigation:getTimeViewRange()),
+        valueViewRange = sanitizeForJson(navigation:getValueViewRange()),
+        timePixelsPerBlick = navigation:getTimePxPerUnit(),
+        valuePixelsPerUnit = navigation:getValuePxPerUnit()
+    }
+end
+
+local RETAKE_IDS_KEY = "synthv-agent-bridge.retakeIds"
+
+local function getTrackedRetakeIds(retakes)
+    local raw = safeCall(function()
+        return retakes:getScriptData(RETAKE_IDS_KEY)
+    end, nil)
+    local result = json.array()
+    if type(raw) == "table" then
+        for index = 1, #raw do
+            if type(raw[index]) == "number" then
+                result[#result + 1] = raw[index]
+            end
+        end
+    end
+    return result
+end
+
+local function hasTrackedRetakeId(ids, takeId)
+    if takeId == 0 then
+        return true
+    end
+    for index = 1, #ids do
+        if ids[index] == takeId then
+            return true
+        end
+    end
+    return false
+end
+
+local function resolveRetakeNote(payload, requireFingerprint)
+    local project, track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
+    local noteIndex = requireInteger(payload.noteIndex, "noteIndex", 1, group:getNumNotes())
+    local note
+    if requireFingerprint then
+        note = validateFingerprint(
+            group,
+            noteIndex,
+            requireString(payload.fingerprint, "fingerprint", false)
+        )
+    else
+        note = group:getNote(noteIndex)
+    end
+    local retakes = note:getRetakes()
+    return project, track, trackIndex, reference, group, groupIndex, note, noteIndex, retakes
+end
+
+local function serializeRetakes(group, note, noteIndex, retakes)
+    return {
+        noteIndex = noteIndex,
+        noteFingerprint = makeNoteFingerprint(group:getUUID(), noteIndex, note),
+        takeCount = retakes:getNumTakes(),
+        trackedTakeIds = getTrackedRetakeIds(retakes),
+        defaultTakeId = 0
+    }
+end
+
+local SCRIPT_DATA_PREFIX = "synthv-agent-bridge."
+local selectionRevision = 0
+local latestSelectionEvent = JSON_NULL
+
+local function registerSelectionObservers()
+    local function attach(selection, source)
+        if not selection then return end
+        safeCall(function()
+            selection:registerSelectionCallback(function(selectionType, isSelected)
+                selectionRevision = selectionRevision + 1
+                latestSelectionEvent = {
+                    source = source,
+                    event = "selection",
+                    selectionType = selectionType,
+                    selected = isSelected,
+                    revision = selectionRevision
+                }
+            end)
+        end)
+        safeCall(function()
+            selection:registerClearCallback(function(selectionType)
+                selectionRevision = selectionRevision + 1
+                latestSelectionEvent = {
+                    source = source,
+                    event = "clear",
+                    selectionType = selectionType,
+                    revision = selectionRevision
+                }
+            end)
+        end)
+    end
+    attach(SV:getMainEditor():getSelection(), "pianoRoll")
+    attach(SV:getArrangement():getSelection(), "arrangement")
+end
+
+local function resolveScriptDataObject(payload)
+    local objectType = requireString(payload.objectType, "objectType", false)
+    local writing = payload.operation == "set" or payload.operation == "remove"
+    if objectType == "project" then
+        local project = getProject()
+        return project, project, {}
+    elseif objectType == "timeAxis" then
+        local project = getProject()
+        return project, project:getTimeAxis(), {}
+    elseif objectType == "track" or objectType == "mixer" then
+        local project, track, trackIndex = resolveTrack(payload)
+        local trackFingerprint = optionalString(payload.trackFingerprint, "trackFingerprint", false)
+        if writing and not trackFingerprint then
+            raiseBridgeError("INVALID_ARGUMENT", "trackFingerprint is required for metadata writes")
+        end
+        validateTrackFingerprint(
+            track,
+            trackFingerprint,
+            trackIndex
+        )
+        return project, objectType == "mixer" and track:getMixer() or track, {
+            trackIndex = trackIndex
+        }
+    elseif objectType == "group" or objectType == "reference" then
+        local project, _track, trackIndex, reference, group, groupIndex = resolveReference(payload)
+        local referenceFingerprint =
+            optionalString(payload.referenceFingerprint, "referenceFingerprint", false)
+        if writing and objectType == "reference" and not referenceFingerprint then
+            raiseBridgeError("INVALID_ARGUMENT", "referenceFingerprint is required for metadata writes")
+        end
+        if writing and objectType == "group" and not isProvided(payload.groupUuid) then
+            raiseBridgeError("INVALID_ARGUMENT", "groupUuid is required for metadata writes")
+        end
+        validateReferenceFingerprint(
+            reference,
+            referenceFingerprint,
+            trackIndex,
+            groupIndex
+        )
+        if objectType == "group" and not group then
+            raiseBridgeError("INSTRUMENTAL_GROUP", "Instrumental references have no note-group object")
+        end
+        return project, objectType == "reference" and reference or group, {
+            trackIndex = trackIndex,
+            groupIndex = groupIndex,
+            groupUuid = group and group:getUUID() or JSON_NULL
+        }
+    elseif objectType == "note" or objectType == "retakes" then
+        local requireFingerprint = objectType == "note" or writing or isProvided(payload.fingerprint)
+        local project, _track, trackIndex, _reference, group, groupIndex, note, noteIndex, retakes =
+            resolveRetakeNote(payload, requireFingerprint)
+        return project, objectType == "retakes" and retakes or note, {
+            trackIndex = trackIndex,
+            groupIndex = groupIndex,
+            groupUuid = group:getUUID(),
+            noteIndex = noteIndex
+        }
+    elseif objectType == "automation" then
+        local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
+        local parameter = requireString(payload.parameter, "parameter", false)
+        local automation, serialized = serializeAutomation(group, parameter)
+        if writing and not isProvided(payload.expectedFingerprint) then
+            raiseBridgeError("INVALID_ARGUMENT", "expectedFingerprint is required for metadata writes")
+        end
+        validateExpectedFingerprint(
+            serialized.fingerprint,
+            optionalString(payload.expectedFingerprint, "expectedFingerprint", false),
+            "STALE_AUTOMATION",
+            "The automation curve changed after it was read"
+        )
+        return project, automation, {
+            trackIndex = trackIndex,
+            groupIndex = groupIndex,
+            groupUuid = group:getUUID(),
+            parameter = automation:getType()
+        }
+    elseif objectType == "pitchControl" then
+        if writing and not isProvided(payload.fingerprint) then
+            raiseBridgeError("INVALID_ARGUMENT", "fingerprint is required for metadata writes")
+        end
+        local project, _track, trackIndex, _reference, group, groupIndex, control, controlIndex =
+            resolvePitchControl(payload)
+        return project, control, {
+            trackIndex = trackIndex,
+            groupIndex = groupIndex,
+            groupUuid = group:getUUID(),
+            pitchControlIndex = controlIndex
+        }
+    end
+    raiseBridgeError(
+        "INVALID_ARGUMENT",
+        "objectType must be project, timeAxis, track, mixer, group, reference, note, retakes, automation, or pitchControl"
+    )
+end
+
 local handlers = {}
 
 function handlers.ping(_payload)
@@ -1479,6 +2082,110 @@ function handlers.ping(_payload)
         sessionToken = SESSION_TOKEN,
         projectFile = currentProjectFile(),
         timestamp = isoTimestamp()
+    }
+end
+
+function handlers.get_host_info(_payload)
+    return {
+        bridgeVersion = BRIDGE_VERSION,
+        protocolVersion = PROTOCOL_VERSION,
+        host = copyHostInfo(),
+        projectFile = currentProjectFile(),
+        ipcDirectory = IPC_DIRECTORY
+    }
+end
+
+function handlers.host_clipboard(payload)
+    payload = requireObject(payload, "payload")
+    local operation = requireString(payload.operation, "operation", false)
+    if operation == "read" then
+        return {
+            operation = operation,
+            text = SV:getHostClipboard()
+        }
+    elseif operation == "write" then
+        local text = requireString(payload.text, "text", true)
+        SV:setHostClipboard(text)
+        return {
+            operation = operation,
+            characterCount = #text
+        }
+    end
+    raiseBridgeError("INVALID_ARGUMENT", "operation must be read or write")
+end
+
+function handlers.show_dialog(payload)
+    payload = requireObject(payload, "payload")
+    local kind = requireString(payload.kind, "kind", false)
+    local result
+    if kind == "custom" then
+        result = SV:showCustomDialog(requireObject(payload.form, "form"))
+    else
+        local title = requireString(payload.title, "title", true)
+        local message = requireString(payload.message, "message", true)
+        if kind == "message" then
+            SV:showMessageBox(title, message)
+            result = true
+        elseif kind == "input" then
+            result = SV:showInputBox(
+                title,
+                message,
+                optionalString(payload.defaultText, "defaultText", true) or ""
+            )
+        elseif kind == "okCancel" then
+            result = SV:showOkCancelBox(title, message)
+        elseif kind == "yesNoCancel" then
+            result = SV:showYesNoCancelBox(title, message)
+        else
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "kind must be message, input, okCancel, yesNoCancel, or custom"
+            )
+        end
+    end
+    return {
+        kind = kind,
+        result = sanitizeForJson(result)
+    }
+end
+
+function handlers.convert_pitch(payload)
+    payload = requireObject(payload, "payload")
+    local supplied = 0
+    local pitch
+    local frequency
+    if isProvided(payload.pitch) then
+        supplied = supplied + 1
+        pitch = requireFiniteNumber(payload.pitch, "pitch")
+        -- SynthV 2.2.1 on Windows does not expose the documented
+        -- pitch2freq method to Lua, although freq2Pitch is available.
+        -- Prefer either host spelling when present and use the exact
+        -- equal-temperament inverse as a compatibility fallback.
+        frequency = safeCall(function()
+            return SV:pitch2freq(pitch)
+        end, nil)
+        if frequency == nil then
+            frequency = safeCall(function()
+                return SV:pitch2Freq(pitch)
+            end, nil)
+        end
+        if frequency == nil then
+            frequency = 440 * (2 ^ ((pitch - 69) / 12))
+        end
+    end
+    if isProvided(payload.frequency) then
+        supplied = supplied + 1
+        frequency = requireFiniteNumber(payload.frequency, "frequency", 0.000001)
+        pitch = SV:freq2Pitch(frequency)
+    end
+    if supplied ~= 1 then
+        raiseBridgeError("INVALID_ARGUMENT", "Supply exactly one of pitch or frequency")
+    end
+    return {
+        pitch = pitch,
+        frequency = frequency,
+        nearestMidiPitch = math.floor(pitch + 0.5),
+        blackKey = SV:blackKey(math.floor(pitch + 0.5))
     }
 end
 
@@ -1574,7 +2281,7 @@ function handlers.convert_time(payload)
 
     local tempoMark = timeAxis:getTempoMarkAt(blicks)
     local measureMark = timeAxis:getMeasureMarkAtBlick(blicks)
-    return {
+    local result = {
         blicks = blicks,
         quarters = SV:blick2Quarter(blicks),
         seconds = timeAxis:getSecondsFromBlick(blicks),
@@ -1582,6 +2289,13 @@ function handlers.convert_time(payload)
         effectiveTempo = sanitizeForJson(tempoMark),
         effectiveMeasure = sanitizeForJson(measureMark)
     }
+    if isProvided(payload.roundInterval) then
+        local interval = requireInteger(payload.roundInterval, "roundInterval", 1)
+        result.roundInterval = interval
+        result.roundedBlicks = SV:blickRoundTo(blicks, interval)
+        result.intervalIndex = SV:blickRoundDiv(blicks, interval)
+    end
+    return result
 end
 
 function handlers.set_time_axis(payload)
@@ -1833,6 +2547,219 @@ function handlers.list_tracks(_payload)
     }
 end
 
+function handlers.list_note_groups(_payload)
+    local project = getProject()
+    local groups = json.array()
+    for libraryIndex = 1, project:getNumNoteGroupsInLibrary() do
+        groups[#groups + 1] =
+            serializeLibraryGroup(project, project:getNoteGroup(libraryIndex), libraryIndex)
+    end
+    return {
+        groupCount = #groups,
+        groups = groups
+    }
+end
+
+function handlers.create_note_group(payload)
+    payload = requireObject(payload, "payload")
+    local project = getProject()
+    local name = optionalString(payload.name, "name", false) or "New Group"
+    local suggestedIndex = optionalInteger(
+        payload.suggestedIndex,
+        "suggestedIndex",
+        1,
+        project:getNumNoteGroupsInLibrary() + 1
+    )
+    local noteInputs = isProvided(payload.notes)
+        and requireArray(payload.notes, "notes", 0, 512) or json.array()
+    local group = SV:create("NoteGroup")
+    group:setName(name)
+    for noteIndex = 1, #noteInputs do
+        group:addNote(createNoteFromInput(noteInputs[noteIndex], "notes[" .. noteIndex .. "]"))
+    end
+
+    project:newUndoRecord()
+    local libraryIndex = project:addNoteGroup(group, suggestedIndex)
+    if type(libraryIndex) ~= "number" then
+        libraryIndex = group:getIndexInParent()
+    end
+    return serializeLibraryGroup(project, group, libraryIndex)
+end
+
+function handlers.clone_note_group(payload)
+    payload = requireObject(payload, "payload")
+    local project
+    local sourceGroup
+    local sourceDescription
+    if isProvided(payload.trackIndex) then
+        local _track
+        local _reference
+        local trackIndex
+        local groupIndex
+        project, _track, trackIndex, _reference, sourceGroup, groupIndex = resolveGroup(payload)
+        sourceDescription = {
+            trackIndex = trackIndex,
+            groupIndex = groupIndex,
+            groupUuid = sourceGroup:getUUID()
+        }
+    else
+        local libraryIndex
+        project, sourceGroup, libraryIndex = resolveLibraryGroup(payload)
+        sourceDescription = {
+            libraryIndex = libraryIndex,
+            groupUuid = sourceGroup:getUUID()
+        }
+    end
+
+    local cloned = sourceGroup:clone()
+    local name = optionalString(payload.name, "name", false)
+    if name then
+        cloned:setName(name)
+    end
+    local suggestedIndex = optionalInteger(
+        payload.suggestedIndex,
+        "suggestedIndex",
+        1,
+        project:getNumNoteGroupsInLibrary() + 1
+    )
+    project:newUndoRecord()
+    local libraryIndex = project:addNoteGroup(cloned, suggestedIndex)
+    if type(libraryIndex) ~= "number" then
+        libraryIndex = cloned:getIndexInParent()
+    end
+    local result = serializeLibraryGroup(project, cloned, libraryIndex)
+    result.source = sourceDescription
+    return result
+end
+
+function handlers.delete_note_group(payload)
+    payload = requireObject(payload, "payload")
+    local project, group, libraryIndex = resolveLibraryGroup(payload)
+    local deleted = serializeLibraryGroup(project, group, libraryIndex)
+    project:newUndoRecord()
+    project:removeNoteGroup(libraryIndex)
+    return {
+        deletedGroup = deleted,
+        removedReferenceCount = deleted.referenceCount,
+        groupCount = project:getNumNoteGroupsInLibrary()
+    }
+end
+
+function handlers.add_group_reference(payload)
+    payload = requireObject(payload, "payload")
+    local project, track, trackIndex = resolveTrack(payload)
+    validateTrackFingerprint(
+        track,
+        optionalString(payload.trackFingerprint, "trackFingerprint", false),
+        trackIndex
+    )
+    local _sameProject, group = resolveLibraryGroup({
+        groupUuid = payload.targetGroupUuid,
+        libraryIndex = payload.targetLibraryIndex,
+        expectedFingerprint = payload.targetFingerprint
+    })
+    local reference = SV:create("NoteGroupReference")
+    reference:setTarget(group)
+    local timeOffset = optionalInteger(payload.timeOffset, "timeOffset", 0)
+    local pitchOffset = optionalInteger(payload.pitchOffset, "pitchOffset", -127, 127)
+    local muted = optionalBoolean(payload.muted, "muted")
+    local voice = isProvided(payload.voice) and requireObject(payload.voice, "voice") or nil
+    local timeRange = nil
+    if isProvided(payload.timeRange) then
+        local rawRange = requireObject(payload.timeRange, "timeRange")
+        timeRange = {
+            onset = requireInteger(rawRange.onset, "timeRange.onset", 0),
+            duration = requireInteger(rawRange.duration, "timeRange.duration", 1)
+        }
+    end
+    if timeOffset ~= nil then reference:setTimeOffset(timeOffset) end
+    if pitchOffset ~= nil then reference:setPitchOffset(pitchOffset) end
+    if muted ~= nil then reference:setMuted(muted) end
+    if voice ~= nil then reference:setVoice(voice) end
+    if timeRange ~= nil then reference:setTimeRange(timeRange.onset, timeRange.duration) end
+
+    project:newUndoRecord()
+    local groupIndex = track:addGroupReference(reference)
+    if type(groupIndex) ~= "number" then
+        groupIndex = reference:getIndexInParent()
+    end
+    return {
+        trackIndex = trackIndex,
+        group = serializeGroup(reference, groupIndex, 0, 0),
+        track = serializeTrackSummary(track, trackIndex)
+    }
+end
+
+function handlers.clone_group_reference(payload)
+    payload = requireObject(payload, "payload")
+    local project, _sourceTrack, sourceTrackIndex, sourceReference, sourceGroup, sourceGroupIndex =
+        resolveGroup({
+            trackIndex = payload.sourceTrackIndex,
+            groupIndex = payload.sourceGroupIndex,
+            groupUuid = payload.sourceGroupUuid
+        })
+    validateReferenceFingerprint(
+        sourceReference,
+        optionalString(payload.sourceReferenceFingerprint, "sourceReferenceFingerprint", false),
+        sourceTrackIndex,
+        sourceGroupIndex
+    )
+    local _sameProject, targetTrack, targetTrackIndex = resolveTrack({
+        trackIndex = payload.targetTrackIndex
+    })
+    validateTrackFingerprint(
+        targetTrack,
+        optionalString(payload.targetTrackFingerprint, "targetTrackFingerprint", false),
+        targetTrackIndex
+    )
+    local linked = optionalBoolean(payload.linked, "linked")
+    if linked == nil then linked = true end
+    if linked and sourceReference:isMain() then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "A track main group cannot be linked directly; use linked=false to create a library copy"
+        )
+    end
+
+    local targetGroup = sourceGroup
+    local reference
+    if linked then
+        reference = sourceReference:clone()
+    else
+        targetGroup = sourceGroup:clone()
+        local name = optionalString(payload.name, "name", false)
+        if name then targetGroup:setName(name) end
+        reference = SV:create("NoteGroupReference")
+        reference:setTarget(targetGroup)
+        reference:setTimeOffset(sourceReference:getTimeOffset())
+        reference:setPitchOffset(sourceReference:getPitchOffset())
+        reference:setMuted(sourceReference:isMuted())
+        reference:setVoice(sourceReference:getVoice())
+        reference:setTimeRange(sourceReference:getOnset(), sourceReference:getDuration())
+    end
+
+    project:newUndoRecord()
+    local libraryIndex = nil
+    if not linked then
+        libraryIndex = project:addNoteGroup(targetGroup)
+        if type(libraryIndex) ~= "number" then
+            libraryIndex = targetGroup:getIndexInParent()
+        end
+    end
+    local targetGroupIndex = targetTrack:addGroupReference(reference)
+    if type(targetGroupIndex) ~= "number" then
+        targetGroupIndex = reference:getIndexInParent()
+    end
+    return {
+        linked = linked,
+        sourceTrackIndex = sourceTrackIndex,
+        sourceGroupIndex = sourceGroupIndex,
+        targetTrackIndex = targetTrackIndex,
+        libraryIndex = libraryIndex or JSON_NULL,
+        group = serializeGroup(reference, targetGroupIndex, 0, 0)
+    }
+end
+
 function handlers.get_track_notes(payload)
     requireObject(payload, "payload")
     local project, track, trackIndex = resolveTrack(payload)
@@ -1849,25 +2776,25 @@ function handlers.get_track_notes(payload)
     }
 end
 
-function handlers.get_selection(_payload)
+function handlers.get_selection(payload)
+    payload = requireObject(payload or {}, "payload")
     local mainEditor = SV:getMainEditor()
     local track = mainEditor:getCurrentTrack()
     local reference = mainEditor:getCurrentGroup()
     if not track or not reference then
         raiseBridgeError("SELECTION_UNAVAILABLE", "The piano roll has no current track or group")
     end
-    if reference:isInstrumental() then
-        raiseBridgeError("INSTRUMENTAL_GROUP", "The current piano-roll group is instrumental")
-    end
 
-    local group = reference:getTarget()
+    local group = reference:isInstrumental() and nil or reference:getTarget()
     local selection = mainEditor:getSelection()
     local selectedNotes = selection:getSelectedNotes()
     local serializedNotes = json.array()
-    for index = 1, #selectedNotes do
-        local note = selectedNotes[index]
-        local noteIndex = note:getIndexInParent()
-        serializedNotes[#serializedNotes + 1] = serializeNote(group, reference, note, noteIndex)
+    if group then
+        for index = 1, #selectedNotes do
+            local note = selectedNotes[index]
+            local noteIndex = note:getIndexInParent()
+            serializedNotes[#serializedNotes + 1] = serializeNote(group, reference, note, noteIndex)
+        end
     end
 
     local selectedGroups = json.array()
@@ -1888,13 +2815,255 @@ function handlers.get_selection(_payload)
         appendSelectedGroups(arrangementSelection:getSelectedGroups(), "arrangement")
     end
 
+    local serializedPitchControls = json.array()
+    if group then
+        local selectedPitchControls = safeCall(function()
+            return selection:getSelectedPitchControls()
+        end, {})
+        for index = 1, #selectedPitchControls do
+            local control = selectedPitchControls[index]
+            serializedPitchControls[#serializedPitchControls + 1] =
+                serializePitchControl(group, control, control:getIndexInParent())
+        end
+    end
+
+    local selectedAutomation = {}
+    local automationParameters = isProvided(payload.automationParameters)
+        and requireArray(payload.automationParameters, "automationParameters", 0, 64) or json.array()
+    if group then
+        for index = 1, #automationParameters do
+            local parameter = requireString(
+                automationParameters[index],
+                "automationParameters[" .. index .. "]",
+                false
+            )
+            local positions = safeCall(function()
+                return selection:getSelectedPoints(parameter)
+            end, {})
+            local automation = group:getParameter(parameter)
+            local points = json.array()
+            for pointIndex = 1, #positions do
+                points[#points + 1] = {
+                    position = positions[pointIndex],
+                    value = automation:get(positions[pointIndex])
+                }
+            end
+            selectedAutomation[parameter] = points
+        end
+    end
+
     return {
         current = locateReference(reference),
+        selectionRevision = selectionRevision,
+        latestSelectionEvent = latestSelectionEvent,
+        pianoRollHasUnfinishedEdits = safeCall(function()
+            return selection:hasUnfinishedEdits()
+        end, false),
+        arrangementHasUnfinishedEdits = arrangementSelection and safeCall(function()
+            return arrangementSelection:hasUnfinishedEdits()
+        end, false) or false,
         selectedNoteCount = #serializedNotes,
         selectedNotes = serializedNotes,
+        selectedPitchControlCount = #serializedPitchControls,
+        selectedPitchControls = serializedPitchControls,
+        selectedAutomation = selectedAutomation,
         selectedGroupCount = #selectedGroups,
         selectedGroups = selectedGroups
     }
+end
+
+function handlers.set_selection(payload)
+    payload = requireObject(payload, "payload")
+    local scope = optionalString(payload.scope, "scope", false) or "pianoRoll"
+    local operation = requireString(payload.operation, "operation", false)
+    local kind = requireString(payload.kind, "kind", false)
+    if operation ~= "replace" and operation ~= "add" and operation ~= "remove" and operation ~= "clear" then
+        raiseBridgeError("INVALID_ARGUMENT", "operation must be replace, add, remove, or clear")
+    end
+    local selection
+    if scope == "pianoRoll" then
+        selection = SV:getMainEditor():getSelection()
+    elseif scope == "arrangement" then
+        selection = SV:getArrangement():getSelection()
+        if kind ~= "groups" and kind ~= "all" then
+            raiseBridgeError("INVALID_ARGUMENT", "Arrangement selection only supports groups")
+        end
+    else
+        raiseBridgeError("INVALID_ARGUMENT", "scope must be pianoRoll or arrangement")
+    end
+
+    local function clearKind()
+        if kind == "all" then
+            selection:clearAll()
+        elseif kind == "groups" then
+            selection:clearGroups()
+        elseif kind == "notes" then
+            selection:clearNotes()
+        elseif kind == "pitchControls" then
+            selection:clearPitchControls()
+        elseif kind == "automationPoints" then
+            local parameter = requireString(payload.parameter, "parameter", false)
+            local selected = selection:getSelectedPoints(parameter)
+            if #selected > 0 then
+                selection:unselectPoints(parameter, selected)
+            end
+        else
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "kind must be all, groups, notes, pitchControls, or automationPoints"
+            )
+        end
+    end
+
+    if operation == "clear" then
+        clearKind()
+        return handlers.get_selection({
+            automationParameters = isProvided(payload.parameter) and json.array({ payload.parameter }) or json.array()
+        })
+    end
+    if kind == "all" then
+        raiseBridgeError("INVALID_ARGUMENT", "kind=all is only valid with operation=clear")
+    end
+    local adding = operation == "replace" or operation == "add"
+    local applySelection
+
+    if kind == "groups" then
+        local groups = requireArray(payload.groups, "groups", 1, 512)
+        local preparedGroups = {}
+        for index = 1, #groups do
+            local locator = requireObject(groups[index], "groups[" .. index .. "]")
+            local _project, _track, _trackIndex, reference = resolveReference(locator)
+            if reference:isMain() then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "SynthV does not allow a track's main group to be selected as a group",
+                    {
+                        trackIndex = _trackIndex,
+                        groupIndex = locator.groupIndex or 1
+                    }
+                )
+            end
+            preparedGroups[#preparedGroups + 1] = reference
+        end
+        applySelection = function()
+            for index = 1, #preparedGroups do
+                if adding then
+                    selection:selectGroup(preparedGroups[index])
+                else
+                    selection:unselectGroup(preparedGroups[index])
+                end
+            end
+        end
+    else
+        if scope ~= "pianoRoll" then
+            raiseBridgeError("INVALID_ARGUMENT", "Only pianoRoll supports this selection kind")
+        end
+        local _project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
+        local currentLocation = locateReference(SV:getMainEditor():getCurrentGroup())
+        if not currentLocation
+            or currentLocation.trackIndex ~= trackIndex
+            or currentLocation.groupIndex ~= groupIndex
+            or currentLocation.groupUuid ~= group:getUUID() then
+            raiseBridgeError(
+                "SELECTION_GROUP_MISMATCH",
+                "Notes, pitch controls, and automation points must belong to the current piano-roll group"
+            )
+        end
+        if kind == "notes" then
+            local notes = requireArray(payload.notes, "notes", 1, 512)
+            local preparedNotes = {}
+            for index = 1, #notes do
+                local target = requireObject(notes[index], "notes[" .. index .. "]")
+                local noteIndex = requireInteger(
+                    target.noteIndex,
+                    "notes[" .. index .. "].noteIndex",
+                    1,
+                    group:getNumNotes()
+                )
+                local note = group:getNote(noteIndex)
+                if isProvided(target.fingerprint) then
+                    note = validateFingerprint(
+                        group,
+                        noteIndex,
+                        requireString(target.fingerprint, "notes[" .. index .. "].fingerprint", false)
+                    )
+                end
+                preparedNotes[#preparedNotes + 1] = note
+            end
+            applySelection = function()
+                for index = 1, #preparedNotes do
+                    if adding then
+                        selection:selectNote(preparedNotes[index])
+                    else
+                        selection:unselectNote(preparedNotes[index])
+                    end
+                end
+            end
+        elseif kind == "pitchControls" then
+            local targets = requireArray(payload.pitchControls, "pitchControls", 1, 512)
+            local controls = {}
+            for index = 1, #targets do
+                local target = requireObject(targets[index], "pitchControls[" .. index .. "]")
+                local controlIndex = requireInteger(
+                    target.pitchControlIndex,
+                    "pitchControls[" .. index .. "].pitchControlIndex",
+                    1,
+                    group:getNumPitchControls()
+                )
+                local control = group:getPitchControl(controlIndex)
+                if isProvided(target.fingerprint) then
+                    validateExpectedFingerprint(
+                        serializePitchControl(group, control, controlIndex).fingerprint,
+                        requireString(
+                            target.fingerprint,
+                            "pitchControls[" .. index .. "].fingerprint",
+                            false
+                        ),
+                        "STALE_PITCH_CONTROL",
+                        "The pitch control changed after it was read"
+                    )
+                end
+                controls[#controls + 1] = control
+            end
+            applySelection = function()
+                if adding then
+                    selection:selectPitchControls(controls)
+                else
+                    selection:unselectPitchControls(controls)
+                end
+            end
+        elseif kind == "automationPoints" then
+            local parameter = requireString(payload.parameter, "parameter", false)
+            group:getParameter(parameter)
+            local rawPositions = requireArray(payload.positions, "positions", 1, 10000)
+            local positions = {}
+            for index = 1, #rawPositions do
+                positions[#positions + 1] =
+                    requireInteger(rawPositions[index], "positions[" .. index .. "]", 0)
+            end
+            applySelection = function()
+                if adding then
+                    selection:selectPoints(parameter, positions)
+                else
+                    selection:unselectPoints(parameter, positions)
+                end
+            end
+        else
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "kind must be groups, notes, pitchControls, or automationPoints"
+            )
+        end
+    end
+
+    if operation == "replace" then
+        clearKind()
+    end
+    applySelection()
+
+    return handlers.get_selection({
+        automationParameters = isProvided(payload.parameter) and json.array({ payload.parameter }) or json.array()
+    })
 end
 
 function handlers.get_computed_group_data(payload)
@@ -1912,11 +3081,18 @@ function handlers.get_computed_group_data(payload)
     }
 
     if includeAttributes then
+        local rawPhonemes = SV:getPhonemesForGroup(reference)
+        local computedPhonemes = json.array()
+        for index = 1, #rawPhonemes do
+            computedPhonemes[#computedPhonemes + 1] = rawPhonemes[index]
+        end
         local rawAttributes = SV:getComputedAttributesForGroup(reference)
         local computedAttributes = json.array()
         for index = 1, #rawAttributes do
             computedAttributes[#computedAttributes + 1] = sanitizeForJson(rawAttributes[index])
         end
+        result.computedPhonemes = computedPhonemes
+        result.phonemesPending = group:getNumNotes() > 0 and #computedPhonemes == 0
         result.computedAttributes = computedAttributes
         result.attributesPending = group:getNumNotes() > 0 and #computedAttributes == 0
     end
@@ -2138,7 +3314,13 @@ end
 
 function handlers.update_group(payload)
     payload = requireObject(payload, "payload")
-    local project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
+    local project, _track, trackIndex, reference, group, groupIndex = resolveReference(payload)
+    validateReferenceFingerprint(
+        reference,
+        optionalString(payload.referenceFingerprint, "referenceFingerprint", false),
+        trackIndex,
+        groupIndex
+    )
     local name = optionalString(payload.name, "name", false)
     local muted = optionalBoolean(payload.muted, "muted")
     local timeOffset = optionalInteger(payload.timeOffset, "timeOffset", 0)
@@ -2154,6 +3336,12 @@ function handlers.update_group(payload)
     end
     if name == nil and muted == nil and timeOffset == nil and pitchOffset == nil and voice == nil and timeRange == nil then
         raiseBridgeError("INVALID_ARGUMENT", "At least one group field must be supplied")
+    end
+    if reference:isInstrumental() and name ~= nil then
+        raiseBridgeError("INVALID_ARGUMENT", "Instrumental references do not expose a note-group name")
+    end
+    if reference:isInstrumental() and voice ~= nil then
+        raiseBridgeError("INVALID_ARGUMENT", "Instrumental references do not expose vocal voice properties")
     end
 
     local function applyReferenceUpdates(target)
@@ -2175,10 +3363,10 @@ function handlers.update_group(payload)
     end
 
     local referenceCandidate = reference:clone()
-    local groupCandidate = group:clone()
+    local groupCandidate = group and group:clone() or nil
     local valid, validationError = pcall(function()
         applyReferenceUpdates(referenceCandidate)
-        if name ~= nil then
+        if name ~= nil and groupCandidate then
             groupCandidate:setName(name)
         end
     end)
@@ -2190,7 +3378,7 @@ function handlers.update_group(payload)
 
     project:newUndoRecord()
     applyReferenceUpdates(reference)
-    if name ~= nil then
+    if name ~= nil and group then
         group:setName(name)
     end
     return {
@@ -2201,7 +3389,13 @@ end
 
 function handlers.delete_group_reference(payload)
     payload = requireObject(payload, "payload")
-    local project, track, trackIndex, reference, _group, groupIndex = resolveGroup(payload)
+    local project, track, trackIndex, reference, _group, groupIndex = resolveReference(payload)
+    validateReferenceFingerprint(
+        reference,
+        optionalString(payload.referenceFingerprint, "referenceFingerprint", false),
+        trackIndex,
+        groupIndex
+    )
     if groupIndex == 1 or reference:isMain() then
         raiseBridgeError("MAIN_GROUP", "A track's main group reference cannot be removed")
     end
@@ -2222,59 +3416,7 @@ function handlers.add_notes(payload)
     local prepared = {}
 
     for index = 1, #noteInputs do
-        local input = requireObject(noteInputs[index], "notes[" .. index .. "]")
-        local note = SV:create("Note")
-        note:setTimeRange(
-            requireInteger(input.onset, "notes[" .. index .. "].onset", 0),
-            requireInteger(input.duration, "notes[" .. index .. "].duration", 1)
-        )
-        note:setPitch(requireInteger(input.pitch, "notes[" .. index .. "].pitch", 0, 127))
-        note:setLyrics(optionalString(input.lyrics, "notes[" .. index .. "].lyrics", true) or "la")
-        if isProvided(input.phonemes) then
-            note:setPhonemes(requireString(input.phonemes, "notes[" .. index .. "].phonemes", true))
-        end
-        if isProvided(input.detune) then
-            note:setDetune(requireFiniteNumber(input.detune, "notes[" .. index .. "].detune"))
-        end
-        if isProvided(input.languageOverride) then
-            local languageOverride = requireString(input.languageOverride, "notes[" .. index .. "].languageOverride", true)
-            local allowedLanguages = {
-                [""] = true,
-                mandarin = true,
-                japanese = true,
-                english = true,
-                cantonese = true
-            }
-            if not allowedLanguages[languageOverride] then
-                raiseBridgeError("INVALID_ARGUMENT", "notes[" .. index .. "].languageOverride is unsupported")
-            end
-            note:setLanguageOverride(languageOverride)
-        end
-        if isProvided(input.musicalType) then
-            local musicalType = requireString(input.musicalType, "notes[" .. index .. "].musicalType", false)
-            if musicalType ~= "sing" and musicalType ~= "rap" then
-                raiseBridgeError("INVALID_ARGUMENT", "notes[" .. index .. "].musicalType must be sing or rap")
-            end
-            note:setMusicalType(musicalType)
-        end
-        if isProvided(input.pitchAutoMode) then
-            applyPitchAutoMode(
-                note,
-                requireBoolean(input.pitchAutoMode, "notes[" .. index .. "].pitchAutoMode"),
-                "notes[" .. index .. "].pitchAutoMode"
-            )
-        end
-        if isProvided(input.rapAccent) then
-            local rapAccent = requireString(input.rapAccent, "notes[" .. index .. "].rapAccent", true)
-            if rapAccent ~= "" and not rapAccent:match("^[1-5]$") then
-                raiseBridgeError("INVALID_ARGUMENT", "notes[" .. index .. "].rapAccent must be empty or 1..5")
-            end
-            note:setRapAccent(rapAccent)
-        end
-        if isProvided(input.attributes) then
-            note:setAttributes(requireObject(input.attributes, "notes[" .. index .. "].attributes"))
-        end
-        prepared[#prepared + 1] = note
+        prepared[#prepared + 1] = createNoteFromInput(noteInputs[index], "notes[" .. index .. "]")
     end
 
     project:newUndoRecord()
@@ -2382,15 +3524,391 @@ function handlers.delete_notes(payload)
     }
 end
 
+function handlers.get_note_retakes(payload)
+    payload = requireObject(payload, "payload")
+    local _project, _track, trackIndex, _reference, group, groupIndex, note, noteIndex, retakes =
+        resolveRetakeNote(payload, false)
+    local result = serializeRetakes(group, note, noteIndex, retakes)
+    result.trackIndex = trackIndex
+    result.groupIndex = groupIndex
+    result.groupUuid = group:getUUID()
+    return result
+end
+
+function handlers.generate_note_retake(payload)
+    payload = requireObject(payload, "payload")
+    local project, _track, trackIndex, _reference, group, groupIndex, note, noteIndex, retakes =
+        resolveRetakeNote(payload, true)
+    local newDuration = optionalBoolean(payload.newDuration, "newDuration")
+    local newPitch = optionalBoolean(payload.newPitch, "newPitch")
+    local newTimbre = optionalBoolean(payload.newTimbre, "newTimbre")
+    if newDuration == nil then newDuration = true end
+    if newPitch == nil then newPitch = true end
+    if newTimbre == nil then newTimbre = true end
+    local activate = optionalBoolean(payload.activate, "activate")
+    if activate == nil then activate = false end
+    if not newDuration and not newPitch and not newTimbre then
+        raiseBridgeError("INVALID_ARGUMENT", "At least one retake variation must be enabled")
+    end
+
+    project:newUndoRecord()
+    local takeId = retakes:generateTake(newDuration, newPitch, newTimbre)
+    local tracked = getTrackedRetakeIds(retakes)
+    tracked[#tracked + 1] = takeId
+    retakes:setScriptData(RETAKE_IDS_KEY, tracked)
+    if activate then
+        retakes:setActiveTake(takeId)
+    end
+    local result = serializeRetakes(group, note, noteIndex, retakes)
+    result.trackIndex = trackIndex
+    result.groupIndex = groupIndex
+    result.groupUuid = group:getUUID()
+    result.generatedTakeId = takeId
+    result.activated = activate
+    return result
+end
+
+function handlers.activate_note_retake(payload)
+    payload = requireObject(payload, "payload")
+    local project, _track, trackIndex, _reference, group, groupIndex, note, noteIndex, retakes =
+        resolveRetakeNote(payload, true)
+    local takeId = requireInteger(payload.takeId, "takeId", 0)
+    local tracked = getTrackedRetakeIds(retakes)
+    if not hasTrackedRetakeId(tracked, takeId) then
+        raiseBridgeError(
+            "UNKNOWN_RETAKE_ID",
+            "Only the default take or a take ID generated and tracked by this bridge can be activated",
+            { takeId = takeId, trackedTakeIds = tracked }
+        )
+    end
+    project:newUndoRecord()
+    retakes:setActiveTake(takeId)
+    local result = serializeRetakes(group, note, noteIndex, retakes)
+    result.trackIndex = trackIndex
+    result.groupIndex = groupIndex
+    result.groupUuid = group:getUUID()
+    result.activatedTakeId = takeId
+    return result
+end
+
+function handlers.delete_note_retake(payload)
+    payload = requireObject(payload, "payload")
+    local project, _track, trackIndex, _reference, group, groupIndex, note, noteIndex, retakes =
+        resolveRetakeNote(payload, true)
+    local takeId = requireInteger(payload.takeId, "takeId", 1)
+    local tracked = getTrackedRetakeIds(retakes)
+    if not hasTrackedRetakeId(tracked, takeId) then
+        raiseBridgeError(
+            "UNKNOWN_RETAKE_ID",
+            "Only a take ID generated and tracked by this bridge can be deleted",
+            { takeId = takeId, trackedTakeIds = tracked }
+        )
+    end
+    local remaining = json.array()
+    for index = 1, #tracked do
+        if tracked[index] ~= takeId then
+            remaining[#remaining + 1] = tracked[index]
+        end
+    end
+    project:newUndoRecord()
+    retakes:deleteTake(takeId)
+    retakes:setScriptData(RETAKE_IDS_KEY, remaining)
+    local result = serializeRetakes(group, note, noteIndex, retakes)
+    result.trackIndex = trackIndex
+    result.groupIndex = groupIndex
+    result.groupUuid = group:getUUID()
+    result.deletedTakeId = takeId
+    return result
+end
+
+function handlers.get_pitch_controls(payload)
+    payload = requireObject(payload, "payload")
+    local _project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
+    local controls = serializePitchControls(group)
+    if isProvided(payload.sampleOffsets) then
+        local rawOffsets = requireArray(payload.sampleOffsets, "sampleOffsets", 1, 10000)
+        local offsets = {}
+        for index = 1, #rawOffsets do
+            offsets[#offsets + 1] =
+                requireInteger(rawOffsets[index], "sampleOffsets[" .. index .. "]")
+        end
+        for controlIndex = 1, #controls do
+            if controls[controlIndex].kind == "curve" then
+                local control = group:getPitchControl(controlIndex)
+                local samples = json.array()
+                for offsetIndex = 1, #offsets do
+                    samples[#samples + 1] = {
+                        offset = offsets[offsetIndex],
+                        value = control:getValueAt(offsets[offsetIndex])
+                    }
+                end
+                controls[controlIndex].samples = samples
+            end
+        end
+    end
+    return {
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        groupUuid = group:getUUID(),
+        pitchControlCount = #controls,
+        pitchControls = controls
+    }
+end
+
+function handlers.add_pitch_controls(payload)
+    payload = requireObject(payload, "payload")
+    local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
+    local inputs = requireArray(payload.pitchControls, "pitchControls", 1, 512)
+    local prepared = {}
+    for index = 1, #inputs do
+        local definition = preparePitchControlInput(inputs[index], "pitchControls[" .. index .. "]")
+        local ok, controlOrError = pcall(function()
+            return createPitchControl(definition)
+        end)
+        if not ok then
+            raiseBridgeError("INVALID_ARGUMENT", "SynthV rejected a pitch-control definition", {
+                index = index,
+                cause = tostring(controlOrError)
+            })
+        end
+        prepared[#prepared + 1] = controlOrError
+    end
+
+    project:newUndoRecord()
+    for index = 1, #prepared do
+        group:addPitchControl(prepared[index])
+    end
+    local controls = json.array()
+    for index = 1, #prepared do
+        local control = prepared[index]
+        controls[#controls + 1] =
+            serializePitchControl(group, control, control:getIndexInParent())
+    end
+    return {
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        groupUuid = group:getUUID(),
+        addedCount = #controls,
+        pitchControls = controls
+    }
+end
+
+function handlers.edit_pitch_controls(payload)
+    payload = requireObject(payload, "payload")
+    local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
+    local edits = requireArray(payload.edits, "edits", 1, 512)
+    local prepared = {}
+    local seen = {}
+    for index = 1, #edits do
+        local edit = requireObject(edits[index], "edits[" .. index .. "]")
+        local controlIndex = requireInteger(
+            edit.pitchControlIndex,
+            "edits[" .. index .. "].pitchControlIndex",
+            1,
+            group:getNumPitchControls()
+        )
+        if seen[controlIndex] then
+            raiseBridgeError("INVALID_ARGUMENT", "The same pitchControlIndex appears more than once", {
+                pitchControlIndex = controlIndex
+            })
+        end
+        seen[controlIndex] = true
+        local control = group:getPitchControl(controlIndex)
+        local serialized = serializePitchControl(group, control, controlIndex)
+        validateExpectedFingerprint(
+            serialized.fingerprint,
+            requireString(edit.fingerprint, "edits[" .. index .. "].fingerprint", false),
+            "STALE_PITCH_CONTROL",
+            "The pitch control changed after it was read"
+        )
+        prepared[#prepared + 1] = {
+            control = control,
+            apply = applyPitchControlChanges(
+                control,
+                edit.changes,
+                serialized.kind,
+                "edits[" .. index .. "].changes"
+            )
+        }
+    end
+
+    project:newUndoRecord()
+    for index = 1, #prepared do
+        prepared[index].apply(prepared[index].control)
+    end
+    return {
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        groupUuid = group:getUUID(),
+        editedCount = #prepared,
+        pitchControls = serializePitchControls(group)
+    }
+end
+
+function handlers.delete_pitch_controls(payload)
+    payload = requireObject(payload, "payload")
+    local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
+    local targets = requireArray(payload.pitchControls, "pitchControls", 1, 512)
+    local prepared = {}
+    local seen = {}
+    for index = 1, #targets do
+        local target = requireObject(targets[index], "pitchControls[" .. index .. "]")
+        local controlIndex = requireInteger(
+            target.pitchControlIndex,
+            "pitchControls[" .. index .. "].pitchControlIndex",
+            1,
+            group:getNumPitchControls()
+        )
+        if seen[controlIndex] then
+            raiseBridgeError("INVALID_ARGUMENT", "The same pitchControlIndex appears more than once", {
+                pitchControlIndex = controlIndex
+            })
+        end
+        seen[controlIndex] = true
+        local serialized = serializePitchControl(group, group:getPitchControl(controlIndex), controlIndex)
+        validateExpectedFingerprint(
+            serialized.fingerprint,
+            requireString(target.fingerprint, "pitchControls[" .. index .. "].fingerprint", false),
+            "STALE_PITCH_CONTROL",
+            "The pitch control changed after it was read"
+        )
+        prepared[#prepared + 1] = {
+            pitchControlIndex = controlIndex,
+            pitchControl = serialized
+        }
+    end
+    table.sort(prepared, function(left, right)
+        return left.pitchControlIndex > right.pitchControlIndex
+    end)
+    project:newUndoRecord()
+    for index = 1, #prepared do
+        group:removePitchControl(prepared[index].pitchControlIndex)
+    end
+    local deleted = json.array()
+    for index = #prepared, 1, -1 do
+        deleted[#deleted + 1] = prepared[index].pitchControl
+    end
+    return {
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        groupUuid = group:getUUID(),
+        deletedCount = #deleted,
+        deletedPitchControls = deleted
+    }
+end
+
 function handlers.get_automation(payload)
     payload = requireObject(payload, "payload")
     local _project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
     local parameterName = requireString(payload.parameter, "parameter", false)
-    local _automation, serialized = serializeAutomation(group, parameterName)
+    local automation, serialized = serializeAutomation(group, parameterName)
+    local hasBegin = isProvided(payload.rangeBegin)
+    local hasEnd = isProvided(payload.rangeEnd)
+    if hasBegin ~= hasEnd then
+        raiseBridgeError("INVALID_ARGUMENT", "rangeBegin and rangeEnd must be supplied together")
+    end
+    if hasBegin then
+        local rangeBegin = requireInteger(payload.rangeBegin, "rangeBegin", 0)
+        local rangeEnd = requireInteger(payload.rangeEnd, "rangeEnd", rangeBegin)
+        local rawPoints = automation:getPoints(rangeBegin, rangeEnd)
+        local points = json.array()
+        for index = 1, #rawPoints do
+            points[#points + 1] = {
+                position = rawPoints[index][1],
+                value = rawPoints[index][2]
+            }
+        end
+        serialized.totalPointCount = serialized.pointCount
+        serialized.pointCount = #points
+        serialized.points = points
+        serialized.returnedRange = {
+            beginPosition = rangeBegin,
+            endPosition = rangeEnd
+        }
+    end
     serialized.trackIndex = trackIndex
     serialized.groupIndex = groupIndex
     serialized.groupUuid = group:getUUID()
     return serialized
+end
+
+function handlers.sample_automation(payload)
+    payload = requireObject(payload, "payload")
+    local _project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
+    local parameterName = requireString(payload.parameter, "parameter", false)
+    local automation, serialized = serializeAutomation(group, parameterName)
+    local positions = requireArray(payload.positions, "positions", 1, 10000)
+    local interpolation = optionalString(payload.interpolation, "interpolation", false) or "native"
+    if interpolation ~= "native" and interpolation ~= "linear" then
+        raiseBridgeError("INVALID_ARGUMENT", "interpolation must be native or linear")
+    end
+    local samples = json.array()
+    for index = 1, #positions do
+        local position = requireInteger(positions[index], "positions[" .. index .. "]", 0)
+        samples[#samples + 1] = {
+            position = position,
+            value = interpolation == "linear" and automation:getLinear(position) or automation:get(position)
+        }
+    end
+    return {
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        groupUuid = group:getUUID(),
+        parameter = serialized.parameter,
+        fingerprint = serialized.fingerprint,
+        interpolation = interpolation,
+        sampleCount = #samples,
+        samples = samples
+    }
+end
+
+function handlers.simplify_automation(payload)
+    payload = requireObject(payload, "payload")
+    local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
+    local parameterName = requireString(payload.parameter, "parameter", false)
+    local automation, before = serializeAutomation(group, parameterName)
+    validateExpectedFingerprint(
+        before.fingerprint,
+        optionalString(payload.expectedFingerprint, "expectedFingerprint", false),
+        "STALE_AUTOMATION",
+        "The automation curve changed after it was read"
+    )
+    local beginPosition = requireInteger(payload.beginPosition, "beginPosition", 0)
+    local endPosition = requireInteger(payload.endPosition, "endPosition", beginPosition)
+    local threshold = optionalNumber(payload.threshold, "threshold", 0)
+    local candidate = automation:clone()
+    local valid, validationError = pcall(function()
+        if threshold == nil then
+            candidate:simplify(beginPosition, endPosition)
+        else
+            candidate:simplify(beginPosition, endPosition, threshold)
+        end
+    end)
+    if not valid then
+        raiseBridgeError("INVALID_ARGUMENT", "SynthV rejected the automation simplification", {
+            cause = tostring(validationError)
+        })
+    end
+
+    project:newUndoRecord()
+    local changed
+    if threshold == nil then
+        changed = automation:simplify(beginPosition, endPosition)
+    else
+        changed = automation:simplify(beginPosition, endPosition, threshold)
+    end
+    local _sameAutomation, after = serializeAutomation(group, parameterName)
+    after.trackIndex = trackIndex
+    after.groupIndex = groupIndex
+    after.groupUuid = group:getUUID()
+    after.changed = changed
+    after.removedPointCount = before.pointCount - after.pointCount
+    after.simplifiedRange = {
+        beginPosition = beginPosition,
+        endPosition = endPosition
+    }
+    after.threshold = threshold or 0.002
+    return after
 end
 
 function handlers.set_automation_points(payload)
@@ -2487,6 +4005,147 @@ function handlers.clear_automation(payload)
     serialized.groupUuid = group:getUUID()
     serialized.clearedRange = rangeBegin and { beginPosition = rangeBegin, endPosition = rangeEnd } or JSON_NULL
     return serialized
+end
+
+function handlers.get_editor_view(payload)
+    payload = requireObject(payload, "payload")
+    local viewName = optionalString(payload.view, "view", false) or "mainEditor"
+    return serializeNavigation(viewName, getNavigation(viewName))
+end
+
+function handlers.set_editor_view(payload)
+    payload = requireObject(payload, "payload")
+    local viewName = optionalString(payload.view, "view", false) or "mainEditor"
+    local navigation = getNavigation(viewName)
+    local timeLeft = optionalNumber(payload.timeLeft, "timeLeft")
+    local timeRight = optionalNumber(payload.timeRight, "timeRight")
+    local timeScale = optionalNumber(payload.timeScale, "timeScale", 0.000000000001)
+    local valueCenter = optionalNumber(payload.valueCenter, "valueCenter")
+    if timeLeft == nil and timeRight == nil and timeScale == nil and valueCenter == nil then
+        raiseBridgeError("INVALID_ARGUMENT", "At least one viewport field must be supplied")
+    end
+    if timeLeft ~= nil and timeRight ~= nil and timeRight <= timeLeft then
+        raiseBridgeError("INVALID_ARGUMENT", "timeRight must be greater than timeLeft")
+    end
+    if timeLeft ~= nil then navigation:setTimeLeft(timeLeft) end
+    if timeRight ~= nil then navigation:setTimeRight(timeRight) end
+    if timeScale ~= nil then navigation:setTimeScale(timeScale) end
+    if valueCenter ~= nil then navigation:setValueCenter(valueCenter) end
+    local result = serializeNavigation(viewName, navigation)
+    result.applied = {
+        timeLeft = timeLeft or JSON_NULL,
+        timeRight = timeRight or JSON_NULL,
+        timeScale = timeScale or JSON_NULL,
+        valueCenter = valueCenter or JSON_NULL
+    }
+    return result
+end
+
+function handlers.snap_position(payload)
+    payload = requireObject(payload, "payload")
+    local viewName = optionalString(payload.view, "view", false) or "mainEditor"
+    local position = requireFiniteNumber(payload.position, "position")
+    local navigation = getNavigation(viewName)
+    return {
+        view = viewName,
+        position = position,
+        snappedPosition = navigation:snap(position)
+    }
+end
+
+function handlers.convert_editor_coordinates(payload)
+    payload = requireObject(payload, "payload")
+    local viewName = optionalString(payload.view, "view", false) or "mainEditor"
+    local navigation = getNavigation(viewName)
+    local result = { view = viewName }
+    local supplied = 0
+    if isProvided(payload.time) then
+        local time = requireFiniteNumber(payload.time, "time")
+        result.time = time
+        result.x = navigation:t2x(time)
+        supplied = supplied + 1
+    end
+    if isProvided(payload.x) then
+        local x = requireFiniteNumber(payload.x, "x")
+        result.xInput = x
+        result.timeFromX = navigation:x2t(x)
+        supplied = supplied + 1
+    end
+    if isProvided(payload.value) then
+        local value = requireFiniteNumber(payload.value, "value")
+        result.value = value
+        result.y = navigation:v2y(value)
+        supplied = supplied + 1
+    end
+    if isProvided(payload.y) then
+        local y = requireFiniteNumber(payload.y, "y")
+        result.yInput = y
+        result.valueFromY = navigation:y2v(y)
+        supplied = supplied + 1
+    end
+    if supplied == 0 then
+        raiseBridgeError("INVALID_ARGUMENT", "Supply at least one of time, x, value, or y")
+    end
+    return result
+end
+
+function handlers.script_data(payload)
+    payload = requireObject(payload, "payload")
+    local operation = requireString(payload.operation, "operation", false)
+    local project, object, locator = resolveScriptDataObject(payload)
+    local result = {
+        operation = operation,
+        objectType = payload.objectType,
+        locator = locator
+    }
+    if operation == "list" then
+        local keys = object:getScriptDataKeys()
+        local bridgeKeys = json.array()
+        for index = 1, #keys do
+            if keys[index]:sub(1, #SCRIPT_DATA_PREFIX) == SCRIPT_DATA_PREFIX then
+                bridgeKeys[#bridgeKeys + 1] = keys[index]
+            end
+        end
+        result.keys = bridgeKeys
+        return result
+    end
+
+    local key = requireString(payload.key, "key", false)
+    if key:sub(1, #SCRIPT_DATA_PREFIX) ~= SCRIPT_DATA_PREFIX then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "Script-data keys must begin with " .. SCRIPT_DATA_PREFIX
+        )
+    end
+    if operation == "get" then
+        result.exists = object:hasScriptData(key)
+        result.value = sanitizeForJson(object:getScriptData(key))
+        return result
+    elseif operation == "set" then
+        if not isProvided(payload.value) then
+            raiseBridgeError("INVALID_ARGUMENT", "value is required for operation=set")
+        end
+        local encodable, encodeError = pcall(function()
+            json.encode(payload.value)
+        end)
+        if not encodable then
+            raiseBridgeError("INVALID_ARGUMENT", "value must be JSON-serializable", {
+                cause = tostring(encodeError)
+            })
+        end
+        project:newUndoRecord()
+        object:setScriptData(key, payload.value)
+        result.exists = true
+        result.value = sanitizeForJson(object:getScriptData(key))
+        return result
+    elseif operation == "remove" then
+        local existed = object:hasScriptData(key)
+        project:newUndoRecord()
+        object:removeScriptData(key)
+        result.removed = existed
+        return result
+    end
+    raiseBridgeError("INVALID_ARGUMENT", "operation must be list, get, set, or remove")
 end
 
 function handlers.get_track_mixer(payload)
@@ -2673,7 +4332,7 @@ function getClientInfo()
         name = SCRIPT_NAME,
         author = "Pengjie Zhou",
         category = "SynthV Agent Bridge",
-        versionNumber = 1,
+        versionNumber = 3,
         minEditorVersion = MIN_EDITOR_VERSION
     }
 end
@@ -2704,6 +4363,7 @@ function main()
         return
     end
 
+    registerSelectionObservers()
     SV:print(string.format("%s v%s started. IPC directory: %s", SCRIPT_NAME, BRIDGE_VERSION, IPC_DIRECTORY))
     poll()
 end

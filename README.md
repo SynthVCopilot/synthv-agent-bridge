@@ -4,17 +4,20 @@ A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server 
 
 The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse or rewrite `.svp` files, open a network port, or call an AI API by itself.
 
-> Status: **v0.1.2 foundation**. The protocol, safety guards, editor lifecycle operations, and time-axis tools are implemented. Test on copies of important projects while the project is still pre-release.
+> Status: **v0.1.3 pre-release**. The protocol, safety guards, broad official scripting-API coverage, and editor lifecycle operations are implemented. Test on copies of important projects.
 
 ## What it can do
 
-- Read project metadata, the complete tempo/time-signature map, playback state, tracks, note groups, notes, current selection, computed phonemes/pitch, automation curves, and track mixer state.
-- Add, update, clone, or delete tracks; update or remove non-main Group references.
+- Read project metadata, the complete tempo/time-signature map, playback state, tracks, library groups, notes, complete selection state, computed phonemes/pitch, Smart Pitch objects, automation curves, editor viewports, and mixer state.
+- Create, clone, reuse, update, or delete library note groups and vocal/instrumental Group references.
 - Clone an existing track to inherit its singer/database, optionally clearing or transposing cloned notes.
 - Add notes and edit per-note language, sing/rap type, pitch-auto mode, rap accent, timing, pitch, lyrics, phonemes, detune, and attributes.
+- Add, edit, and delete point or curve Smart Pitch controls with stale-write protection.
+- Generate, activate, and delete Bridge-tracked AI Retakes.
 - Safely edit or delete notes using fresh note fingerprints.
 - Convert between seconds, quarter notes, and blicks, and edit tempo/time-signature marks.
-- Add, replace, or clear automation points such as pitch deviation, loudness, tension, breathiness, voicing, gender, and Vocal Mode curves.
+- Add, replace, sample, simplify, or clear automation curves such as pitch deviation, loudness, tension, breathiness, voicing, gender, and Vocal Mode.
+- Read and change selection and viewport state, use grid snapping and coordinate conversion, and exchange text through SynthV's host clipboard.
 - Control gain, pan, mute, solo, play, pause, stop, seek, and loop.
 - Put each successful write call into one SynthV undo record.
 
@@ -40,7 +43,7 @@ File IPC is deliberately used for the first version because it works within Synt
 
 ## Requirements
 
-- Synthesizer V Studio **2 Pro 2.1.1 or later**.
+- Synthesizer V Studio **2 Pro 2.1.2 or later**.
 - Node.js **20.10 or later**.
 - An MCP host that supports local stdio servers, such as Codex CLI or another compatible local client.
 
@@ -117,26 +120,52 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 |---|---:|---|
 | `bridge_status` | Read | Read the heartbeat without requiring a round trip. |
 | `ping` | Read | Test the complete Node → Lua → Node path. |
+| `get_host_info` | Read | SynthV host version, OS, language, project, and IPC information. |
+| `host_clipboard` | Control | Read or write text through SynthV's host clipboard API. |
+| `show_dialog` | Control | Show message, input, confirmation, or custom-form dialogs. |
+| `convert_pitch` | Read | Convert MIDI pitch and frequency and identify black keys. |
 | `get_project_info` | Read | Project, timing, playback, host, and current editor location. |
 | `get_time_axis` | Read | All tempo/time-signature marks and a safe-write fingerprint. |
-| `convert_time` | Read | Convert seconds, quarter notes, or blicks through the current tempo map. |
+| `convert_time` | Read | Convert seconds, quarter notes, or blicks through the current tempo map, with optional Blick-grid rounding. |
 | `set_time_axis` | Destructive | Add, replace, or remove tempo/time-signature marks. |
 | `list_tracks` | Read | Track summaries, group counts, note counts, and mixer state. |
+| `list_note_groups` | Read | Reusable library groups, UUIDs, fingerprints, and reference counts. |
+| `create_note_group` | Write | Create an optionally populated reusable library group. |
+| `clone_note_group` | Write | Deep-clone a track or library group into the library. |
+| `delete_note_group` | Destructive | Delete a library group and all references to it. |
+| `add_group_reference` | Write | Place a library group on a track. |
+| `clone_group_reference` | Write | Make a linked or deep-copied reference on another track. |
 | `get_track_notes` | Read | Groups, UUIDs, notes, attributes, offsets, and safe-write fingerprints. |
-| `get_selection` | Read | Current group, selected notes, and selected groups. |
-| `get_computed_group_data` | Read | Computed phoneme/rap attributes and optional pitch samples. |
+| `get_selection` | Read | Selected groups, notes, Smart Pitch controls, and requested automation points. |
+| `set_selection` | Control | Replace, add, remove, or clear editor selections. |
+| `get_computed_group_data` | Read | Computed phonemes/rap attributes and optional pitch samples. |
 | `add_track` | Write | Create a track and return its main Group locator. |
 | `update_track` | Write | Rename, recolor, or change Render Panel inclusion. |
 | `clone_track` | Write | Deep-clone a track, preserving its singer/database, with optional clear/transpose. |
 | `delete_track` | Destructive | Delete a fingerprint-verified non-final track. |
-| `update_group` | Write | Change Group name, mute, offsets, range, or voice-expression properties. |
-| `delete_group_reference` | Destructive | Remove a non-main Group reference while preserving its library Group. |
+| `update_group` | Write | Change vocal/instrumental reference state and supported vocal properties. |
+| `delete_group_reference` | Destructive | Remove a non-main vocal or instrumental reference. |
 | `add_notes` | Write | Add notes to a specific group. |
 | `edit_notes` | Write | Edit fingerprint-verified notes. |
 | `delete_notes` | Destructive | Delete fingerprint-verified notes. |
+| `get_note_retakes` | Read | Read take count and Bridge-tracked Take IDs. |
+| `generate_note_retake` | Write | Generate duration, pitch, or timbre variations. |
+| `activate_note_retake` | Write | Activate the default or a Bridge-tracked Take. |
+| `delete_note_retake` | Destructive | Delete a Bridge-tracked non-default Take. |
+| `get_pitch_controls` | Read | Read point and curve Smart Pitch objects and fingerprints. |
+| `add_pitch_controls` | Write | Add point or curve Smart Pitch objects. |
+| `edit_pitch_controls` | Write | Edit fingerprint-verified Smart Pitch objects. |
+| `delete_pitch_controls` | Destructive | Delete fingerprint-verified Smart Pitch objects. |
 | `get_automation` | Read | Read a parameter definition and every control point. |
+| `sample_automation` | Read | Sample native or linear curve values at requested positions. |
+| `simplify_automation` | Destructive | Remove insignificant points in a curve range. |
 | `set_automation_points` | Write | Add/update points, optionally clearing all or a range first. |
 | `clear_automation` | Destructive | Clear a complete curve or a selected range. |
+| `get_editor_view` | Read | Read editor time/value ranges and pixel scales. |
+| `set_editor_view` | Control | Move or scale the main-editor or arrangement viewport. |
+| `snap_position` | Read | Snap a position using current editor grid settings. |
+| `convert_editor_coordinates` | Read | Convert time/value and x/y editor coordinates. |
+| `script_data` | Read/Write | Manage namespaced Bridge JSON metadata on SynthV objects. |
 | `get_track_mixer` | Read | Read gain, pan, mute, and solo. |
 | `set_track_mixer` | Write | Change gain, pan, mute, and solo. |
 | `playback` | Control | Read status, play, pause, stop, seek, or loop. |
@@ -173,11 +202,11 @@ The server instructions tell an agent to follow this sequence:
 
 1. Read the project, time axis, track, group, automation, or current selection immediately before editing.
 2. Present or internally construct a small, reviewable change.
-3. Copy the latest applicable `groupUuid`, `trackFingerprint`, automation/time-axis `fingerprint`, and note fingerprints.
+3. Copy the latest applicable group/reference UUIDs and fingerprints, track fingerprint, automation/time-axis fingerprint, and note or Smart Pitch fingerprints.
 4. Call the smallest write tool that completes the intended change in one undo record.
 5. If SynthV reports any `STALE_*` error, read again rather than guessing.
 
-A note fingerprint includes the group UUID, note index, onset, duration, pitch, detune, lyrics, phonemes, language, musical type, pitch mode, rap accent, and note attributes. This prevents an agent from applying an old plan to a note that the user has already changed.
+A note fingerprint includes the group UUID, note index, onset, duration, pitch, detune, lyrics, phonemes, language, musical type, pitch mode, rap accent, retake count, and note attributes. This prevents an agent from applying an old plan to a note that the user has already changed.
 
 ## Example requests
 
@@ -251,7 +280,8 @@ CI runs TypeScript tests on Node 20 and 22, parses both production Lua files wit
 - Multi-call preview/commit transactions are planned but not implemented in v0.1.
 - There is no SynthV side-panel UI yet.
 - SynthV's public scripting API does not expose project save, audio rendering, or selecting an installed singer database by display name. Use editor UI automation for those operations; `clone_track` can inherit an already-selected singer.
-- Reference-audio analysis, pitch-control object editing, retake management, and semantic expression presets are not implemented yet.
+- The Retake API does not enumerate Take IDs or expose the active Take ID. The bridge therefore activates and deletes only the default Take or IDs it generated and stored itself.
+- Semantic expression presets are not implemented yet; the primitive Smart Pitch and automation tools are available.
 - The bridge has not yet been validated against every SynthV 2.x patch and every voice database.
 - ChatGPT does not connect directly to this local stdio server. Use Codex or another local MCP host; a future remote adapter would need explicit authentication and transport security.
 

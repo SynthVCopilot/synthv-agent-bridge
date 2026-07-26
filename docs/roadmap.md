@@ -1,6 +1,6 @@
 # Roadmap
 
-## v0.1–v0.1.2 — reliable control foundation
+## v0.1–v0.1.3 — reliable control foundation
 
 - Project, track, group, note, selection, mixer, automation, and playback reads.
 - Track creation/update/clone/delete and note add/edit/delete.
@@ -11,6 +11,18 @@
 - Request correlation, heartbeat, stale-file recovery, and single-writer locking.
 - Group UUID plus note, track, automation, and time-axis concurrency guards.
 - SynthV undo integration.
+
+## Current — official API coverage expansion
+
+- Reusable note-group library and linked/deep reference operations.
+- Vocal and instrumental Group-reference updates and removal.
+- Point/curve Smart Pitch CRUD with fingerprints.
+- Bridge-tracked AI Retake generation, activation, and deletion.
+- Automation sampling and simplification.
+- Full selection reads/writes for groups, notes, Smart Pitch, and automation.
+- Main-editor and arrangement viewport navigation, snapping, and coordinates.
+- Host information, clipboard, dialogs, pitch/frequency helpers, and namespaced
+  object metadata.
 
 ## v0.2 — preview and transaction layer
 

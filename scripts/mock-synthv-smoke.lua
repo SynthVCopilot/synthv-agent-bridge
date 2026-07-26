@@ -16,8 +16,104 @@ end
 
 local notePitchAutoWriteSupported = true
 
+-- SynthV may return distinct Lua proxy values for the same native object.
+-- Delegate every member while intentionally preserving distinct identity.
+local function unwrapProxy(target)
+    while type(target)=="table" and rawget(target,"__target") do
+        target=rawget(target,"__target")
+    end
+    return target
+end
+
+local function proxyObject(target)
+    target=unwrapProxy(target)
+    return setmetatable({__target=target}, {
+        __index=function(_,key)
+            local value=target[key]
+            if type(value)=="function" then
+                return function(_,...)
+                    return value(target,...)
+                end
+            end
+            return value
+        end
+    })
+end
+
+local function attachScriptData(object)
+    object.scriptData = object.scriptData or {}
+    function object:getScriptData(key) return self.scriptData[key] end
+    function object:getScriptDataKeys()
+        local keys={}
+        for key,_ in pairs(self.scriptData) do keys[#keys+1]=key end
+        table.sort(keys)
+        return keys
+    end
+    function object:hasScriptData(key) return self.scriptData[key]~=nil end
+    function object:setScriptData(key,value) self.scriptData[key]=value end
+    function object:removeScriptData(key) self.scriptData[key]=nil end
+    function object:clearScriptData() self.scriptData={} end
+    return object
+end
+
+local function makeRetakes()
+    local r=attachScriptData({takes={[0]=true},nextId=1,active=0})
+    function r:getNumTakes()
+        local count=0
+        for _,_ in pairs(self.takes) do count=count+1 end
+        return count
+    end
+    function r:generateTake(_,_,_)
+        local id=self.nextId
+        self.nextId=self.nextId+1
+        self.takes[id]=true
+        return id
+    end
+    function r:setActiveTake(id) assert(self.takes[id],"unknown retake"); self.active=id end
+    function r:deleteTake(id) assert(id~=0 and self.takes[id],"unknown retake"); self.takes[id]=nil end
+    function r:clone()
+        local copy=makeRetakes()
+        copy.takes={}
+        for id,value in pairs(self.takes) do copy.takes[id]=value end
+        copy.nextId=self.nextId
+        copy.active=self.active
+        for key,value in pairs(self.scriptData) do copy.scriptData[key]=value end
+        return copy
+    end
+    return r
+end
+
+local function makePitchControl(kind)
+    local c=attachScriptData({kind=kind,position=0,pitch=0,points={}})
+    function c:getPosition() return self.position end
+    function c:setPosition(v) self.position=v end
+    function c:getPitch() return self.pitch end
+    function c:setPitch(v) self.pitch=v end
+    if kind=="curve" then
+        function c:getPoints()
+            local points={}
+            for i,point in ipairs(self.points) do points[i]={point[1],point[2]} end
+            return points
+        end
+        function c:setPoints(points)
+            self.points={}
+            for i,point in ipairs(points) do self.points[i]={point[1],point[2]} end
+        end
+        function c:getValueAt(position) return self.pitch end
+    end
+    function c:getIndexInParent() return indexOf(self.parent.pitchControls,self) end
+    function c:clone()
+        local copy=makePitchControl(self.kind)
+        copy.position=self.position
+        copy.pitch=self.pitch
+        if self.kind=="curve" then copy:setPoints(self.points) end
+        return copy
+    end
+    return c
+end
+
 local function makeNote()
-    local n = {
+    local n = attachScriptData({
         onset = 0,
         duration = 705600000,
         pitch = 60,
@@ -28,8 +124,9 @@ local function makeNote()
         languageOverride = "",
         musicalType = "sing",
         pitchAutoMode = true,
-        rapAccent = ""
-    }
+        rapAccent = "",
+        retakes = makeRetakes()
+    })
     function n:getOnset() return self.onset end
     function n:setOnset(v) self.onset = v end
     function n:getDuration() return self.duration end
@@ -56,9 +153,7 @@ local function makeNote()
     end
     function n:getRapAccent() return self.rapAccent end
     function n:setRapAccent(v) self.rapAccent=v end
-    function n:getRetakes()
-        return {getNumTakes=function() return 1 end}
-    end
+    function n:getRetakes() return self.retakes end
     function n:getIndexInParent() return indexOf(self.parent.notes, self) end
     function n:clone()
         local copy = makeNote()
@@ -72,6 +167,7 @@ local function makeNote()
         copy.musicalType = self.musicalType
         copy.pitchAutoMode = self.pitchAutoMode
         copy.rapAccent = self.rapAccent
+        copy.retakes = self.retakes:clone()
         copy.attrs = {}
         for key, value in pairs(self.attrs) do copy.attrs[key] = value end
         return copy
@@ -80,7 +176,7 @@ local function makeNote()
 end
 
 local function makeAutomation(name)
-    local a = { name=name, points={} }
+    local a = attachScriptData({ name=name, points={} })
     local definitions = {
         pitchDelta={displayName="Pitch Deviation",typeName="pitchDelta",range={-1200,1200},defaultValue=0},
         loudness={displayName="Loudness",typeName="loudness",range={-48,12},defaultValue=0},
@@ -94,11 +190,39 @@ local function makeAutomation(name)
         table.sort(r,function(x,y)return x[1]<y[1] end)
         return r
     end
+    function a:getPoints(beginPos,endPos)
+        local all=self:getAllPoints()
+        local result={}
+        for _,point in ipairs(all) do
+            if point[1]>=beginPos and point[1]<=endPos then result[#result+1]=point end
+        end
+        return result
+    end
+    function a:get(b)
+        local all=self:getAllPoints()
+        if #all==0 then return self:getDefinition().defaultValue end
+        if b<=all[1][1] then return all[1][2] end
+        if b>=all[#all][1] then return all[#all][2] end
+        for i=1,#all-1 do
+            local left,right=all[i],all[i+1]
+            if b>=left[1] and b<=right[1] then
+                local ratio=(b-left[1])/(right[1]-left[1])
+                return left[2]+(right[2]-left[2])*ratio
+            end
+        end
+    end
+    function a:getLinear(b) return self:get(b) end
     function a:add(b,v) local fresh=self.points[b]==nil; self.points[b]=v; return fresh end
     function a:removeAll() self.points={} end
     function a:remove(beginPos,endPos)
         local changed=false
         for b,_ in pairs(self.points) do if b>=beginPos and b<=endPos then self.points[b]=nil; changed=true end end
+        return changed
+    end
+    function a:simplify(beginPos,endPos,_)
+        local all=self:getPoints(beginPos,endPos)
+        local changed=false
+        for i=2,#all-1 do self.points[all[i][1]]=nil; changed=true end
         return changed
     end
     function a:clone()
@@ -111,9 +235,11 @@ end
 
 local nextUuid=1
 local function makeGroup()
-    local g={ notes={}, params={}, uuid="00000000-0000-4000-8000-"..string.format("%012d",nextUuid), name="Main" }
+    local g=attachScriptData({ notes={}, pitchControls={}, params={}, uuid="00000000-0000-4000-8000-"..string.format("%012d",nextUuid), name="Main" })
     nextUuid=nextUuid+1
     function g:getUUID() return self.uuid end
+    function g:getIndexInParent() return self.parent and indexOf(self.parent.groups,self) or nil end
+    function g:getParent() return self.parent end
     function g:getName() return self.name end
     function g:setName(v) self.name=v end
     function g:getNumNotes() return #self.notes end
@@ -124,12 +250,21 @@ local function makeGroup()
         return indexOf(self.notes,n)
     end
     function g:removeNote(i) table.remove(self.notes,i) end
-    function g:getNumPitchControls() return 0 end
+    function g:getNumPitchControls() return #self.pitchControls end
+    function g:getPitchControl(i) return self.pitchControls[i] end
+    function g:addPitchControl(control)
+        control.parent=self
+        self.pitchControls[#self.pitchControls+1]=control
+        table.sort(self.pitchControls,function(x,y)return x.position<y.position end)
+        return indexOf(self.pitchControls,control)
+    end
+    function g:removePitchControl(i) table.remove(self.pitchControls,i) end
     function g:getParameter(name) self.params[name]=self.params[name] or makeAutomation(name); return self.params[name] end
     function g:clone()
         local copy=makeGroup()
         copy.name=self.name
         for _,note in ipairs(self.notes) do copy:addNote(note:clone()) end
+        for _,control in ipairs(self.pitchControls) do copy:addPitchControl(control:clone()) end
         for name,automation in pairs(self.params) do copy.params[name]=automation:clone() end
         return copy
     end
@@ -137,15 +272,16 @@ local function makeGroup()
 end
 
 local function makeReference(group, main)
-    local r={
+    local r=attachScriptData({
         group=group,
         main=main,
+        instrumental=false,
         timeOffset=0,
         pitchOffset=0,
         muted=false,
         voice={paramLoudness=0}
-    }
-    function r:isInstrumental() return false end
+    })
+    function r:isInstrumental() return self.instrumental end
     function r:isMain() return self.main end
     function r:isMuted() return self.muted end
     function r:setMuted(v) self.muted=v end
@@ -153,7 +289,8 @@ local function makeReference(group, main)
     function r:setTimeOffset(v) self.timeOffset=v end
     function r:getPitchOffset() return self.pitchOffset end
     function r:setPitchOffset(v) self.pitchOffset=v end
-    function r:getTarget() return self.group end
+    function r:getTarget() return proxyObject(self.group) end
+    function r:setTarget(v) assert(self.group==nil,"target already set"); self.group=unwrapProxy(v) end
     function r:getVoice() return self.voice end
     function r:setVoice(v) for k,x in pairs(v) do self.voice[k]=x end end
     function r:getOnset() if #self.group.notes==0 then return self.timeOffset end return self.group.notes[1]:getOnset()+self.timeOffset end
@@ -168,6 +305,7 @@ local function makeReference(group, main)
         copy.pitchOffset=self.pitchOffset
         copy.muted=self.muted
         copy.rangeDuration=self.rangeDuration
+        copy.instrumental=self.instrumental
         copy.voice={}
         for key,value in pairs(self.voice) do copy.voice[key]=value end
         return copy
@@ -176,7 +314,7 @@ local function makeReference(group, main)
 end
 
 local function makeMixer()
-    local m={gain=0,pan=0,muted=false,solo=false}
+    local m=attachScriptData({gain=0,pan=0,muted=false,solo=false})
     function m:getGainDecibel() return self.gain end
     function m:setGainDecibel(v) self.gain=v end
     function m:getPan() return self.pan end
@@ -192,7 +330,7 @@ local project
 local function makeTrack()
     local group=makeGroup()
     local ref=makeReference(group,true)
-    local t={name="Track",color="ff808080",refs={ref},mixer=makeMixer(),bounced=false}
+    local t=attachScriptData({name="Track",color="ff808080",refs={ref},mixer=makeMixer(),bounced=false})
     ref.parent=t
     function t:getName() return self.name end
     function t:setName(v) self.name=v end
@@ -239,7 +377,7 @@ local function makeTrack()
 end
 
 local function makeTimeAxis()
-    local axis={tempo={[0]=120},measures={[0]={numerator=4,denominator=4}}}
+    local axis=attachScriptData({tempo={[0]=120},measures={[0]={numerator=4,denominator=4}}})
     local function sortedKeys(values)
         local keys={}
         for key,_ in pairs(values) do keys[#keys+1]=key end
@@ -335,36 +473,126 @@ function playback:stop() self.status="stopped"; self.head=0 end
 function playback:seek(v) self.head=v end
 function playback:loop(a,_) self.head=a; self.status="looping" end
 
-project={tracks={},undo=0}
+project=attachScriptData({tracks={},groups={},undo=0})
 function project:getFileName() return "mock.svp" end
 function project:getDuration() local x=0 for _,t in ipairs(self.tracks) do if t:getDuration()>x then x=t:getDuration() end end return x end
 function project:getNumTracks() return #self.tracks end
 function project:getTrack(i) return self.tracks[i] end
 function project:addTrack(t) self.tracks[#self.tracks+1]=t; return #self.tracks end
 function project:removeTrack(i) table.remove(self.tracks,i) end
+function project:getNumNoteGroupsInLibrary() return #self.groups end
+function project:getNoteGroup(id)
+    if type(id)=="number" then return self.groups[id] end
+    for _,group in ipairs(self.groups) do if group.uuid==id then return group end end
+end
+function project:addNoteGroup(group,suggestedIndex)
+    local index=suggestedIndex or (#self.groups+1)
+    table.insert(self.groups,index,group)
+    group.parent=self
+    return index
+end
+function project:removeNoteGroup(index)
+    local target=self.groups[index]
+    for _,track in ipairs(self.tracks) do
+        for groupIndex=#track.refs,2,-1 do
+            if track.refs[groupIndex].group==target then table.remove(track.refs,groupIndex) end
+        end
+    end
+    table.remove(self.groups,index)
+end
 function project:getTimeAxis() return timeAxis end
 function project:newUndoRecord() self.undo=self.undo+1 end
 project:addTrack(makeTrack())
 
-local selection={selectedNotes={},selectedGroups={}}
+local function removeObject(values,target)
+    for index=#values,1,-1 do if values[index]==target then table.remove(values,index) end end
+end
+local function addUnique(values,target)
+    if not indexOf(values,target) then values[#values+1]=target end
+end
+
+local selection={selectedNotes={},selectedGroups={},selectedPitchControls={},selectedPoints={}}
 function selection:getSelectedNotes() return arrayCopy(self.selectedNotes) end
 function selection:getSelectedGroups() return arrayCopy(self.selectedGroups) end
+function selection:getSelectedPitchControls() return arrayCopy(self.selectedPitchControls) end
+function selection:getSelectedPoints(parameter) return arrayCopy(self.selectedPoints[parameter] or {}) end
+function selection:selectGroup(v) addUnique(self.selectedGroups,v); return true end
+function selection:unselectGroup(v) removeObject(self.selectedGroups,v); return true end
+function selection:selectNote(v) addUnique(self.selectedNotes,v); return true end
+function selection:unselectNote(v) removeObject(self.selectedNotes,v); return true end
+function selection:selectPitchControls(values) for _,v in ipairs(values) do addUnique(self.selectedPitchControls,v) end end
+function selection:unselectPitchControls(values) for _,v in ipairs(values) do removeObject(self.selectedPitchControls,v) end end
+function selection:selectPoints(parameter,values)
+    self.selectedPoints[parameter]=self.selectedPoints[parameter] or {}
+    for _,v in ipairs(values) do addUnique(self.selectedPoints[parameter],v) end
+end
+function selection:unselectPoints(parameter,values)
+    self.selectedPoints[parameter]=self.selectedPoints[parameter] or {}
+    for _,v in ipairs(values) do removeObject(self.selectedPoints[parameter],v) end
+end
+function selection:clearGroups() self.selectedGroups={}; return true end
+function selection:clearNotes() self.selectedNotes={}; return true end
+function selection:clearPitchControls() self.selectedPitchControls={}; return true end
+function selection:clearAll()
+    self.selectedGroups={}; self.selectedNotes={}; self.selectedPitchControls={}; self.selectedPoints={}
+    return true
+end
+function selection:hasUnfinishedEdits() return false end
+
+local function makeNavigation()
+    local n={left=0,right=2822400000,valueMin=0,valueMax=127,timeScale=0.000001,valueScale=4}
+    function n:getTimeViewRange() return {self.left,self.right} end
+    function n:getValueViewRange() return {self.valueMin,self.valueMax} end
+    function n:getTimePxPerUnit() return self.timeScale end
+    function n:getValuePxPerUnit() return self.valueScale end
+    function n:setTimeLeft(v) local width=self.right-self.left; self.left=v; self.right=v+width end
+    function n:setTimeRight(v) self.right=v end
+    function n:setTimeScale(v) self.timeScale=v end
+    function n:setValueCenter(v)
+        local half=(self.valueMax-self.valueMin)/2
+        self.valueMin=v-half; self.valueMax=v+half
+    end
+    function n:snap(v) return math.floor(v/352800000+0.5)*352800000 end
+    function n:t2x(v) return (v-self.left)*self.timeScale end
+    function n:x2t(v) return self.left+v/self.timeScale end
+    function n:v2y(v) return (self.valueMax-v)*self.valueScale end
+    function n:y2v(v) return self.valueMax-v/self.valueScale end
+    return n
+end
+
 local mainEditor={}
+local mainNavigation=makeNavigation()
 function mainEditor:getCurrentTrack() return project.tracks[1] end
-function mainEditor:getCurrentGroup() return project.tracks[1].refs[1] end
+function mainEditor:getCurrentGroup() return proxyObject(project.tracks[1].refs[1]) end
 function mainEditor:getSelection() return selection end
-local arrangementSelection={}
-function arrangementSelection:getSelectedGroups() return {} end
+function mainEditor:getNavigation() return mainNavigation end
+local arrangementSelection={selectedGroups={}}
+function arrangementSelection:getSelectedGroups() return arrayCopy(self.selectedGroups) end
+function arrangementSelection:selectGroup(v) addUnique(self.selectedGroups,v); return true end
+function arrangementSelection:unselectGroup(v) removeObject(self.selectedGroups,v); return true end
+function arrangementSelection:clearGroups() self.selectedGroups={}; return true end
+function arrangementSelection:clearAll() return self:clearGroups() end
+function arrangementSelection:hasUnfinishedEdits() return false end
 local arrangement={}
+local arrangementNavigation=makeNavigation()
 function arrangement:getSelection() return arrangementSelection end
+function arrangement:getNavigation() return arrangementNavigation end
 
 scheduled=nil
 SV={QUARTER=705600000}
+local clipboard=""
 function SV:getHostInfo() return {osType="Linux",hostName="Mock SynthV",hostVersion="2.2.0",hostVersionNumber=131584,languageCode="en-us"} end
 function SV:getProject() return project end
 function SV:getPlayback() return playback end
 function SV:getMainEditor() return mainEditor end
 function SV:getArrangement() return arrangement end
+function SV:getPhonemesForGroup(reference)
+    local result={}
+    for _,note in ipairs(reference.group.notes) do
+        result[#result+1]=note.phonemes~="" and note.phonemes or "l a"
+    end
+    return result
+end
 function SV:getComputedAttributesForGroup(reference)
     local result={}
     for _,note in ipairs(reference.group.notes) do
@@ -377,12 +605,35 @@ function SV:getComputedPitchForGroup(reference,start,interval,frames)
     for index=1,frames do result[index]=reference.group.notes[1] and reference.group.notes[1].pitch or 60 end
     return result
 end
-function SV:create(kind) if kind=="Note" then return makeNote() elseif kind=="Track" then return makeTrack() else error("unsupported create "..kind) end end
+function SV:create(kind)
+    if kind=="Note" then return makeNote()
+    elseif kind=="Track" then return makeTrack()
+    elseif kind=="NoteGroup" then return makeGroup()
+    elseif kind=="NoteGroupReference" then return makeReference(nil,false)
+    elseif kind=="PitchControlPoint" then return makePitchControl("point")
+    elseif kind=="PitchControlCurve" then return makePitchControl("curve")
+    else error("unsupported create "..kind) end
+end
 function SV:blick2Quarter(b) return b/self.QUARTER end
+function SV:blickRoundDiv(dividend,divisor) return math.floor(dividend/divisor+0.5) end
+function SV:blickRoundTo(b,interval) return self:blickRoundDiv(b,interval)*interval end
+-- Intentionally omit the documented pitch2freq method to reproduce the
+-- SynthV 2.2.1 Windows Lua host and exercise the bridge fallback.
+function SV:freq2Pitch(f) return 69+12*math.log(f/440,2) end
+function SV:blackKey(p)
+    local value=p%12
+    return value==1 or value==3 or value==6 or value==8 or value==10
+end
+function SV:getHostClipboard() return clipboard end
+function SV:setHostClipboard(value) clipboard=value end
 function SV:setTimeout(_,callback) scheduled=callback end
 function SV:finish() scheduled=nil end
 function SV:print(_) end
-function SV:showMessageBox(_,message) error(message) end
+function SV:showMessageBox(_,_) end
+function SV:showInputBox(_,_,defaultText) return defaultText end
+function SV:showOkCancelBox(_,_) return true end
+function SV:showYesNoCancelBox(_,_) return "yes" end
+function SV:showCustomDialog(form) return form end
 
 dofile(assert(os.getenv("BRIDGE_SCRIPT")))
 main()
@@ -421,11 +672,13 @@ local function callExpectError(action,payload,errorCode)
     return response
 end
 
-call("ping","{}")
+local pingResponse=call("ping","{}")
+assert(pingResponse:find('"bridgeVersion":"0.1.3"',1,true),"expected Bridge version 0.1.3")
 call("get_project_info","{}")
 local initialTimeAxis=call("get_time_axis","{}")
 assert(initialTimeAxis:find('"tempoMarkCount":1',1,true),"expected initial tempo map")
-call("convert_time",'{"quarters":2}')
+local roundedTime=call("convert_time",'{"blicks":1080000000,"roundInterval":705600000}')
+assert(roundedTime:find('"roundedBlicks":1411200000',1,true),"official blick rounding was not applied")
 local undoBeforeStaleTimeAxis=project.undo
 callExpectError("set_time_axis",'{"expectedFingerprint":"stale","tempoMarks":[{"position":0,"bpm":100}]}',"STALE_TIME_AXIS")
 assert(project.undo==undoBeforeStaleTimeAxis,"stale time-axis edit must not create an undo record")
@@ -471,6 +724,12 @@ local extraReference=makeReference(extraGroup,false)
 project.tracks[1]:addGroupReference(extraReference)
 callWrite("delete_group_reference",'{"trackIndex":1,"groupIndex":2,"groupUuid":"'..extraGroup.uuid..'"}')
 assert(project.tracks[1]:getNumGroups()==1,"delete_group_reference must remove the non-main reference")
+local instrumentalReference=makeReference(makeGroup(),false)
+instrumentalReference.instrumental=true
+project.tracks[1]:addGroupReference(instrumentalReference)
+callWrite("update_group",'{"trackIndex":1,"groupIndex":2,"muted":true,"timeOffset":352800000,"timeRange":{"onset":0,"duration":1411200000}}')
+assert(instrumentalReference.muted==true,"instrumental reference mute update failed")
+callWrite("delete_group_reference",'{"trackIndex":1,"groupIndex":2}')
 call("get_selection","{}")
 
 local added=callWrite("add_notes",'{"trackIndex":1,"groupIndex":1,"notes":[{"onset":0,"duration":705600000,"pitch":60,"lyrics":"la"},{"onset":705600000,"duration":705600000,"pitch":64,"lyrics":"你"}]}')
@@ -507,6 +766,64 @@ local paused=call("playback",'{"operation":"pause"}')
 assert(paused:find('"status":"stopped"',1,true),"pause must report SynthV's stopped status")
 assert(paused:find('"playheadSeconds":1.5',1,true),"pause must preserve a non-zero playhead")
 call("playback",'{"operation":"loop","timeSeconds":1,"endSeconds":2}')
+
+call("get_host_info","{}")
+call("host_clipboard",'{"operation":"write","text":"bridge clipboard"}')
+local clipboardRead=call("host_clipboard",'{"operation":"read"}')
+assert(clipboardRead:find("bridge clipboard",1,true),"host clipboard round trip failed")
+local convertedPitch=call("convert_pitch",'{"pitch":69}')
+assert(convertedPitch:find('"frequency":440',1,true),"pitch conversion fallback failed")
+call("show_dialog",'{"kind":"input","title":"Bridge","message":"Value","defaultText":"ok"}')
+
+local libraryCreated=callWrite("create_note_group",'{"name":"Reusable Chorus","notes":[{"onset":0,"duration":705600000,"pitch":67,"lyrics":"chorus"}]}')
+local libraryUuid=assert(libraryCreated:match('"groupUuid":"([^"]+)"'))
+call("list_note_groups","{}")
+callWrite("add_group_reference",'{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","targetGroupUuid":"'..libraryUuid..'","timeOffset":1411200000}')
+assert(project.tracks[1]:getNumGroups()==2,"library reference was not added")
+callWrite("clone_group_reference",'{"sourceTrackIndex":1,"sourceGroupIndex":2,"sourceGroupUuid":"'..libraryUuid..'","targetTrackIndex":2,"targetTrackFingerprint":"'..track2Fingerprint..'","linked":true}')
+assert(project.tracks[2]:getNumGroups()==2,"linked group reference was not cloned")
+local referencedLibrary=call("list_note_groups","{}")
+assert(referencedLibrary:find('"referenceCount":2',1,true),"library reference count must use UUID identity")
+local libraryClone=callWrite("clone_note_group",'{"groupUuid":"'..libraryUuid..'","name":"Reusable Chorus Copy"}')
+local clonedLibraryUuid=assert(libraryClone:match('"groupUuid":"([^"]+)"'))
+callWrite("delete_note_group",'{"groupUuid":"'..clonedLibraryUuid..'"}')
+
+local pitchAdded=callWrite("add_pitch_controls",'{"trackIndex":1,"groupIndex":1,"pitchControls":[{"kind":"point","position":352800000,"pitch":0.5},{"kind":"curve","position":705600000,"pitch":-0.25,"points":[{"offset":-176400000,"value":0},{"offset":176400000,"value":1}]}]}')
+local pointFingerprint=assert(pitchAdded:match('"fingerprint":"([^"]+)","kind":"point"'))
+local pitchEdited=callWrite("edit_pitch_controls",'{"trackIndex":1,"groupIndex":1,"edits":[{"pitchControlIndex":1,"fingerprint":"'..escape(pointFingerprint)..'","changes":{"pitch":0.75}}]}')
+local editedPointFingerprint=assert(pitchEdited:match('"fingerprint":"([^"]+)","kind":"point"'))
+callWrite("delete_pitch_controls",'{"trackIndex":1,"groupIndex":1,"pitchControls":[{"pitchControlIndex":1,"fingerprint":"'..escape(editedPointFingerprint)..'"}]}')
+assert(project.tracks[1].refs[1].group:getNumPitchControls()==1,"pitch-control CRUD failed")
+
+callWrite("set_automation_points",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","clearMode":"all","points":[{"position":0,"value":-3},{"position":705600000,"value":-1},{"position":1411200000,"value":0}]}')
+local sampled=call("sample_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","positions":[352800000],"interpolation":"linear"}')
+assert(sampled:find('"sampleCount":1',1,true),"automation sampling failed")
+callWrite("simplify_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","beginPosition":0,"endPosition":1411200000,"threshold":0.01}')
+
+local retakeGenerated=callWrite("generate_note_retake",'{"trackIndex":1,"groupIndex":1,"noteIndex":2,"fingerprint":"'..escape(fingerprints[2])..'","newDuration":false,"newPitch":true,"newTimbre":true,"activate":true}')
+local generatedTakeId=assert(retakeGenerated:match('"generatedTakeId":(%d+)'))
+local retakeFingerprint=assert(retakeGenerated:match('"noteFingerprint":"([^"]+)"'))
+call("get_note_retakes",'{"trackIndex":1,"groupIndex":1,"noteIndex":2}')
+callWrite("activate_note_retake",'{"trackIndex":1,"groupIndex":1,"noteIndex":2,"fingerprint":"'..escape(retakeFingerprint)..'","takeId":0}')
+callWrite("delete_note_retake",'{"trackIndex":1,"groupIndex":1,"noteIndex":2,"fingerprint":"'..escape(retakeFingerprint)..'","takeId":'..generatedTakeId..'}')
+
+call("get_pitch_controls",'{"trackIndex":1,"groupIndex":1}')
+call("set_selection",'{"scope":"pianoRoll","operation":"replace","kind":"notes","trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(newFingerprint)..'"}]}')
+call("set_selection",'{"scope":"arrangement","operation":"replace","kind":"groups","groups":[{"trackIndex":1,"groupIndex":2,"groupUuid":"'..libraryUuid..'"}]}')
+assert(#arrangementSelection.selectedGroups==1,"non-main group selection failed")
+callExpectError("set_selection",'{"scope":"arrangement","operation":"replace","kind":"groups","groups":[{"trackIndex":1,"groupIndex":1}]}',"INVALID_ARGUMENT")
+assert(#arrangementSelection.selectedGroups==1,"invalid selection must not clear the previous selection")
+call("get_selection",'{"automationParameters":["loudness"]}')
+call("get_editor_view",'{"view":"mainEditor"}')
+call("set_editor_view",'{"view":"mainEditor","timeLeft":100,"timeRight":1000,"valueCenter":64}')
+call("snap_position",'{"view":"mainEditor","position":400000000}')
+call("convert_editor_coordinates",'{"view":"mainEditor","time":352800000,"value":60}')
+callWrite("script_data",'{"operation":"set","objectType":"project","key":"synthv-agent-bridge.test","value":{"ok":true}}')
+call("script_data",'{"operation":"get","objectType":"project","key":"synthv-agent-bridge.test"}')
+callWrite("script_data",'{"operation":"remove","objectType":"project","key":"synthv-agent-bridge.test"}')
+
+callWrite("delete_note_group",'{"groupUuid":"'..libraryUuid..'"}')
+assert(project.tracks[1]:getNumGroups()==1 and project.tracks[2]:getNumGroups()==1,"deleting a library group must remove linked references")
 callWrite("delete_notes",'{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(newFingerprint)..'"}]}')
-assert(project.undo==15,"expected 15 undo records, got "..project.undo)
+assert(project.undo==33,"expected 33 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

@@ -23,6 +23,19 @@ Before a write operation, ask the agent to read the current state and describe t
 - Read the selected phrase and its loudness automation. Add a gentle 3 dB crescendo across the phrase without replacing points outside the selected range.
 - Reduce breathiness to -0.2 over the selected phrase, keeping the surrounding automation intact.
 - Set the selected notes to English and manual pitch mode without changing their lyrics or timing.
+- Read the current Smart Pitch controls, then add a short upward scoop before the first selected note using a curve control.
+- Sample the tension curve every eighth note and simplify the selected range without changing its audible shape beyond a 0.002 threshold.
+
+## Groups and Retakes
+
+- Create a reusable `Chorus` library group from these notes and place linked references at quarters 16 and 32.
+- Deep-copy the selected Group reference to track 2 so later note edits do not affect the source.
+- Generate a pitch-and-timbre Retake for the selected note, activate it, and return the generated Take ID.
+
+## Editor navigation
+
+- Select notes 4–8 in the current piano-roll Group and focus the editor on their time range.
+- Read the arrangement viewport and snap quarter 12.3 using the editor's current grid settings.
 
 ## Playback
 

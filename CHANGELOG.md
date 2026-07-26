@@ -2,6 +2,39 @@
 
 All notable changes will be documented in this file.
 
+## Unreleased
+
+## 0.1.3 - 2026-07-26
+
+### Added
+
+- Reusable note-group library creation, cloning, listing, deletion, and
+  linked/deep Group-reference placement.
+- Vocal and instrumental Group-reference fingerprints plus safe update/delete
+  support.
+- Full point/curve Smart Pitch CRUD with per-object fingerprints.
+- AI Retake reads plus generation, activation, and deletion for Bridge-tracked
+  Take IDs.
+- Automation curve sampling and official range simplification.
+- Expanded selection reads and writes for Groups, notes, Smart Pitch controls,
+  and automation points.
+- Main-editor and arrangement viewport reads/writes, snapping, and coordinate
+  conversion.
+- Host info, clipboard, dialogs, pitch/frequency conversion, and namespaced
+  SynthV object metadata.
+- Computed phoneme output alongside computed attributes and pitch samples.
+
+### Changed
+
+- Expanded the additive protocol-v1 action set from 24 to 50 Lua actions and
+  the MCP surface from 25 to 51 tools without changing the envelope.
+- Raised the minimum SynthV editor version from 2.1.1 to 2.1.2 for the official
+  Smart Pitch selection API.
+- Added SynthV 2.2.1 compatibility handling for Lua object proxies, unavailable
+  `pitch2freq`, and the host restriction against selecting main groups.
+- Extended the mock SynthV integration harness to cover the new official API
+  surface and one-undo-per-write invariant.
+
 ## 0.1.2 - 2026-07-26
 
 ### Fixed

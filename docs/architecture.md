@@ -35,15 +35,23 @@ The Node side serializes calls and owns the lock. It writes requests using a tem
 
 ## Safety model
 
-Every destructive note operation uses optimistic concurrency:
+Destructive note, Smart Pitch, Group reference, library Group, track,
+automation, and time-axis operations use optimistic concurrency:
 
 1. Read notes with `get_track_notes` or `get_selection`.
-2. Receive a `groupUuid` and a fingerprint for each note.
-3. Send those values back with `edit_notes` or `delete_notes`.
-4. The Lua bridge rechecks the current note before changing anything.
-5. If the note moved, changed, or was reordered, the entire operation is rejected as `STALE_NOTE`.
+2. Receive the applicable UUID and object fingerprint.
+3. Send those guards back with the write request.
+4. The Lua bridge rechecks every target and validates detached clones or
+   complete prepared inputs before changing anything.
+5. If any target changed, the complete request is rejected with the applicable
+   `STALE_*` error.
 
 All inputs are validated before an undo record is created. Each successful write tool creates one SynthV undo record, so the user can undo the operation in the editor.
+
+Selection, viewport, clipboard, dialog, and playback controls change host UI
+state rather than project model data and therefore do not create undo records.
+Bridge metadata is restricted to the `synthv-agent-bridge.` script-data
+namespace so other scripts' stored data is never enumerated or cleared.
 
 ## Trust boundary
 
