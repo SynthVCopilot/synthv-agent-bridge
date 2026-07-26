@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -26,13 +27,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes lua5.4
+      - name: Install Lua 5.4
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes -qq lua5.4
       - run: luac -p synthv/SynthVAgentBridge.lua
       - run: luac -p synthv/StopSynthVAgentBridge.lua
       - name: Run mock SynthV integration smoke test
+        id: lua-smoke
+        continue-on-error: true
         env:
           SYNTHV_AGENT_BRIDGE_DIR: ${{ github.workspace }}/.mock-ipc
           BRIDGE_SCRIPT: ${{ github.workspace }}/synthv/SynthVAgentBridge.lua
         run: |
           mkdir -p "$SYNTHV_AGENT_BRIDGE_DIR"
-          lua5.4 scripts/mock-synthv-smoke.lua
+          lua5.4 scripts/mock-synthv-smoke.lua > lua-smoke.log 2>&1
+      - name: Upload Lua smoke log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lua-smoke-log
+          path: lua-smoke.log
+          if-no-files-found: error
+      - name: Enforce Lua smoke result
+        if: always() && steps.lua-smoke.outcome == 'failure'
+        run: |
+          cat lua-smoke.log
+          exit 1
