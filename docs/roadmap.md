@@ -12,6 +12,15 @@
 - Group UUID plus note, track, automation, and time-axis concurrency guards.
 - SynthV undo integration.
 
+## v0.1.4 — native side-panel MVP
+
+- Persistent SynthV side-panel connection and current-selection summaries.
+- Network-free instruction queue with clipboard handoff to Codex.
+- One-write preview/apply/dismiss flow through the existing serialized Node
+  client.
+- Latest Bridge-write status and native Ctrl+Z guidance.
+- MCP tools for reading queued panel requests and publishing guarded previews.
+
 ## Current — official API coverage expansion
 
 - Reusable note-group library and linked/deep reference operations.
@@ -42,7 +51,7 @@
 
 ## Later
 
-- Side-panel UI for preview/apply/undo.
+- Expanded side-panel presets, history, and multi-write transactions.
 - Render-and-analyze feedback loops.
 - Optional remote transport with authentication.
 - Adapters for Remy and non-MCP clients.

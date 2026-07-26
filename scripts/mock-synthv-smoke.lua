@@ -765,7 +765,7 @@ local function callExpectError(action,payload,errorCode)
 end
 
 local pingResponse=call("ping","{}")
-assert(pingResponse:find('"bridgeVersion":"0.1.3"',1,true),"expected Bridge version 0.1.3")
+assert(pingResponse:find('"bridgeVersion":"0.1.4"',1,true),"expected Bridge version 0.1.4")
 local initialSessionToken=extractJsonString(pingResponse,"sessionToken")
 local reloadResponse=call("reload_bridge","{}")
 assert(reloadResponse:find('"reloading":true',1,true),"hot reload was not acknowledged")

@@ -4,7 +4,7 @@ A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server 
 
 The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse or rewrite `.svp` files, open a network port, or call an AI API by itself.
 
-> Status: **v0.1.3 pre-release**. The protocol, safety guards, broad official scripting-API coverage, and editor lifecycle operations are implemented. Test on copies of important projects.
+> Status: **v0.1.4 pre-release**. The protocol, safety guards, broad official scripting-API coverage, editor lifecycle operations, and first native side-panel workflow are implemented. Test on copies of important projects.
 
 ## What it can do
 
@@ -22,6 +22,9 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 - Read and change selection and viewport state, use grid snapping and coordinate conversion, and exchange text through SynthV's host clipboard.
 - Control gain, pan, mute, solo, play, pause, stop, seek, and loop.
 - Put each successful write call into one SynthV undo record.
+- Use a native SynthV side panel to inspect connection/current-selection context,
+  queue an instruction, review one guarded write, apply or dismiss it, and see
+  the latest Bridge operation.
 
 ## Architecture
 
@@ -74,8 +77,9 @@ The installer copies these files into a `SynthV Agent Bridge` subfolder of the d
 
 - `SynthVAgentBridge.lua`
 - `StopSynthVAgentBridge.lua`
+- `SynthVAgentSidebar.lua`
 
-Alternatively, set `SYNTHV_SCRIPTS_DIR` to the scripts directory before running `npm run install:synthv`. The installer creates a `SynthV Agent Bridge` subfolder. After copying the files, choose **Scripts → Rescan**.
+Alternatively, set `SYNTHV_SCRIPTS_DIR` to the scripts directory before running `npm run install:synthv`. The installer creates a `SynthV Agent Bridge` subfolder. After copying the files, choose **Scripts → Rescan**. SynthV then loads **SynthV Agent** as a custom side-panel section.
 
 If a hot-reload-capable Bridge session is already running, the installer asks
 it to load the copied Lua file and waits for a new session heartbeat. This uses
@@ -111,6 +115,27 @@ codex mcp list
 
 A complete TOML example is available at [examples/codex-config.toml](examples/codex-config.toml). Other local MCP hosts can use the same `node .../dist/src/cli.js` command when they support **STDIO** servers.
 
+### Native side-panel workflow
+
+The v0.1.4 panel deliberately keeps the Bridge network-free and does not call
+an AI API itself:
+
+1. Select notes or a Group in SynthV and enter an instruction in
+   **SynthV Agent**.
+2. Click **Copy & queue**. The panel stores the request in the local IPC
+   directory and copies a handoff prompt to the host clipboard.
+3. Paste the prompt into the connected Codex task.
+4. Codex reads fresh SynthV state and publishes one fingerprint-guarded write
+   back to the panel.
+5. Review the preview in SynthV, then click **Apply** or **Dismiss**.
+
+Apply commands are consumed by the Node coordinator and sent through the same
+serialized `FileIpcClient` used by MCP tools. The side panel never edits project
+objects directly. SynthV's public scripting API can create undo records but
+cannot invoke Undo. After a successful Bridge write, click the main editor and
+use **Ctrl+Z**, or choose **Edit > Undo** when focus is still in the side panel.
+See [docs/sidebar.md](docs/sidebar.md).
+
 ### 5. Verify the connection
 
 Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by `get_project_info`. A healthy status contains:
@@ -127,6 +152,8 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 | Tool | Access | Purpose |
 |---|---:|---|
 | `bridge_status` | Read | Read the heartbeat without requiring a round trip. |
+| `sidebar_get_request` | Read | Read the latest instruction and selection summary queued by the native side panel. |
+| `sidebar_publish_preview` | Control | Publish one complete guarded write for Apply/Dismiss confirmation in SynthV. |
 | `ping` | Read | Test the complete Node → Lua → Node path. |
 | `reload_bridge` | Control | Reload the installed Lua Bridge in the current script session. |
 | `get_host_info` | Read | SynthV host version, OS, language, project, and IPC information. |
@@ -281,17 +308,25 @@ npm run inspector
 Lua syntax can be checked with:
 
 ```bash
-luac5.4 -p synthv/SynthVAgentBridge.lua synthv/StopSynthVAgentBridge.lua
+luac5.4 -p synthv/SynthVAgentBridge.lua synthv/StopSynthVAgentBridge.lua synthv/SynthVAgentSidebar.lua
 ```
 
-CI runs TypeScript tests on Node 20 and 22, parses both production Lua files with Lua 5.4, and exercises the Lua bridge through a mock SynthV integration harness.
+CI runs TypeScript tests on Node 20 and 22, parses all three production Lua
+files with Lua 5.4, and exercises both the persistent Bridge and side panel
+through mock SynthV integration harnesses.
 
 ## Current limitations
 
 - One request may be in flight at a time.
 - A client-side timeout is ambiguous: SynthV may still finish the operation. The processing marker remains until the Lua host completes, and the agent should read the current project before deciding whether to retry a write.
 - Multi-call preview/commit transactions are planned but not implemented in v0.1.
-- There is no SynthV side-panel UI yet.
+- The v0.1.4 side panel confirms one Bridge write at a time; multi-tool
+  preview/commit transactions remain planned for v0.2.
+- The panel cannot initiate a Codex turn by itself. **Copy & queue** writes a
+  local request and puts a handoff prompt on the clipboard for the user to paste.
+- SynthV's public scripting API does not expose an Undo command. The panel shows
+  the latest write and directs the user to click the main editor before using
+  **Ctrl+Z**, with **Edit > Undo** as the focus-independent fallback.
 - SynthV's public scripting API does not expose project save, audio rendering, selecting an installed singer database by display name, or Voice Panel scale/mode settings. These remain out of scope; `clone_track` can inherit an already-selected singer.
 - `singers` and `spacing` are returned by SynthV 2.2.1 but are not documented in the public `getVoice` field list. The typed Unison surface is therefore experimental and refuses writes unless the host returns and retains the requested fields on a cloned reference.
 - The Retake API does not enumerate Take IDs or expose the active Take ID. The bridge therefore activates and deletes only the default Take or IDs it generated and stored itself.

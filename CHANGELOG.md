@@ -4,8 +4,22 @@ All notable changes will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- Keep both Bridge and MCP heartbeat indicators visible in the narrow native
+  side panel, and clarify that project Undo requires main-editor focus or
+  **Edit > Undo** when a side-panel text field has focus.
+
+## 0.1.4 - 2026-07-26
+
 ### Added
 
+- A native SynthV 2.1.2+ `SidePanelSection` with Bridge/MCP status,
+  current-selection summaries, an instruction queue, guarded change previews,
+  Apply/Dismiss controls, and latest-operation/undo guidance.
+- `sidebar_get_request` and `sidebar_publish_preview` MCP tools plus a
+  network-free TypeScript coordinator that executes confirmed previews through
+  the existing serialized file IPC client.
 - Typed Group voice reads/writes for documented base parameters and per-axis
   Vocal Mode settings, guarded by Group-reference fingerprints and clone-first
   host validation. Vocal Mode axes accept non-negative finite values rather

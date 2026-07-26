@@ -34,6 +34,7 @@ jobs:
           sudo apt-get install --yes -qq lua5.4
       - run: luac -p synthv/SynthVAgentBridge.lua
       - run: luac -p synthv/StopSynthVAgentBridge.lua
+      - run: luac -p synthv/SynthVAgentSidebar.lua
       - name: Run mock SynthV integration smoke test
         id: lua-smoke
         env:
@@ -42,15 +43,30 @@ jobs:
         run: |
           mkdir -p "$SYNTHV_AGENT_BRIDGE_DIR"
           lua5.4 scripts/mock-synthv-smoke.lua > lua-smoke.log 2>&1
+      - name: Run mock SynthV side-panel smoke test
+        id: lua-sidebar-smoke
+        env:
+          SYNTHV_AGENT_BRIDGE_DIR: ${{ github.workspace }}/.mock-sidebar-ipc
+          SIDEBAR_SCRIPT: ${{ github.workspace }}/synthv/SynthVAgentSidebar.lua
+        run: |
+          mkdir -p "$SYNTHV_AGENT_BRIDGE_DIR"
+          lua5.4 scripts/mock-synthv-sidebar-smoke.lua > lua-sidebar-smoke.log 2>&1
       - name: Upload Lua smoke log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: lua-smoke-log
-          path: lua-smoke.log
+          path: |
+            lua-smoke.log
+            lua-sidebar-smoke.log
           if-no-files-found: error
       - name: Enforce Lua smoke result
         if: always() && steps.lua-smoke.outcome == 'failure'
         run: |
           cat lua-smoke.log
+          exit 1
+      - name: Enforce Lua side-panel smoke result
+        if: always() && steps.lua-sidebar-smoke.outcome == 'failure'
+        run: |
+          cat lua-sidebar-smoke.log
           exit 1

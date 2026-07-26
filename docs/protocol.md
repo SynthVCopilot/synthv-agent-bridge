@@ -1,5 +1,10 @@
 # File IPC protocol v1
 
+The v0.1.4 side-panel handoff is not a new Bridge protocol version. It is a
+local, display-oriented sideband owned by the Node coordinator. Confirmed panel
+changes still enter SynthV through an ordinary protocol v1 request, so protocol
+v1 clients remain backward compatible. See [sidebar.md](sidebar.md).
+
 ## Request
 
 ```json

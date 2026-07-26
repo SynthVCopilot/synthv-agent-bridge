@@ -26,7 +26,14 @@ test("every protocol action is registered exactly once as an MCP tool", async ()
 
   assert.equal(new Set(registered).size, registered.length);
   assert.deepEqual(
-    registered.filter((name) => name !== "bridge_status").sort(),
+    registered
+      .filter(
+        (name) =>
+          name !== "bridge_status" &&
+          name !== "sidebar_get_request" &&
+          name !== "sidebar_publish_preview",
+      )
+      .sort(),
     [...BRIDGE_ACTIONS].sort(),
   );
 });

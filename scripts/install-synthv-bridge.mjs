@@ -112,7 +112,11 @@ if (!suppliedTarget) {
   const destinationDirectory = path.resolve(suppliedTarget, "SynthV Agent Bridge");
 
   await mkdir(destinationDirectory, { recursive: true });
-  for (const fileName of ["SynthVAgentBridge.lua", "StopSynthVAgentBridge.lua"]) {
+  for (const fileName of [
+    "SynthVAgentBridge.lua",
+    "StopSynthVAgentBridge.lua",
+    "SynthVAgentSidebar.lua",
+  ]) {
     await cp(
       path.join(sourceDirectory, fileName),
       path.join(destinationDirectory, fileName),
@@ -122,6 +126,9 @@ if (!suppliedTarget) {
     path.join(destinationDirectory, "SynthVAgentBridge.lua"),
   );
   console.log(`Installed SynthV Agent Bridge scripts to ${destinationDirectory}`);
+  console.log(
+    "Choose Scripts → Rescan in SynthV to load or refresh the SynthV Agent side panel.",
+  );
   if (reloadEnabled) {
     await requestHotReload();
   }

@@ -12,7 +12,7 @@ if debug and debug.getinfo then
 end
 
 local SCRIPT_NAME = "Start SynthV Agent Bridge"
-local BRIDGE_VERSION = "0.1.3"
+local BRIDGE_VERSION = "0.1.4"
 local PROTOCOL_VERSION = 1
 local MIN_EDITOR_VERSION = 131330 -- Synthesizer V Studio 2.1.2
 local POLL_INTERVAL_MS = 100
@@ -425,6 +425,7 @@ local STOP_FILE = PREFIX .. ".stop"
 local RELOAD_FILE = PREFIX .. ".reload"
 local INSTALL_FILE = PREFIX .. ".install.json"
 local SESSION_FILE = PREFIX .. ".session.json"
+local SIDEBAR_ACTIVITY_FILE = PREFIX .. ".sidebar.activity.txt"
 
 math.randomseed(os.time() + math.floor(os.clock() * 1000000))
 local SESSION_TOKEN = string.format("%d-%d-%06d", os.time(), math.floor(os.clock() * 1000000), math.random(0, 999999))
@@ -744,6 +745,20 @@ end
 
 local function isoTimestamp()
     return os.date("!%Y-%m-%dT%H:%M:%SZ")
+end
+
+local function writeSidebarActivity(action)
+    local content = table.concat({
+        "synthv-agent-bridge-sidebar-activity-v1",
+        "status=success",
+        "action=" .. action,
+        "updatedAtEpochMs=" .. tostring(os.time() * 1000),
+        "最近操作：已完成",
+        action,
+        "撤销：先点击 SynthV 主编辑区，再按 Ctrl+Z；也可使用“编辑 → 撤销”。",
+        ""
+    }, "\n")
+    writeFileAtomically(SIDEBAR_ACTIVITY_FILE, content)
 end
 
 local function normalizeError(errorValue)
@@ -5051,8 +5066,38 @@ local function validateRequest(request)
     if not handler then
         raiseBridgeError("UNKNOWN_ACTION", "Unsupported bridge action", { action = action })
     end
-    return requestId, handler, payload
+    return requestId, handler, payload, action
 end
+
+local PROJECT_WRITE_ACTIONS = {
+    set_time_axis = true,
+    create_note_group = true,
+    clone_note_group = true,
+    delete_note_group = true,
+    add_group_reference = true,
+    clone_group_reference = true,
+    add_track = true,
+    update_track = true,
+    clone_track = true,
+    delete_track = true,
+    update_group = true,
+    set_group_voice = true,
+    delete_group_reference = true,
+    add_notes = true,
+    edit_notes = true,
+    set_note_phoneme_properties = true,
+    delete_notes = true,
+    generate_note_retake = true,
+    activate_note_retake = true,
+    delete_note_retake = true,
+    add_pitch_controls = true,
+    edit_pitch_controls = true,
+    delete_pitch_controls = true,
+    simplify_automation = true,
+    set_automation_points = true,
+    clear_automation = true,
+    set_track_mixer = true
+}
 
 local function processRequestFile()
     if not fileExists(REQUEST_FILE) then
@@ -5071,6 +5116,8 @@ local function processRequestFile()
     end
 
     local requestId = "invalid-request"
+    local processedAction = nil
+    local processedPayload = nil
     local ok, resultOrError = xpcall(function()
         local raw, readError = readFile(PROCESSING_FILE)
         if raw == nil then
@@ -5083,12 +5130,21 @@ local function processRequestFile()
         if isObject(requestOrError) and type(requestOrError.requestId) == "string" then
             requestId = requestOrError.requestId
         end
-        local validatedRequestId, handler, payload = validateRequest(requestOrError)
+        local validatedRequestId, handler, payload, action = validateRequest(requestOrError)
         requestId = validatedRequestId
+        processedAction = action
+        processedPayload = payload
         return handler(payload)
     end, normalizeError)
 
     if ok then
+        if PROJECT_WRITE_ACTIONS[processedAction]
+            or (processedAction == "script_data"
+                and processedPayload
+                and (processedPayload.operation == "set" or processedPayload.operation == "remove"))
+        then
+            writeSidebarActivity(processedAction)
+        end
         writeResponse(requestId, true, resultOrError)
     else
         writeResponse(requestId, false, resultOrError)
@@ -5188,7 +5244,7 @@ function getClientInfo()
         name = SCRIPT_NAME,
         author = "Pengjie Zhou",
         category = "SynthV Agent Bridge",
-        versionNumber = 3,
+        versionNumber = 4,
         minEditorVersion = MIN_EDITOR_VERSION
     }
 end

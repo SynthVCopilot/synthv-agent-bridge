@@ -13,6 +13,10 @@ MCP client (Codex / compatible local stdio host)
                  │ Synthesizer V scripting API
                  ▼
        Current SynthV project and UI
+
+  SynthVAgentSidebar.lua (native panel)
+                 │ instruction/preview/command text sideband
+                 └──────── TypeScript sidebar coordinator
 ```
 
 The TypeScript process never parses or rewrites `.svp` files. All project mutations run inside Synthesizer V through its public scripting object model.
@@ -30,6 +34,19 @@ The channel contains a single in-flight transaction:
 - `synthv-agent-bridge.lock`
 - `synthv-agent-bridge.session.json`
 - `synthv-agent-bridge.stop`
+
+The optional v0.1.4 side panel uses a separate local sideband:
+
+- `synthv-agent-bridge.sidebar.instruction.txt`
+- `synthv-agent-bridge.sidebar.preview.json` (Node-private structured plan)
+- `synthv-agent-bridge.sidebar.preview.txt` (display-only panel text)
+- `synthv-agent-bridge.sidebar.command.txt`
+- `synthv-agent-bridge.sidebar.activity.txt`
+- `synthv-agent-bridge.sidebar.client-status.txt`
+
+The panel never writes the project. An Apply click creates a sideband command;
+the TypeScript coordinator claims it and submits the stored action through the
+same serialized `FileIpcClient` and v1 request channel as a normal MCP call.
 
 The Node side serializes calls and owns the lock. It writes requests using a temporary file plus rename. The Lua side claims a request by renaming it to the processing filename, executes it on SynthV's script thread, and publishes one correlated response.
 

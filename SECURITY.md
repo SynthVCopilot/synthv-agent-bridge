@@ -12,6 +12,9 @@ This project controls a local Synthesizer V Studio session and can modify the op
   optimistic-concurrency guards.
 - Script data is restricted to the `synthv-agent-bridge.` namespace.
 - Each write creates an undo record in SynthV.
+- The side panel exchanges instructions, human-readable previews, and one
+  structured pending write only through files in the configured local IPC
+  directory. It does not call an AI API or write project objects directly.
 
 ## Operational guidance
 
@@ -23,5 +26,8 @@ This project controls a local Synthesizer V Studio session and can modify the op
 - `host_clipboard` can read or replace local clipboard text, and `show_dialog`
   can display a modal SynthV dialog. Only grant these tools to a trusted MCP
   host.
+- Side-panel request and preview files may contain user instructions and
+  project locators. Keep the IPC directory private to the local user and do not
+  place it in a synchronized or shared folder.
 
 Report a suspected vulnerability privately to the repository owner rather than opening a public issue with exploit details.

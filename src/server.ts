@@ -10,6 +10,10 @@ import {
 } from "./config.js";
 import { toPublicError } from "./errors.js";
 import { FileIpcClient } from "./ipc/file-ipc-client.js";
+import {
+  SIDEBAR_PREVIEW_ACTIONS,
+  SidebarCoordinator,
+} from "./sidebar-coordinator.js";
 
 const indexSchema = z.number().int().min(1);
 const blickSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
@@ -305,6 +309,7 @@ async function runTool(operation: () => Promise<unknown>): Promise<CallToolResul
 
 export function createServer(config: BridgeConfig): McpServer {
   const client = new FileIpcClient(config);
+  const sidebar = new SidebarCoordinator(config, client);
   const server = new McpServer(
     {
       name: SERVER_NAME,
@@ -313,9 +318,11 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     {
       instructions:
-        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, voice, phoneme, library, automation, Smart Pitch state, or selection immediately before writing. When the user refers to the current or selected singer, group, or notes, inspect the returned selection context and enable the applicable selection guard. Explicitly located UUID/index/fingerprint operations may target unselected objects. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits.",
+        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, voice, phoneme, library, automation, Smart Pitch state, or selection immediately before writing. When the user refers to the current or selected singer, group, or notes, inspect the returned selection context and enable the applicable selection guard. Explicitly located UUID/index/fingerprint operations may target unselected objects. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits. When the user asks to handle a request from the SynthV sidebar, call sidebar_get_request, read the latest applicable SynthV state, and publish exactly one guarded write through sidebar_publish_preview instead of executing it directly. The user confirms or dismisses that preview inside SynthV.",
     },
   );
+  sidebar.start();
+  server.server.onclose = () => sidebar.stop();
 
   server.registerTool(
     "bridge_status",
@@ -330,6 +337,77 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async () => jsonToolResult(await client.getStatus()),
+  );
+
+  server.registerTool(
+    "sidebar_get_request",
+    {
+      title: "Get SynthV Sidebar Request",
+      description:
+        "Read the latest instruction and selection summary submitted from the native SynthV side panel. After reading current project state, publish one guarded write preview instead of applying the edit directly.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => runTool(async () => sidebar.getInstruction()),
+  );
+
+  server.registerTool(
+    "sidebar_publish_preview",
+    {
+      title: "Publish SynthV Sidebar Preview",
+      description:
+        "Publish one fully specified, fingerprint-guarded SynthV write for review in the native side panel. This does not edit the project; the user must click Apply in SynthV. Multi-tool transactions are not supported in v0.1.4.",
+      inputSchema: {
+        requestId: z
+          .string()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe("Request ID returned by sidebar_get_request."),
+        summary: z
+          .string()
+          .min(1)
+          .max(1000)
+          .describe("Concise human-readable description of the complete edit."),
+        details: z
+          .string()
+          .max(8000)
+          .optional()
+          .describe("Optional review details, safety constraints, and expected changes."),
+        action: z.enum(SIDEBAR_PREVIEW_ACTIONS),
+        payload: z
+          .record(z.string(), z.unknown())
+          .describe(
+            "Complete Bridge payload, including all current UUIDs and fingerprints required by the selected write action.",
+          ),
+        replace: z
+          .boolean()
+          .default(false)
+          .describe("Replace an existing pending preview when true."),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () =>
+        sidebar.publishPreview({
+          ...(input.requestId === undefined
+            ? {}
+            : { requestId: input.requestId }),
+          summary: input.summary,
+          ...(input.details === undefined ? {} : { details: input.details }),
+          action: input.action,
+          payload: input.payload,
+          replace: input.replace,
+        }),
+      ),
   );
 
   server.registerTool(
