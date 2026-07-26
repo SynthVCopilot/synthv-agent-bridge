@@ -2,6 +2,15 @@
 -- Persistent, file-based IPC executor for Synthesizer V Studio 2 Pro.
 -- SPDX-License-Identifier: Apache-2.0
 
+local RUNNING_SCRIPT_FILE = nil
+if debug and debug.getinfo then
+    local chunkInfo = debug.getinfo(1, "S")
+    local chunkSource = chunkInfo and chunkInfo.source or nil
+    if type(chunkSource) == "string" and chunkSource:sub(1, 1) == "@" then
+        RUNNING_SCRIPT_FILE = chunkSource:sub(2)
+    end
+end
+
 local SCRIPT_NAME = "Start SynthV Agent Bridge"
 local BRIDGE_VERSION = "0.1.3"
 local PROTOCOL_VERSION = 1
@@ -14,6 +23,17 @@ local json = {}
 local JSON_ARRAY_MT = {}
 local JSON_NULL = {}
 json.null = JSON_NULL
+
+local RUNTIME_STATE_KEY = "__SYNTHV_AGENT_BRIDGE_RUNTIME_STATE"
+local runtimeState = rawget(_G, RUNTIME_STATE_KEY)
+if type(runtimeState) ~= "table" then
+    runtimeState = {
+        selectionRevision = 0,
+        latestSelectionEvent = nil,
+        selectionObserversRegistered = false
+    }
+    rawset(_G, RUNTIME_STATE_KEY, runtimeState)
+end
 
 function json.array(values)
     return setmetatable(values or {}, JSON_ARRAY_MT)
@@ -402,6 +422,8 @@ local PROCESSING_FILE = PREFIX .. ".processing.json"
 local RESPONSE_FILE = PREFIX .. ".response.json"
 local STATUS_FILE = PREFIX .. ".status.json"
 local STOP_FILE = PREFIX .. ".stop"
+local RELOAD_FILE = PREFIX .. ".reload"
+local INSTALL_FILE = PREFIX .. ".install.json"
 local SESSION_FILE = PREFIX .. ".session.json"
 
 math.randomseed(os.time() + math.floor(os.clock() * 1000000))
@@ -1272,6 +1294,370 @@ local function serializeGroup(reference, groupIndex, offset, limit)
     return result
 end
 
+local GROUP_VOICE_PARAMETERS = {
+    loudness = { hostKey = "paramLoudness", minimum = -48, maximum = 12 },
+    tension = { hostKey = "paramTension", minimum = -1, maximum = 1 },
+    breathiness = { hostKey = "paramBreathiness", minimum = -1, maximum = 1 },
+    gender = { hostKey = "paramGender", minimum = -1, maximum = 1 },
+    toneShift = { hostKey = "paramToneShift", minimum = -1, maximum = 1 }
+}
+
+local function valueOrNull(value)
+    if value == nil then
+        return JSON_NULL
+    end
+    return value
+end
+
+local function serializeGroupVoice(reference, trackIndex, groupIndex)
+    if reference:isInstrumental() then
+        raiseBridgeError("INVALID_ARGUMENT", "Instrumental references do not expose vocal voice properties")
+    end
+    local group = reference:getTarget()
+    if not group then
+        raiseBridgeError("GROUP_NOT_FOUND", "A vocal group reference has no target", {
+            trackIndex = trackIndex,
+            groupIndex = groupIndex
+        })
+    end
+
+    local rawVoice = safeCall(function()
+        return reference:getVoice()
+    end, {})
+    if type(rawVoice) ~= "table" then
+        rawVoice = {}
+    end
+
+    local parameters = {}
+    for publicName, definition in pairs(GROUP_VOICE_PARAMETERS) do
+        parameters[publicName] = valueOrNull(rawVoice[definition.hostKey])
+    end
+
+    local rawVocalModes = rawVoice.vocalModeParams
+    local vocalModes = {}
+    if type(rawVocalModes) == "table" then
+        vocalModes = sanitizeForJson(rawVocalModes)
+    end
+
+    local singersPresent = type(rawVoice.singers) == "number"
+    local spacingPresent = type(rawVoice.spacing) == "number"
+    return {
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        groupUuid = group:getUUID(),
+        referenceFingerprint = makeReferenceFingerprint(reference),
+        parameters = parameters,
+        vocalModes = vocalModes,
+        experimentalUnison = {
+            documented = false,
+            singersFieldPresent = singersPresent,
+            spacingFieldPresent = spacingPresent,
+            singers = singersPresent and rawVoice.singers or JSON_NULL,
+            spacing = spacingPresent and rawVoice.spacing or JSON_NULL
+        },
+        rawVoice = sanitizeForJson(rawVoice)
+    }
+end
+
+local function numbersMatch(left, right)
+    return type(left) == "number"
+        and type(right) == "number"
+        and math.abs(left - right) <= 0.000001
+end
+
+local function jsonValuesMatch(expected, actual, path)
+    local expectedType = type(expected)
+    local actualType = type(actual)
+    if expectedType == "number" or actualType == "number" then
+        if numbersMatch(expected, actual) then
+            return true
+        end
+        return false, path, expected, actual
+    end
+    if expectedType ~= actualType then
+        return false, path, expected, actual
+    end
+    if expectedType ~= "table" then
+        if expected == actual then
+            return true
+        end
+        return false, path, expected, actual
+    end
+    for key, expectedChild in pairs(expected) do
+        local childPath = path .. "." .. tostring(key)
+        if actual[key] == nil then
+            return false, childPath, expectedChild, nil
+        end
+        local matches, mismatchPath, expectedValue, actualValue =
+            jsonValuesMatch(expectedChild, actual[key], childPath)
+        if not matches then
+            return false, mismatchPath, expectedValue, actualValue
+        end
+    end
+    for key, actualChild in pairs(actual) do
+        if expected[key] == nil then
+            return false, path .. "." .. tostring(key), nil, actualChild
+        end
+    end
+    return true
+end
+
+local function verifyVocalModeSnapshot(rawVoice, expectedModes, errorCode)
+    if expectedModes == nil then
+        return
+    end
+    local actualModes = type(rawVoice) == "table"
+        and sanitizeForJson(rawVoice.vocalModeParams)
+        or nil
+    local matches, field, expectedValue, actualValue =
+        jsonValuesMatch(expectedModes, actualModes, "vocalModes")
+    if not matches then
+        raiseBridgeError(
+            errorCode,
+            "SynthV changed an unrequested Vocal Mode value",
+            {
+                field = field,
+                expectedValue = valueOrNull(expectedValue),
+                actualValue = valueOrNull(actualValue)
+            }
+        )
+    end
+end
+
+local function verifyGroupVoiceChecks(rawVoice, checks, errorCode)
+    if type(rawVoice) ~= "table" then
+        raiseBridgeError(errorCode, "SynthV did not return voice properties after the update")
+    end
+    for index = 1, #checks do
+        local check = checks[index]
+        local actual
+        if check.kind == "parameter" or check.kind == "unison" then
+            actual = rawVoice[check.hostKey]
+        else
+            local vocalModes = rawVoice.vocalModeParams
+            local mode = type(vocalModes) == "table" and vocalModes[check.modeName] or nil
+            actual = type(mode) == "table" and mode[check.axis] or nil
+        end
+        if not numbersMatch(actual, check.expected) then
+            raiseBridgeError(
+                check.experimental and "UNSUPPORTED_HOST_CAPABILITY" or errorCode,
+                "SynthV did not retain a requested group voice value",
+                {
+                    field = check.path,
+                    requestedValue = check.expected,
+                    actualValue = valueOrNull(actual),
+                    experimental = check.experimental or false
+                }
+            )
+        end
+    end
+end
+
+local function prepareGroupVoiceUpdate(reference, payload)
+    local currentVoice = safeCall(function()
+        return reference:getVoice()
+    end, {})
+    if type(currentVoice) ~= "table" then
+        currentVoice = {}
+    end
+
+    local voiceUpdate = {}
+    local checks = {}
+    local expectedVocalModes = nil
+    local completeVocalModeUpdate = nil
+
+    if isProvided(payload.parameters) then
+        local parameters = requireObject(payload.parameters, "parameters")
+        for key, _value in pairs(parameters) do
+            if not GROUP_VOICE_PARAMETERS[key] then
+                raiseBridgeError("INVALID_ARGUMENT", "parameters contains an unsupported field", {
+                    field = key
+                })
+            end
+        end
+        for publicName, definition in pairs(GROUP_VOICE_PARAMETERS) do
+            if isProvided(parameters[publicName]) then
+                local value = requireFiniteNumber(
+                    parameters[publicName],
+                    "parameters." .. publicName,
+                    definition.minimum,
+                    definition.maximum
+                )
+                voiceUpdate[definition.hostKey] = value
+                checks[#checks + 1] = {
+                    kind = "parameter",
+                    hostKey = definition.hostKey,
+                    expected = value,
+                    path = "parameters." .. publicName
+                }
+            end
+        end
+    end
+
+    if isProvided(payload.vocalModes) then
+        local updates = requireArray(payload.vocalModes, "vocalModes", 1, 64)
+        local currentModes = currentVoice.vocalModeParams
+        if type(currentModes) ~= "table" then
+            raiseBridgeError(
+                "UNSUPPORTED_HOST_CAPABILITY",
+                "The current voice does not expose Vocal Mode properties"
+            )
+        end
+        local mergedModes = sanitizeForJson(currentModes)
+        local sparseModes = {}
+        local seenModes = {}
+        for index = 1, #updates do
+            local path = "vocalModes[" .. index .. "]"
+            local update = requireObject(updates[index], path)
+            for key, _value in pairs(update) do
+                if key ~= "name" and key ~= "pitch" and key ~= "timbre" and key ~= "pronunciation" then
+                    raiseBridgeError("INVALID_ARGUMENT", path .. " contains an unsupported field", {
+                        field = key
+                    })
+                end
+            end
+            local modeName = requireString(update.name, path .. ".name", false)
+            if seenModes[modeName] then
+                raiseBridgeError("INVALID_ARGUMENT", "The same Vocal Mode appears more than once", {
+                    name = modeName
+                })
+            end
+            seenModes[modeName] = true
+            local currentMode = currentModes[modeName]
+            if type(currentMode) ~= "table" then
+                raiseBridgeError("VOCAL_MODE_NOT_FOUND", "The current voice does not expose this Vocal Mode", {
+                    name = modeName
+                })
+            end
+            local mergedMode = sanitizeForJson(currentMode)
+            local sparseMode = {}
+            local changed = false
+            for _, axis in ipairs({ "pitch", "timbre", "pronunciation" }) do
+                if isProvided(update[axis]) then
+                    local value = requireFiniteNumber(update[axis], path .. "." .. axis, 0)
+                    sparseMode[axis] = value
+                    mergedMode[axis] = value
+                    checks[#checks + 1] = {
+                        kind = "vocalMode",
+                        modeName = modeName,
+                        axis = axis,
+                        expected = value,
+                        path = path .. "." .. axis
+                    }
+                    changed = true
+                end
+            end
+            if not changed then
+                raiseBridgeError("INVALID_ARGUMENT", path .. " must change at least one Vocal Mode axis")
+            end
+            sparseModes[modeName] = sparseMode
+            mergedModes[modeName] = mergedMode
+        end
+        voiceUpdate.vocalModeParams = sparseModes
+        expectedVocalModes = mergedModes
+        completeVocalModeUpdate = mergedModes
+    end
+
+    if isProvided(payload.experimentalUnison) then
+        local unison = requireObject(payload.experimentalUnison, "experimentalUnison")
+        for key, _value in pairs(unison) do
+            if key ~= "singers" and key ~= "spacing" then
+                raiseBridgeError("INVALID_ARGUMENT", "experimentalUnison contains an unsupported field", {
+                    field = key
+                })
+            end
+        end
+        if isProvided(unison.singers) then
+            if type(currentVoice.singers) ~= "number" then
+                raiseBridgeError(
+                    "UNSUPPORTED_HOST_CAPABILITY",
+                    "The current SynthV host does not return the experimental singers field"
+                )
+            end
+            local singers = requireInteger(unison.singers, "experimentalUnison.singers", 1, 128)
+            voiceUpdate.singers = singers
+            checks[#checks + 1] = {
+                kind = "unison",
+                hostKey = "singers",
+                expected = singers,
+                path = "experimentalUnison.singers",
+                experimental = true
+            }
+        end
+        if isProvided(unison.spacing) then
+            if type(currentVoice.spacing) ~= "number" then
+                raiseBridgeError(
+                    "UNSUPPORTED_HOST_CAPABILITY",
+                    "The current SynthV host does not return the experimental spacing field"
+                )
+            end
+            local spacing = requireFiniteNumber(unison.spacing, "experimentalUnison.spacing", 0, 1)
+            voiceUpdate.spacing = spacing
+            checks[#checks + 1] = {
+                kind = "unison",
+                hostKey = "spacing",
+                expected = spacing,
+                path = "experimentalUnison.spacing",
+                experimental = true
+            }
+        end
+    end
+
+    if next(voiceUpdate) == nil then
+        raiseBridgeError("INVALID_ARGUMENT", "At least one group voice field must be supplied")
+    end
+
+    local function validateCandidate(candidateUpdate)
+        local candidate = reference:clone()
+        local valid, validationError = pcall(function()
+            candidate:setVoice(candidateUpdate)
+        end)
+        if not valid then
+            return false, setmetatable({
+                code = "INVALID_ARGUMENT",
+                message = "SynthV rejected the requested group voice changes",
+                details = {
+                    cause = tostring(validationError)
+                }
+            }, BRIDGE_ERROR_MT)
+        end
+        local candidateVoice = safeCall(function()
+            return candidate:getVoice()
+        end, nil)
+        local verified, verificationError = pcall(function()
+            verifyGroupVoiceChecks(candidateVoice, checks, "HOST_POSTCONDITION_FAILED")
+            verifyVocalModeSnapshot(
+                candidateVoice,
+                expectedVocalModes,
+                "HOST_POSTCONDITION_FAILED"
+            )
+        end)
+        if not verified then
+            return false, verificationError
+        end
+        return true
+    end
+
+    local valid, validationError = validateCandidate(voiceUpdate)
+    if not valid and completeVocalModeUpdate ~= nil then
+        local completeUpdate = {}
+        for key, value in pairs(voiceUpdate) do
+            completeUpdate[key] = value
+        end
+        completeUpdate.vocalModeParams = completeVocalModeUpdate
+        local completeValid, completeError = validateCandidate(completeUpdate)
+        if completeValid then
+            return completeUpdate, checks, expectedVocalModes
+        end
+        validationError = completeError or validationError
+    end
+    if not valid then
+        error(validationError, 0)
+    end
+
+    return voiceUpdate, checks, expectedVocalModes
+end
+
 local function serializeAutomation(group, parameterName)
     local ok, automationOrError = pcall(function()
         return group:getParameter(parameterName)
@@ -1481,6 +1867,101 @@ local function locateReference(reference)
         end
     end
     return nil
+end
+
+local function locatorsMatch(left, right)
+    if not left or not right then
+        return false
+    end
+    return left.trackIndex == right.trackIndex
+        and left.groupIndex == right.groupIndex
+        and left.groupUuid == right.groupUuid
+end
+
+local function getTargetSelectionContext(reference, group)
+    local target = locateReference(reference)
+    local mainEditor = SV:getMainEditor()
+    local currentReference = safeCall(function()
+        return mainEditor:getCurrentGroup()
+    end, nil)
+    local current = locateReference(currentReference)
+    local pianoRollSelected = false
+    local arrangementSelected = false
+    local selectedNoteIndices = {}
+
+    local pianoRollSelection = safeCall(function()
+        return mainEditor:getSelection()
+    end, nil)
+    if pianoRollSelection then
+        local selectedGroups = safeCall(function()
+            return pianoRollSelection:getSelectedGroups()
+        end, {})
+        for index = 1, #selectedGroups do
+            if locatorsMatch(target, locateReference(selectedGroups[index])) then
+                pianoRollSelected = true
+                break
+            end
+        end
+        if group and locatorsMatch(target, current) then
+            local selectedNotes = safeCall(function()
+                return pianoRollSelection:getSelectedNotes()
+            end, {})
+            for index = 1, #selectedNotes do
+                local noteIndex = safeCall(function()
+                    return selectedNotes[index]:getIndexInParent()
+                end, nil)
+                if type(noteIndex) == "number" then
+                    selectedNoteIndices[noteIndex] = true
+                end
+            end
+        end
+    end
+
+    local arrangementSelection = safeCall(function()
+        return SV:getArrangement():getSelection()
+    end, nil)
+    if arrangementSelection then
+        local selectedGroups = safeCall(function()
+            return arrangementSelection:getSelectedGroups()
+        end, {})
+        for index = 1, #selectedGroups do
+            if locatorsMatch(target, locateReference(selectedGroups[index])) then
+                arrangementSelected = true
+                break
+            end
+        end
+    end
+
+    local selectedNoteCount = 0
+    for _noteIndex, _selected in pairs(selectedNoteIndices) do
+        selectedNoteCount = selectedNoteCount + 1
+    end
+    local currentEditorGroup = locatorsMatch(target, current)
+    return {
+        currentEditorGroup = currentEditorGroup,
+        pianoRollGroupSelected = pianoRollSelected,
+        arrangementGroupSelected = arrangementSelected,
+        targetGroupSelected =
+            currentEditorGroup or pianoRollSelected or arrangementSelected,
+        selectedNoteCount = selectedNoteCount
+    }, selectedNoteIndices
+end
+
+local function validateCurrentEditorGroupGuard(payload, reference, group)
+    local requireCurrentEditorGroup =
+        optionalBoolean(payload.requireCurrentEditorGroup, "requireCurrentEditorGroup")
+    local context, selectedNoteIndices = getTargetSelectionContext(reference, group)
+    if requireCurrentEditorGroup == true and not context.currentEditorGroup then
+        raiseBridgeError(
+            "SELECTION_MISMATCH",
+            "The target group is not the current piano-roll group",
+            {
+                target = locateReference(reference),
+                selectionContext = context
+            }
+        )
+    end
+    return context, selectedNoteIndices
 end
 
 local function validateFingerprint(group, noteIndex, expectedFingerprint)
@@ -1694,6 +2175,98 @@ local function prepareNoteChanges(note, changes, path)
     end
 
     return prepared
+end
+
+local PHONEME_ATTRIBUTE_KEYS = {
+    leftOffset = true,
+    position = true,
+    activity = true,
+    strength = true
+}
+
+local function preparePhonemeAttributes(value, path)
+    local input = requireArray(value, path, 0, 256)
+    local result = json.array()
+    for index = 1, #input do
+        local attributePath = path .. "[" .. index .. "]"
+        local attribute = requireObject(input[index], attributePath)
+        local prepared = {}
+        for key, rawValue in pairs(attribute) do
+            if not PHONEME_ATTRIBUTE_KEYS[key] then
+                raiseBridgeError("INVALID_ARGUMENT", attributePath .. " contains an unsupported field", {
+                    field = key
+                })
+            end
+            prepared[key] = requireFiniteNumber(rawValue, attributePath .. "." .. key)
+        end
+        if next(prepared) == nil then
+            raiseBridgeError("INVALID_ARGUMENT", attributePath .. " must change at least one field")
+        end
+        result[#result + 1] = prepared
+    end
+    return result
+end
+
+local function preparePhonemePropertyChanges(note, changes, path)
+    changes = requireObject(changes, path)
+    local allowedKeys = {
+        phonemeSequence = true,
+        languageOverride = true,
+        phonesetOverride = true,
+        evenSyllableDuration = true,
+        phonemeAttributes = true
+    }
+    for key, _value in pairs(changes) do
+        if not allowedKeys[key] then
+            raiseBridgeError("INVALID_ARGUMENT", path .. " contains an unsupported field", {
+                field = key
+            })
+        end
+    end
+
+    local mapped = {}
+    if isProvided(changes.phonemeSequence) then
+        local phonemeSequence = requireString(changes.phonemeSequence, path .. ".phonemeSequence", true)
+        if #phonemeSequence > 4000 then
+            raiseBridgeError("INVALID_ARGUMENT", path .. ".phonemeSequence must be at most 4000 bytes")
+        end
+        mapped.phonemes = phonemeSequence
+    end
+    if isProvided(changes.languageOverride) then
+        mapped.languageOverride = changes.languageOverride
+    end
+
+    local attributes = {}
+    if isProvided(changes.phonesetOverride) then
+        local phonesetOverride = requireString(
+            changes.phonesetOverride,
+            path .. ".phonesetOverride",
+            true
+        )
+        if #phonesetOverride > 200 then
+            raiseBridgeError("INVALID_ARGUMENT", path .. ".phonesetOverride must be at most 200 bytes")
+        end
+        attributes.phonesetOverride = phonesetOverride
+    end
+    if isProvided(changes.evenSyllableDuration) then
+        attributes.evenSyllableDuration = requireBoolean(
+            changes.evenSyllableDuration,
+            path .. ".evenSyllableDuration"
+        )
+    end
+    if isProvided(changes.phonemeAttributes) then
+        attributes.phonemes = preparePhonemeAttributes(
+            changes.phonemeAttributes,
+            path .. ".phonemeAttributes"
+        )
+    end
+    if next(attributes) ~= nil then
+        mapped.attributes = attributes
+    end
+    if next(mapped) == nil then
+        raiseBridgeError("INVALID_ARGUMENT", path .. " must change at least one phoneme property")
+    end
+    return prepareNoteChanges(note, mapped, path)
 end
 
 local function createNoteFromInput(input, path)
@@ -1944,38 +2517,40 @@ local function serializeRetakes(group, note, noteIndex, retakes)
 end
 
 local SCRIPT_DATA_PREFIX = "synthv-agent-bridge."
-local selectionRevision = 0
-local latestSelectionEvent = JSON_NULL
 
 local function registerSelectionObservers()
+    if runtimeState.selectionObserversRegistered then
+        return
+    end
     local function attach(selection, source)
         if not selection then return end
         safeCall(function()
             selection:registerSelectionCallback(function(selectionType, isSelected)
-                selectionRevision = selectionRevision + 1
-                latestSelectionEvent = {
+                runtimeState.selectionRevision = runtimeState.selectionRevision + 1
+                runtimeState.latestSelectionEvent = {
                     source = source,
                     event = "selection",
                     selectionType = selectionType,
                     selected = isSelected,
-                    revision = selectionRevision
+                    revision = runtimeState.selectionRevision
                 }
             end)
         end)
         safeCall(function()
             selection:registerClearCallback(function(selectionType)
-                selectionRevision = selectionRevision + 1
-                latestSelectionEvent = {
+                runtimeState.selectionRevision = runtimeState.selectionRevision + 1
+                runtimeState.latestSelectionEvent = {
                     source = source,
                     event = "clear",
                     selectionType = selectionType,
-                    revision = selectionRevision
+                    revision = runtimeState.selectionRevision
                 }
             end)
         end)
     end
     attach(SV:getMainEditor():getSelection(), "pianoRoll")
     attach(SV:getArrangement():getSelection(), "arrangement")
+    runtimeState.selectionObserversRegistered = true
 end
 
 local function resolveScriptDataObject(payload)
@@ -2074,6 +2649,55 @@ local function resolveScriptDataObject(payload)
 end
 
 local handlers = {}
+local reloadRequested = nil
+
+local function resolveReloadScriptFile()
+    local install = readJson(INSTALL_FILE)
+    if isObject(install) and type(install.scriptFile) == "string" then
+        local scriptFile = install.scriptFile
+        if scriptFile:match("[/\\]SynthVAgentBridge%.lua$") and fileExists(scriptFile) then
+            return scriptFile
+        end
+    end
+    if type(RUNNING_SCRIPT_FILE) == "string"
+        and RUNNING_SCRIPT_FILE ~= ""
+        and RUNNING_SCRIPT_FILE:match("[/\\]SynthVAgentBridge%.lua$")
+        and fileExists(RUNNING_SCRIPT_FILE)
+    then
+        return RUNNING_SCRIPT_FILE
+    end
+    return nil
+end
+
+local function prepareHotReload()
+    if reloadRequested ~= nil then
+        return reloadRequested
+    end
+    local scriptFile = resolveReloadScriptFile()
+    if scriptFile == nil then
+        raiseBridgeError(
+            "UNSUPPORTED_HOST_CAPABILITY",
+            "No verified installed Bridge script path is available; run the installer again"
+        )
+    end
+    if type(loadfile) ~= "function" then
+        raiseBridgeError(
+            "UNSUPPORTED_HOST_CAPABILITY",
+            "The SynthV Lua host does not expose loadfile()"
+        )
+    end
+    local loader, loadError = loadfile(scriptFile)
+    if not loader then
+        raiseBridgeError("RELOAD_FAILED", "The installed Bridge script could not be compiled", {
+            cause = tostring(loadError)
+        })
+    end
+    reloadRequested = {
+        loader = loader,
+        scriptFile = scriptFile
+    }
+    return reloadRequested
+end
 
 function handlers.ping(_payload)
     return {
@@ -2082,6 +2706,22 @@ function handlers.ping(_payload)
         sessionToken = SESSION_TOKEN,
         projectFile = currentProjectFile(),
         timestamp = isoTimestamp()
+    }
+end
+
+function handlers.reload_bridge(payload)
+    payload = requireObject(payload, "payload")
+    for key, _value in pairs(payload) do
+        raiseBridgeError("INVALID_ARGUMENT", "reload_bridge does not accept payload fields", {
+            field = key
+        })
+    end
+    local request = prepareHotReload()
+    return {
+        reloading = true,
+        bridgeVersion = BRIDGE_VERSION,
+        sessionToken = SESSION_TOKEN,
+        scriptFile = request.scriptFile
     }
 end
 
@@ -2776,6 +3416,73 @@ function handlers.get_track_notes(payload)
     }
 end
 
+function handlers.get_group_voice(payload)
+    payload = requireObject(payload, "payload")
+    local _project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
+    local result = serializeGroupVoice(reference, trackIndex, groupIndex)
+    result.selectionContext = getTargetSelectionContext(reference, group)
+    return result
+end
+
+function handlers.get_note_phoneme_data(payload)
+    payload = requireObject(payload, "payload")
+    local _project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
+    local offset = optionalInteger(payload.offset, "offset", 0, nil, 0)
+    local limit = optionalInteger(payload.limit, "limit", 1, 1000, 1000)
+    local computedPhonemes = SV:getPhonemesForGroup(reference)
+    local computedAttributes = SV:getComputedAttributesForGroup(reference)
+    local selectionContext, selectedNoteIndices =
+        getTargetSelectionContext(reference, group)
+    local noteCount = group:getNumNotes()
+    local startIndex = math.min(noteCount + 1, offset + 1)
+    local endIndex = math.min(noteCount, offset + limit)
+    local notes = json.array()
+
+    for noteIndex = startIndex, endIndex do
+        local note = group:getNote(noteIndex)
+        local rawAttributes = note:getAttributes()
+        if type(rawAttributes) ~= "table" then
+            rawAttributes = {}
+        end
+        local phonemeAttributes = json.array()
+        if type(rawAttributes.phonemes) == "table" then
+            for index = 1, #rawAttributes.phonemes do
+                phonemeAttributes[index] = sanitizeForJson(rawAttributes.phonemes[index])
+            end
+        end
+        notes[#notes + 1] = {
+            noteIndex = noteIndex,
+            selected = selectedNoteIndices[noteIndex] == true,
+            fingerprint = makeNoteFingerprint(group:getUUID(), noteIndex, note),
+            lyrics = note:getLyrics(),
+            phonemeSequence = note:getPhonemes(),
+            languageOverride = safeCall(function()
+                return note:getLanguageOverride()
+            end, ""),
+            phonesetOverride = valueOrNull(rawAttributes.phonesetOverride),
+            evenSyllableDuration = valueOrNull(rawAttributes.evenSyllableDuration),
+            phonemeAttributes = phonemeAttributes,
+            attributes = sanitizeForJson(rawAttributes),
+            computedPhonemes = valueOrNull(computedPhonemes[noteIndex]),
+            computedAttributes = valueOrNull(sanitizeForJson(computedAttributes[noteIndex]))
+        }
+    end
+
+    return {
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        groupUuid = group:getUUID(),
+        selectionContext = selectionContext,
+        noteCount = noteCount,
+        returnedNoteOffset = offset,
+        returnedNoteCount = #notes,
+        hasMore = endIndex < noteCount,
+        phonemesPending = noteCount > 0 and #computedPhonemes == 0,
+        attributesPending = noteCount > 0 and #computedAttributes == 0,
+        notes = notes
+    }
+end
+
 function handlers.get_selection(payload)
     payload = requireObject(payload or {}, "payload")
     local mainEditor = SV:getMainEditor()
@@ -2854,8 +3561,8 @@ function handlers.get_selection(payload)
 
     return {
         current = locateReference(reference),
-        selectionRevision = selectionRevision,
-        latestSelectionEvent = latestSelectionEvent,
+        selectionRevision = runtimeState.selectionRevision,
+        latestSelectionEvent = valueOrNull(runtimeState.latestSelectionEvent),
         pianoRollHasUnfinishedEdits = safeCall(function()
             return selection:hasUnfinishedEdits()
         end, false),
@@ -3387,6 +4094,42 @@ function handlers.update_group(payload)
     }
 end
 
+function handlers.set_group_voice(payload)
+    payload = requireObject(payload, "payload")
+    local project, _track, trackIndex, reference, _group, groupIndex = resolveGroup(payload)
+    local expectedFingerprint = requireString(
+        payload.referenceFingerprint,
+        "referenceFingerprint",
+        false
+    )
+    validateReferenceFingerprint(reference, expectedFingerprint, trackIndex, groupIndex)
+    validateCurrentEditorGroupGuard(payload, reference, reference:getTarget())
+    local voiceUpdate, checks, expectedVocalModes =
+        prepareGroupVoiceUpdate(reference, payload)
+
+    project:newUndoRecord()
+    local applied, applyError = pcall(function()
+        reference:setVoice(voiceUpdate)
+    end)
+    if not applied then
+        raiseBridgeError("HOST_WRITE_FAILED", "SynthV rejected a prevalidated group voice update", {
+            cause = tostring(applyError)
+        })
+    end
+    local updatedVoice = safeCall(function()
+        return reference:getVoice()
+    end, nil)
+    verifyGroupVoiceChecks(updatedVoice, checks, "HOST_POSTCONDITION_FAILED")
+    verifyVocalModeSnapshot(
+        updatedVoice,
+        expectedVocalModes,
+        "HOST_POSTCONDITION_FAILED"
+    )
+    local result = serializeGroupVoice(reference, trackIndex, groupIndex)
+    result.selectionContext = getTargetSelectionContext(reference, reference:getTarget())
+    return result
+end
+
 function handlers.delete_group_reference(payload)
     payload = requireObject(payload, "payload")
     local project, track, trackIndex, reference, _group, groupIndex = resolveReference(payload)
@@ -3458,6 +4201,74 @@ function handlers.edit_notes(payload)
         prepared[#prepared + 1] = {
             note = note,
             changes = prepareNoteChanges(note, edit.changes, changesPath),
+            path = changesPath
+        }
+    end
+
+    project:newUndoRecord()
+    for index = 1, #prepared do
+        applyPreparedNoteChanges(prepared[index].note, prepared[index].changes, prepared[index].path)
+    end
+
+    local notes = json.array()
+    for index = 1, #prepared do
+        local note = prepared[index].note
+        notes[#notes + 1] = serializeNote(group, reference, note, note:getIndexInParent())
+    end
+    return {
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        groupUuid = group:getUUID(),
+        editedCount = #notes,
+        notes = notes
+    }
+end
+
+function handlers.set_note_phoneme_properties(payload)
+    payload = requireObject(payload, "payload")
+    local project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
+    local edits = requireArray(payload.edits, "edits", 1, 512)
+    local prepared = {}
+    local seen = {}
+    local _selectionContext, selectedNoteIndices =
+        validateCurrentEditorGroupGuard(payload, reference, group)
+    local requireSelectedNotes =
+        optionalBoolean(payload.requireSelectedNotes, "requireSelectedNotes")
+
+    for index = 1, #edits do
+        local path = "edits[" .. index .. "]"
+        local edit = requireObject(edits[index], path)
+        local noteIndex = requireInteger(
+            edit.noteIndex,
+            path .. ".noteIndex",
+            1,
+            group:getNumNotes()
+        )
+        if seen[noteIndex] then
+            raiseBridgeError("INVALID_ARGUMENT", "The same noteIndex appears more than once", {
+                noteIndex = noteIndex
+            })
+        end
+        seen[noteIndex] = true
+        if requireSelectedNotes == true and not selectedNoteIndices[noteIndex] then
+            raiseBridgeError(
+                "SELECTION_MISMATCH",
+                "A target note is not selected in the current piano-roll group",
+                {
+                    noteIndex = noteIndex,
+                    groupUuid = group:getUUID()
+                }
+            )
+        end
+        local note = validateFingerprint(
+            group,
+            noteIndex,
+            requireString(edit.fingerprint, path .. ".fingerprint", false)
+        )
+        local changesPath = path .. ".changes"
+        prepared[#prepared + 1] = {
+            note = note,
+            changes = preparePhonemePropertyChanges(note, edit.changes, changesPath),
             path = changesPath
         }
     end
@@ -4289,6 +5100,41 @@ end
 local pollCount = 0
 local stopped = false
 
+local function performHotReload()
+    local request = reloadRequested
+    reloadRequested = nil
+    if request == nil then
+        return false
+    end
+
+    writeStatus("running", "Reloading the installed Bridge script.")
+    local previousMain = main
+    local loaded, loadError = pcall(request.loader)
+    if not loaded then
+        writeStatus("error", "Unable to load the installed Bridge script: " .. tostring(loadError))
+        return false
+    end
+
+    local replacementMain = main
+    if type(replacementMain) ~= "function" or replacementMain == previousMain then
+        main = previousMain
+        writeStatus("error", "The reloaded Bridge script did not define a replacement main().")
+        return false
+    end
+
+    stopped = true
+    local started, startError = pcall(replacementMain, {
+        hotReload = true
+    })
+    if not started then
+        stopped = false
+        main = previousMain
+        writeStatus("error", "The reloaded Bridge script failed to start: " .. tostring(startError))
+        return false
+    end
+    return true
+end
+
 local function stopBridge(message)
     if stopped then
         return
@@ -4316,6 +5162,16 @@ local function poll()
     end
 
     processRequestFile()
+    if fileExists(RELOAD_FILE) then
+        removeFile(RELOAD_FILE)
+        local queued, reloadError = pcall(prepareHotReload)
+        if not queued then
+            writeStatus("error", "Unable to prepare Bridge reload: " .. tostring(reloadError))
+        end
+    end
+    if reloadRequested ~= nil and performHotReload() then
+        return
+    end
     pollCount = pollCount + 1
     if pollCount % HEARTBEAT_EVERY_POLLS == 0 then
         local wrote, statusError = writeStatus("running")
@@ -4341,12 +5197,16 @@ function getTranslations(_languageCode)
     return {}
 end
 
-function main()
+function main(options)
+    local hotReload = type(options) == "table" and options.hotReload == true
     removeFile(STOP_FILE)
+    removeFile(RELOAD_FILE)
     -- Never execute a command left by an older bridge session.
     removeFile(REQUEST_FILE)
     removeFile(PROCESSING_FILE)
-    removeFile(RESPONSE_FILE)
+    if not hotReload then
+        removeFile(RESPONSE_FILE)
+    end
 
     local sessionOk, sessionError = writeSessionFile()
     if not sessionOk then

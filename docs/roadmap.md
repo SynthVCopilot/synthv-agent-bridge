@@ -23,6 +23,8 @@
 - Main-editor and arrangement viewport navigation, snapping, and coordinates.
 - Host information, clipboard, dialogs, pitch/frequency helpers, and namespaced
   object metadata.
+- Typed Group voice and Vocal Mode settings, dedicated phoneme properties, and
+  host-validated experimental Unison access.
 
 ## v0.2 — preview and transaction layer
 

@@ -34,6 +34,69 @@ const languageOverrideSchema = z.enum([
 ]);
 const rapAccentSchema = z.enum(["", "1", "2", "3", "4", "5"]);
 
+const groupVoiceParameterChangesSchema = z
+  .object({
+    loudness: z.number().finite().min(-48).max(12).optional(),
+    tension: z.number().finite().min(-1).max(1).optional(),
+    breathiness: z.number().finite().min(-1).max(1).optional(),
+    gender: z.number().finite().min(-1).max(1).optional(),
+    toneShift: z.number().finite().min(-1).max(1).optional(),
+  })
+  .refine(
+    (value) => Object.values(value).some((entry) => entry !== undefined),
+    { message: "At least one group voice parameter must be changed." },
+  );
+
+const vocalModeChangesSchema = z
+  .object({
+    name: z.string().min(1).max(200),
+    pitch: z.number().finite().min(0).optional(),
+    timbre: z.number().finite().min(0).optional(),
+    pronunciation: z.number().finite().min(0).optional(),
+  })
+  .refine(
+    (value) =>
+      value.pitch !== undefined ||
+      value.timbre !== undefined ||
+      value.pronunciation !== undefined,
+    { message: "At least one Vocal Mode axis must be changed." },
+  );
+
+const experimentalUnisonChangesSchema = z
+  .object({
+    singers: z.number().int().min(1).max(128).optional(),
+    spacing: z.number().finite().min(0).max(1).optional(),
+  })
+  .refine(
+    (value) => value.singers !== undefined || value.spacing !== undefined,
+    { message: "At least one experimental Unison field must be changed." },
+  );
+
+const phonemeAttributeSchema = z
+  .object({
+    leftOffset: z.number().finite().optional(),
+    position: z.number().finite().optional(),
+    activity: z.number().finite().optional(),
+    strength: z.number().finite().optional(),
+  })
+  .refine(
+    (value) => Object.values(value).some((entry) => entry !== undefined),
+    { message: "Each phoneme attribute must change at least one field." },
+  );
+
+const phonemePropertyChangesSchema = z
+  .object({
+    phonemeSequence: z.string().max(4000).optional(),
+    languageOverride: languageOverrideSchema.optional(),
+    phonesetOverride: z.string().max(200).optional(),
+    evenSyllableDuration: z.boolean().optional(),
+    phonemeAttributes: z.array(phonemeAttributeSchema).max(256).optional(),
+  })
+  .refine(
+    (value) => Object.values(value).some((entry) => entry !== undefined),
+    { message: "At least one phoneme property must be changed." },
+  );
+
 const groupLocatorShape = {
   trackIndex: indexSchema.describe("1-based track storage index."),
   groupIndex: indexSchema
@@ -250,7 +313,7 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     {
       instructions:
-        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, library, automation, Smart Pitch state, or selection immediately before writing. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits.",
+        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, voice, phoneme, library, automation, Smart Pitch state, or selection immediately before writing. When the user refers to the current or selected singer, group, or notes, inspect the returned selection context and enable the applicable selection guard. Explicitly located UUID/index/fingerprint operations may target unselected objects. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits.",
     },
   );
 
@@ -281,6 +344,23 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async () => runTool(async () => client.send("ping")),
+  );
+
+  server.registerTool(
+    "reload_bridge",
+    {
+      title: "Reload SynthV Bridge",
+      description:
+        "Hot-reload the installed Bridge Lua file inside the current SynthV script session without UI automation. The response is written before the old polling loop hands control to the reloaded script.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => runTool(async () => client.send("reload_bridge", {})),
   );
 
   server.registerTool(
@@ -592,6 +672,42 @@ export function createServer(config: BridgeConfig): McpServer {
   );
 
   server.registerTool(
+    "get_group_voice",
+    {
+      title: "Get SynthV Group Voice",
+      description:
+        "Read one vocal group's documented voice parameters, Vocal Modes, raw host properties, experimental Unison fields, and current/selected editor context. This does not expose or select the singer database.",
+      inputSchema: groupLocatorShape,
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("get_group_voice", input)),
+  );
+
+  server.registerTool(
+    "get_note_phoneme_data",
+    {
+      title: "Get SynthV Note Phoneme Data",
+      description:
+        "Read user phoneme overrides, phoneset and per-phoneme attributes together with SynthV's computed phonemes and per-note selection state for one vocal group.",
+      inputSchema: {
+        ...groupLocatorShape,
+        offset: z.number().int().min(0).default(0),
+        limit: z.number().int().min(1).max(1000).default(1000),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("get_note_phoneme_data", input)),
+  );
+
+  server.registerTool(
     "get_selection",
     {
       title: "Get SynthV Selection",
@@ -804,6 +920,38 @@ export function createServer(config: BridgeConfig): McpServer {
   );
 
   server.registerTool(
+    "set_group_voice",
+    {
+      title: "Set SynthV Group Voice",
+      description:
+        "Safely update documented group voice defaults and non-negative Vocal Mode axes, with requested Vocal Mode values validated on a cloned reference by the current SynthV host. Experimental Unison fields are accepted only when the host returns and retains them.",
+      inputSchema: {
+        ...groupLocatorShape,
+        referenceFingerprint: fingerprintSchema.describe(
+          "Latest reference fingerprint from get_group_voice or get_track_notes.",
+        ),
+        requireCurrentEditorGroup: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Reject unless this target is the current piano-roll group. Use when the user refers to the current or selected singer/group.",
+          ),
+        parameters: groupVoiceParameterChangesSchema.optional(),
+        vocalModes: z.array(vocalModeChangesSchema).min(1).max(64).optional(),
+        experimentalUnison: experimentalUnisonChangesSchema.optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("set_group_voice", input)),
+  );
+
+  server.registerTool(
     "delete_group_reference",
     {
       title: "Delete SynthV Group Reference",
@@ -871,6 +1019,50 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async (input) => runTool(async () => client.send("edit_notes", input)),
+  );
+
+  server.registerTool(
+    "set_note_phoneme_properties",
+    {
+      title: "Set SynthV Note Phoneme Properties",
+      description:
+        "Safely edit fingerprint-verified phoneme sequences, per-note language or phoneset overrides, syllable timing mode, and per-phoneme timing/strength attributes.",
+      inputSchema: {
+        ...groupLocatorShape,
+        requireCurrentEditorGroup: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Reject unless this target is the current piano-roll group.",
+          ),
+        requireSelectedNotes: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Reject unless every edited note is currently selected in the target piano-roll group.",
+          ),
+        edits: z
+          .array(
+            z.object({
+              noteIndex: indexSchema,
+              fingerprint: fingerprintSchema,
+              changes: phonemePropertyChangesSchema,
+            }),
+          )
+          .min(1)
+          .max(512),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () =>
+        client.send("set_note_phoneme_properties", input),
+      ),
   );
 
   server.registerTool(

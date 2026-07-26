@@ -3,11 +3,29 @@ local ipc = assert(os.getenv("SYNTHV_AGENT_BRIDGE_DIR"))
 local prefix = ipc .. "/synthv-agent-bridge"
 local requestFile = prefix .. ".request.json"
 local responseFile = prefix .. ".response.json"
+local installFile = prefix .. ".install.json"
+
+do
+    local scriptFile = assert(os.getenv("BRIDGE_SCRIPT")):gsub("\\","\\\\"):gsub('"','\\"')
+    local file = assert(io.open(installFile, "wb"))
+    file:write('{"protocolVersion":1,"scriptFile":"'..scriptFile..'"}')
+    file:close()
+end
 
 local function arrayCopy(t)
     local r = {}
     for i = 1, #t do r[i] = t[i] end
     return r
+end
+
+local function deepCopy(value, seen)
+    if type(value)~="table" then return value end
+    seen=seen or {}
+    if seen[value] then return seen[value] end
+    local result={}
+    seen[value]=result
+    for key,child in pairs(value) do result[deepCopy(key,seen)]=deepCopy(child,seen) end
+    return result
 end
 
 local function indexOf(t, object)
@@ -141,8 +159,8 @@ local function makeNote()
     function n:setPhonemes(v) self.phonemes=v end
     function n:getDetune() return self.detune end
     function n:setDetune(v) self.detune=v end
-    function n:getAttributes() return self.attrs end
-    function n:setAttributes(v) for k,x in pairs(v) do self.attrs[k]=x end end
+    function n:getAttributes() return deepCopy(self.attrs) end
+    function n:setAttributes(v) for k,x in pairs(v) do self.attrs[k]=deepCopy(x) end end
     function n:getLanguageOverride() return self.languageOverride end
     function n:setLanguageOverride(v) self.languageOverride=v end
     function n:getMusicalType() return self.musicalType end
@@ -168,8 +186,7 @@ local function makeNote()
         copy.pitchAutoMode = self.pitchAutoMode
         copy.rapAccent = self.rapAccent
         copy.retakes = self.retakes:clone()
-        copy.attrs = {}
-        for key, value in pairs(self.attrs) do copy.attrs[key] = value end
+        copy.attrs = deepCopy(self.attrs)
         return copy
     end
     return n
@@ -279,7 +296,19 @@ local function makeReference(group, main)
         timeOffset=0,
         pitchOffset=0,
         muted=false,
-        voice={paramLoudness=0}
+        voice={
+            paramLoudness=0,
+            paramTension=0,
+            paramBreathiness=0,
+            paramGender=0,
+            paramToneShift=0,
+            singers=1,
+            spacing=0.7,
+            vocalModeParams={
+                Soft={pitch=0,timbre=0,pronunciation=0},
+                Powerful={pitch=0,timbre=0,pronunciation=0}
+            }
+        }
     })
     function r:isInstrumental() return self.instrumental end
     function r:isMain() return self.main end
@@ -291,8 +320,52 @@ local function makeReference(group, main)
     function r:setPitchOffset(v) self.pitchOffset=v end
     function r:getTarget() return proxyObject(self.group) end
     function r:setTarget(v) assert(self.group==nil,"target already set"); self.group=unwrapProxy(v) end
-    function r:getVoice() return self.voice end
-    function r:setVoice(v) for k,x in pairs(v) do self.voice[k]=x end end
+    function r:getVoice() return deepCopy(self.voice) end
+    function r:setVoice(v)
+        local ranges={
+            paramLoudness={-48,12},
+            paramTension={-1,1},
+            paramBreathiness={-1,1},
+            paramGender={-1,1},
+            paramToneShift={-1,1}
+        }
+        for key,value in pairs(v) do
+            if ranges[key] then
+                assert(type(value)=="number" and value>=ranges[key][1] and value<=ranges[key][2],"invalid voice parameter")
+            elseif key=="singers" then
+                assert(type(value)=="number" and value%1==0 and value>=1 and value<=8,"invalid singers")
+            elseif key=="spacing" then
+                assert(type(value)=="number" and value>=0 and value<=1,"invalid spacing")
+            elseif key=="vocalModeParams" then
+                for name,mode in pairs(value) do
+                    assert(self.voice.vocalModeParams[name],"unknown vocal mode")
+                    for axis,axisValue in pairs(mode) do
+                        assert(
+                            axis=="pitch" or axis=="timbre" or axis=="pronunciation",
+                            "unknown vocal mode axis"
+                        )
+                        assert(type(axisValue)=="number" and axisValue>=0,"invalid vocal mode")
+                    end
+                end
+            end
+        end
+        for key,value in pairs(v) do
+            if key=="vocalModeParams" then
+                for _name,existingMode in pairs(self.voice.vocalModeParams) do
+                    for _,axis in ipairs({"pitch","timbre","pronunciation"}) do
+                        existingMode[axis]=math.min(existingMode[axis],150)
+                    end
+                end
+                for name,mode in pairs(value) do
+                    for axis,axisValue in pairs(mode) do
+                        self.voice.vocalModeParams[name][axis]=math.min(axisValue,150)
+                    end
+                end
+            else
+                self.voice[key]=deepCopy(value)
+            end
+        end
+    end
     function r:getOnset() if #self.group.notes==0 then return self.timeOffset end return self.group.notes[1]:getOnset()+self.timeOffset end
     function r:getEnd() if #self.group.notes==0 then return self.timeOffset end return self.group.notes[#self.group.notes]:getEnd()+self.timeOffset end
     function r:getDuration() return self:getEnd()-self:getOnset() end
@@ -306,8 +379,7 @@ local function makeReference(group, main)
         copy.muted=self.muted
         copy.rangeDuration=self.rangeDuration
         copy.instrumental=self.instrumental
-        copy.voice={}
-        for key,value in pairs(self.voice) do copy.voice[key]=value end
+        copy.voice=deepCopy(self.voice)
         return copy
     end
     return r
@@ -640,6 +712,26 @@ main()
 
 local seq=0
 local function escape(s) return s:gsub('\\','\\\\'):gsub('"','\\"') end
+local function extractJsonString(text,key)
+    local marker='"'..key..'":"'
+    local start=assert(text:find(marker,1,true),"missing JSON string field "..key)+#marker
+    local result={}
+    local index=start
+    while index<=#text do
+        local character=text:sub(index,index)
+        if character=='"' then return table.concat(result) end
+        if character=='\\' then
+            index=index+1
+            local escaped=text:sub(index,index)
+            local replacements={['"']='"',['\\']='\\',['/']='/',b='\b',f='\f',n='\n',r='\r',t='\t'}
+            result[#result+1]=replacements[escaped] or escaped
+        else
+            result[#result+1]=character
+        end
+        index=index+1
+    end
+    error("unterminated JSON string field "..key)
+end
 local function callRaw(action,payload)
     seq=seq+1
     local id=string.format("00000000-0000-4000-8000-%012d",seq)
@@ -674,6 +766,16 @@ end
 
 local pingResponse=call("ping","{}")
 assert(pingResponse:find('"bridgeVersion":"0.1.3"',1,true),"expected Bridge version 0.1.3")
+local initialSessionToken=extractJsonString(pingResponse,"sessionToken")
+local reloadResponse=call("reload_bridge","{}")
+assert(reloadResponse:find('"reloading":true',1,true),"hot reload was not acknowledged")
+local reloadedPingResponse=call("ping","{}")
+local reloadedSessionToken=extractJsonString(reloadedPingResponse,"sessionToken")
+assert(reloadedSessionToken~=initialSessionToken,"hot reload did not start a new Bridge session")
+local currentGroupVoice=call("get_group_voice",'{"trackIndex":1,"groupIndex":1}')
+assert(currentGroupVoice:find('"currentEditorGroup":true',1,true),"current Group selection context was not returned")
+local currentGroupVoiceFingerprint=extractJsonString(currentGroupVoice,"referenceFingerprint")
+callWrite("set_group_voice",'{"trackIndex":1,"groupIndex":1,"referenceFingerprint":"'..escape(currentGroupVoiceFingerprint)..'","requireCurrentEditorGroup":true,"vocalModes":[{"name":"Soft","pitch":0}]}')
 call("get_project_info","{}")
 local initialTimeAxis=call("get_time_axis","{}")
 assert(initialTimeAxis:find('"tempoMarkCount":1',1,true),"expected initial tempo map")
@@ -697,6 +799,21 @@ local advancedAdded=callWrite("add_notes",'{"trackIndex":2,"groupIndex":1,"group
 assert(advancedAdded:find('"languageOverride":"english"',1,true),"advanced language field was not serialized")
 assert(advancedAdded:find('"musicalType":"rap"',1,true),"advanced musical type was not serialized")
 assert(advancedAdded:find('"pitchAutoMode":false',1,true),"advanced pitch mode was not serialized")
+local advancedFingerprint=extractJsonString(advancedAdded,"fingerprint")
+local phonemeRead=call("get_note_phoneme_data",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'"}')
+assert(phonemeRead:find('"computedPhonemes":"l a"',1,true),"computed phonemes were not returned")
+assert(phonemeRead:find('"currentEditorGroup":false',1,true),"unselected Group context was not returned")
+local undoBeforeUnselectedPhoneme=project.undo
+callExpectError("set_note_phoneme_properties",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","requireSelectedNotes":true,"edits":[{"noteIndex":1,"fingerprint":"'..escape(advancedFingerprint)..'","changes":{"phonemeSequence":"hh eh l ow"}}]}',"SELECTION_MISMATCH")
+assert(project.undo==undoBeforeUnselectedPhoneme,"selection-guarded phoneme edit must not create an undo record")
+local phonemeUpdated=callWrite("set_note_phoneme_properties",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","edits":[{"noteIndex":1,"fingerprint":"'..escape(advancedFingerprint)..'","changes":{"phonemeSequence":"hh eh l ow","languageOverride":"english","phonesetOverride":"arpabet","evenSyllableDuration":true,"phonemeAttributes":[{"position":0.2,"strength":0.8},{"leftOffset":0.05,"activity":0.9}]}}]}')
+assert(phonemeUpdated:find('"phonemes":"hh eh l ow"',1,true),"phoneme sequence was not updated")
+assert(project.tracks[2].refs[1].group.notes[1].attrs.phonesetOverride=="arpabet","phoneset override was not applied")
+assert(project.tracks[2].refs[1].group.notes[1].attrs.phonemes[1].strength==0.8,"phoneme strength was not applied")
+local phonemeFingerprint=extractJsonString(phonemeUpdated,"fingerprint")
+local undoBeforeInvalidPhoneme=project.undo
+callExpectError("set_note_phoneme_properties",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","edits":[{"noteIndex":1,"fingerprint":"'..escape(phonemeFingerprint)..'","changes":{"phonemeAttributes":[{"unsupported":1}]}}]}',"INVALID_ARGUMENT")
+assert(project.undo==undoBeforeInvalidPhoneme,"invalid phoneme edit must not create an undo record")
 notePitchAutoWriteSupported=false
 local fallbackAdded=callWrite("add_notes",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","notes":[{"onset":705600000,"duration":705600000,"pitch":64,"lyrics":"fallback","pitchAutoMode":true}]}')
 assert(fallbackAdded:find('"pitchAutoMode":true',1,true),"matching pitch mode should not require an unavailable setter")
@@ -707,6 +824,32 @@ assert(project.undo==undoBeforeUnsupportedPitchMode,"unsupported pitch mode edit
 notePitchAutoWriteSupported=true
 local track2Fingerprint="main-group:"..track2GroupUuid
 callWrite("update_track",'{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Lead Source","bounced":true}')
+local groupVoice=call("get_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'"}')
+assert(groupVoice:find('"singers":1',1,true),"experimental Unison singers were not returned")
+assert(groupVoice:find('"Soft"',1,true),"Vocal Modes were not returned")
+assert(groupVoice:find('"currentEditorGroup":false',1,true),"non-current Group selection context was not returned")
+local groupVoiceFingerprint=extractJsonString(groupVoice,"referenceFingerprint")
+local undoBeforeUnselectedVoice=project.undo
+callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(groupVoiceFingerprint)..'","requireCurrentEditorGroup":true,"vocalModes":[{"name":"Soft","pitch":25}]}',"SELECTION_MISMATCH")
+assert(project.undo==undoBeforeUnselectedVoice,"selection-guarded Group voice edit must not create an undo record")
+local voiceUpdated=callWrite("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(groupVoiceFingerprint)..'","parameters":{"loudness":-3,"tension":0.25,"breathiness":-0.1,"gender":0.2,"toneShift":-0.3},"vocalModes":[{"name":"Soft","pitch":25,"timbre":40,"pronunciation":15}],"experimentalUnison":{"singers":2,"spacing":0.5}}')
+assert(project.tracks[2].refs[1].voice.paramTension==0.25,"group voice parameter was not applied")
+assert(project.tracks[2].refs[1].voice.vocalModeParams.Soft.timbre==40,"Vocal Mode was not applied")
+assert(project.tracks[2].refs[1].voice.singers==2 and project.tracks[2].refs[1].voice.spacing==0.5,"experimental Unison was not applied")
+local updatedVoiceFingerprint=extractJsonString(voiceUpdated,"referenceFingerprint")
+local undoBeforeRejectedUnison=project.undo
+callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(updatedVoiceFingerprint)..'","experimentalUnison":{"singers":9}}',"INVALID_ARGUMENT")
+assert(project.undo==undoBeforeRejectedUnison,"host-rejected Unison must not create an undo record")
+project.tracks[2].refs[1].voice.vocalModeParams.Powerful={pitch=220,timbre=220,pronunciation=220}
+local legacyVoice=call("get_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'"}')
+local legacyVoiceFingerprint=extractJsonString(legacyVoice,"referenceFingerprint")
+local undoBeforeClampedUnrequestedMode=project.undo
+callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(legacyVoiceFingerprint)..'","vocalModes":[{"name":"Soft","pitch":25}]}',"HOST_POSTCONDITION_FAILED")
+assert(project.undo==undoBeforeClampedUnrequestedMode,"an update that clamps an unrequested Vocal Mode must not create an undo record")
+assert(project.tracks[2].refs[1].voice.vocalModeParams.Powerful.pitch==220,"an unrequested legacy Vocal Mode value was changed")
+local undoBeforeClampedVocalMode=project.undo
+callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(legacyVoiceFingerprint)..'","vocalModes":[{"name":"Powerful","pitch":220}]}',"HOST_POSTCONDITION_FAILED")
+assert(project.undo==undoBeforeClampedVocalMode,"host-clamped Vocal Mode must not create an undo record")
 callWrite("update_group",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","name":"Lead Main","voice":{"paramLoudness":-2}}')
 call("get_computed_group_data",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","pitchSample":{"absoluteStart":0,"interval":352800000,"frames":4}}')
 callWrite("clone_track",'{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Harmony -3st","transposeSemitones":-3}')
@@ -825,5 +968,5 @@ callWrite("script_data",'{"operation":"remove","objectType":"project","key":"syn
 callWrite("delete_note_group",'{"groupUuid":"'..libraryUuid..'"}')
 assert(project.tracks[1]:getNumGroups()==1 and project.tracks[2]:getNumGroups()==1,"deleting a library group must remove linked references")
 callWrite("delete_notes",'{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(newFingerprint)..'"}]}')
-assert(project.undo==33,"expected 33 undo records, got "..project.undo)
+assert(project.undo==36,"expected 36 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

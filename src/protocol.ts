@@ -2,6 +2,7 @@ import { PROTOCOL_VERSION } from "./config.js";
 
 export const BRIDGE_ACTIONS = [
   "ping",
+  "reload_bridge",
   "get_host_info",
   "host_clipboard",
   "show_dialog",
@@ -18,6 +19,8 @@ export const BRIDGE_ACTIONS = [
   "add_group_reference",
   "clone_group_reference",
   "get_track_notes",
+  "get_group_voice",
+  "get_note_phoneme_data",
   "get_selection",
   "set_selection",
   "get_computed_group_data",
@@ -26,9 +29,11 @@ export const BRIDGE_ACTIONS = [
   "clone_track",
   "delete_track",
   "update_group",
+  "set_group_voice",
   "delete_group_reference",
   "add_notes",
   "edit_notes",
+  "set_note_phoneme_properties",
   "delete_notes",
   "get_note_retakes",
   "generate_note_retake",

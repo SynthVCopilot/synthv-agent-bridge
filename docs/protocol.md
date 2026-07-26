@@ -82,7 +82,9 @@ envelope. The expanded action set includes reusable note-group library
 operations, linked/deep group references, Smart Pitch CRUD, Bridge-tracked
 Retakes, automation sampling/simplification, full selection control, viewport
 navigation, host clipboard/dialog helpers, coordinate conversion, and
-namespaced script data.
+namespaced script data. Later additive actions expose typed Group voice/Vocal
+Mode settings, host-validated experimental Unison fields, and dedicated
+per-note phoneme properties without changing the v1 envelope.
 
 `script_data` only exposes keys beginning with `synthv-agent-bridge.`. It never
 lists, clears, or overwrites another script's namespace.
@@ -107,3 +109,42 @@ When the current SynthV Lua host cannot execute `Note:setPitchAutoMode()`, a
 request that would actually change the note fails with
 `UNSUPPORTED_HOST_CAPABILITY`. A request matching the current value succeeds
 without invoking the unavailable setter.
+
+`set_group_voice` treats `singers` and `spacing` as experimental host
+capabilities because they are not in the public `NoteGroupReference#getVoice`
+field list. It accepts them only when the current reference returns the field,
+and it verifies the requested value on a cloned reference before creating an
+undo record.
+
+Vocal Mode axes accept non-negative finite values. The bridge deliberately
+does not impose a fixed upper bound because current projects can return values
+above the older documented range. It first tries a sparse nested update and
+verifies the complete Vocal Mode map, so an unrequested legacy value is never
+silently clamped. A directly requested value must still survive
+`NoteGroupReference:setVoice()` on a cloned reference; SynthV 2.2.1 clamps some
+host-returned values such as 220 to 150 when they are written, and the bridge
+therefore rejects that write before an undo record is created.
+
+### Hot reload
+
+`reload_bridge` compiles the currently running script file with Lua
+`loadfile()`, writes the correlated response, and then transfers polling to a
+new in-session Bridge instance. It does not call UI automation or inject hooks.
+The installer can request the same transition through the
+`synthv-agent-bridge.reload` marker, records the installed absolute path in a
+local `synthv-agent-bridge.install.json` manifest, and confirms that the
+session token changed. The manifest fallback is needed because SynthV 2.2.1
+does not expose the loaded script path to Lua. A Bridge version that predates
+this action must be restarted manually once before later installs can reload
+automatically.
+
+### Selection-aware writes
+
+Group voice and phoneme reads include whether the target is the current
+piano-roll Group, whether it is selected in either editor, and how many of its
+notes are selected. `set_group_voice` can require the current editor Group;
+`set_note_phoneme_properties` can additionally require every target note to be
+selected. These guards are opt-in because official object setters operate on
+explicit Group UUIDs, note indices, and fingerprints without requiring UI
+selection. This keeps batch automation available while allowing
+selection-sensitive user requests to fail safely with `SELECTION_MISMATCH`.

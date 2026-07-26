@@ -4,6 +4,27 @@ All notable changes will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- Typed Group voice reads/writes for documented base parameters and per-axis
+  Vocal Mode settings, guarded by Group-reference fingerprints and clone-first
+  host validation. Vocal Mode axes accept non-negative finite values rather
+  than imposing a stale fixed ceiling. Sparse preflight detects when SynthV
+  would clamp unrequested legacy values such as 180 or 220; both those unsafe
+  partial updates and directly clamped values are rejected before an undo
+  record is created.
+- Experimental Unison `singers` and `spacing` access that is enabled only when
+  the current SynthV host returns and retains those fields.
+- Dedicated phoneme reads and fingerprint-verified writes for language and
+  phoneset overrides, syllable timing, and per-phoneme timing/strength
+  attributes.
+- In-session Bridge hot reload through `reload_bridge` and the installer. Once
+  this version has been started manually, later installs can reload the Lua
+  executor without mouse automation, hooks, or another manual script launch.
+- Group voice and phoneme reads now report current/selected editor context.
+  Their write tools offer opt-in guards for the current piano-roll Group and
+  selected notes while retaining explicit unselected-object automation.
+
 ### Security
 
 - Override the MCP SDK's vulnerable transitive `@hono/node-server` dependency

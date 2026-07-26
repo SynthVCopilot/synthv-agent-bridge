@@ -9,6 +9,12 @@ Before a write operation, ask the agent to read the current state and describe t
 - Show the loudness and pitch-deviation automation points for the current group.
 - Read the complete tempo and time-signature map, then convert quarter 32 to seconds.
 - Read the current group's computed phonemes and sample its rendered pitch every eighth note.
+- Read the current Group voice and list its base parameters, Vocal Modes, and any host-returned experimental Unison fields.
+- Read the selected note's computed phonemes and phoneme attributes, then increase only its first consonant's strength after showing the planned edit.
+- Read the current Group voice, then set the `Soft` Vocal Mode to 25 pitch, 40 timbre, and 15 pronunciation using the latest reference fingerprint.
+- Confirm that the target is the current piano-roll Group before changing its `Twangy` Vocal Mode; reject the edit if the editor moved to another Group.
+- Read the selected notes and change phoneme strength only if every target note remains selected.
+- Hot-reload the installed SynthV Bridge, then ping the new session and confirm that its session token changed.
 
 ## Edit notes
 

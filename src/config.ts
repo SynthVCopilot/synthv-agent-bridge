@@ -12,6 +12,8 @@ export interface BridgePaths {
   readonly responseFile: string;
   readonly statusFile: string;
   readonly stopFile: string;
+  readonly reloadFile: string;
+  readonly installFile: string;
   readonly lockFile: string;
   readonly sessionFile: string;
 }
@@ -87,6 +89,8 @@ export function loadConfig(
       responseFile: `${prefix}.response.json`,
       statusFile: `${prefix}.status.json`,
       stopFile: `${prefix}.stop`,
+      reloadFile: `${prefix}.reload`,
+      installFile: `${prefix}.install.json`,
       lockFile: `${prefix}.lock`,
       sessionFile: `${prefix}.session.json`,
     },

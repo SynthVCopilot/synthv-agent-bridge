@@ -19,6 +19,8 @@ test("loadConfig builds all IPC paths from a shared directory", () => {
   assert.equal(config.paths.directory, path.resolve("./relative-ipc"));
   assert.equal(config.paths.requestFile.endsWith("synthv-agent-bridge.request.json"), true);
   assert.equal(config.paths.processingFile.endsWith("synthv-agent-bridge.processing.json"), true);
+  assert.equal(config.paths.reloadFile.endsWith("synthv-agent-bridge.reload"), true);
+  assert.equal(config.paths.installFile.endsWith("synthv-agent-bridge.install.json"), true);
   assert.equal(config.timeoutMs, 1234);
   assert.equal(config.pollIntervalMs, 7);
   assert.equal(config.staleRequestMs, 4567);

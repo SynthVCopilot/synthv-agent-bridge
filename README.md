@@ -12,6 +12,8 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 - Create, clone, reuse, update, or delete library note groups and vocal/instrumental Group references.
 - Clone an existing track to inherit its singer/database, optionally clearing or transposing cloned notes.
 - Add notes and edit per-note language, sing/rap type, pitch-auto mode, rap accent, timing, pitch, lyrics, phonemes, detune, and attributes.
+- Read and safely update typed group voice defaults, Vocal Mode pitch/timbre/pronunciation axes, and host-returned experimental Unison fields.
+- Read computed and user phonemes together, and safely edit phoneset overrides, syllable timing, and per-phoneme timing/strength attributes.
 - Add, edit, and delete point or curve Smart Pitch controls with stale-write protection.
 - Generate, activate, and delete Bridge-tracked AI Retakes.
 - Safely edit or delete notes using fresh note fingerprints.
@@ -75,6 +77,12 @@ The installer copies these files into a `SynthV Agent Bridge` subfolder of the d
 
 Alternatively, set `SYNTHV_SCRIPTS_DIR` to the scripts directory before running `npm run install:synthv`. The installer creates a `SynthV Agent Bridge` subfolder. After copying the files, choose **Scripts → Rescan**.
 
+If a hot-reload-capable Bridge session is already running, the installer asks
+it to load the copied Lua file and waits for a new session heartbeat. This uses
+the Bridge's file IPC and Lua `loadfile()`—not UI automation or hooks. Use
+`--no-reload` to copy without requesting a reload. The first installation of a
+hot-reload-capable version must still be started manually once.
+
 ### 3. Start the in-editor bridge
 
 In Synthesizer V Studio, run:
@@ -120,6 +128,7 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 |---|---:|---|
 | `bridge_status` | Read | Read the heartbeat without requiring a round trip. |
 | `ping` | Read | Test the complete Node → Lua → Node path. |
+| `reload_bridge` | Control | Reload the installed Lua Bridge in the current script session. |
 | `get_host_info` | Read | SynthV host version, OS, language, project, and IPC information. |
 | `host_clipboard` | Control | Read or write text through SynthV's host clipboard API. |
 | `show_dialog` | Control | Show message, input, confirmation, or custom-form dialogs. |
@@ -136,6 +145,8 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 | `add_group_reference` | Write | Place a library group on a track. |
 | `clone_group_reference` | Write | Make a linked or deep-copied reference on another track. |
 | `get_track_notes` | Read | Groups, UUIDs, notes, attributes, offsets, and safe-write fingerprints. |
+| `get_group_voice` | Read | Typed group voice defaults, Vocal Modes, experimental Unison fields, and target selection context. |
+| `get_note_phoneme_data` | Read | User/computed phonemes, phoneset overrides, per-phoneme attributes, and note selection state. |
 | `get_selection` | Read | Selected groups, notes, Smart Pitch controls, and requested automation points. |
 | `set_selection` | Control | Replace, add, remove, or clear editor selections. |
 | `get_computed_group_data` | Read | Computed phonemes/rap attributes and optional pitch samples. |
@@ -144,9 +155,11 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 | `clone_track` | Write | Deep-clone a track, preserving its singer/database, with optional clear/transpose. |
 | `delete_track` | Destructive | Delete a fingerprint-verified non-final track. |
 | `update_group` | Write | Change vocal/instrumental reference state and supported vocal properties. |
+| `set_group_voice` | Write | Fingerprint-verified typed voice, Vocal Mode, and host-validated experimental Unison updates, with an optional current-Group guard. |
 | `delete_group_reference` | Destructive | Remove a non-main vocal or instrumental reference. |
 | `add_notes` | Write | Add notes to a specific group. |
 | `edit_notes` | Write | Edit fingerprint-verified notes. |
+| `set_note_phoneme_properties` | Write | Edit fingerprint-verified phoneme, phoneset, syllable, timing, and strength properties, with optional current-Group/selected-note guards. |
 | `delete_notes` | Destructive | Delete fingerprint-verified notes. |
 | `get_note_retakes` | Read | Read take count and Bridge-tracked Take IDs. |
 | `generate_note_retake` | Write | Generate duration, pitch, or timbre variations. |
@@ -279,7 +292,8 @@ CI runs TypeScript tests on Node 20 and 22, parses both production Lua files wit
 - A client-side timeout is ambiguous: SynthV may still finish the operation. The processing marker remains until the Lua host completes, and the agent should read the current project before deciding whether to retry a write.
 - Multi-call preview/commit transactions are planned but not implemented in v0.1.
 - There is no SynthV side-panel UI yet.
-- SynthV's public scripting API does not expose project save, audio rendering, or selecting an installed singer database by display name. Use editor UI automation for those operations; `clone_track` can inherit an already-selected singer.
+- SynthV's public scripting API does not expose project save, audio rendering, selecting an installed singer database by display name, or Voice Panel scale/mode settings. These remain out of scope; `clone_track` can inherit an already-selected singer.
+- `singers` and `spacing` are returned by SynthV 2.2.1 but are not documented in the public `getVoice` field list. The typed Unison surface is therefore experimental and refuses writes unless the host returns and retains the requested fields on a cloned reference.
 - The Retake API does not enumerate Take IDs or expose the active Take ID. The bridge therefore activates and deletes only the default Take or IDs it generated and stored itself.
 - Semantic expression presets are not implemented yet; the primitive Smart Pitch and automation tools are available.
 - The bridge has not yet been validated against every SynthV 2.x patch and every voice database.
