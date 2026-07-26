@@ -14,6 +14,8 @@ local function indexOf(t, object)
     for i = 1, #t do if t[i] == object then return i end end
 end
 
+local notePitchAutoWriteSupported = true
+
 local function makeNote()
     local n = {
         onset = 0,
@@ -49,7 +51,9 @@ local function makeNote()
     function n:getMusicalType() return self.musicalType end
     function n:setMusicalType(v) self.musicalType=v end
     function n:getPitchAutoMode() return self.pitchAutoMode end
-    function n:setPitchAutoMode(v) self.pitchAutoMode=v end
+    if notePitchAutoWriteSupported then
+        function n:setPitchAutoMode(v) self.pitchAutoMode=v end
+    end
     function n:getRapAccent() return self.rapAccent end
     function n:setRapAccent(v) self.rapAccent=v end
     function n:getRetakes()
@@ -188,12 +192,15 @@ local project
 local function makeTrack()
     local group=makeGroup()
     local ref=makeReference(group,true)
-    local t={name="Track",color="#808080",refs={ref},mixer=makeMixer(),bounced=false}
+    local t={name="Track",color="ff808080",refs={ref},mixer=makeMixer(),bounced=false}
     ref.parent=t
     function t:getName() return self.name end
     function t:setName(v) self.name=v end
     function t:getDisplayColor() return self.color end
-    function t:setDisplayColor(v) self.color=v end
+    function t:setDisplayColor(v)
+        assert(type(v)=="string" and v:match("^[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]$"),"track color must be AARRGGBB")
+        self.color=v:lower()
+    end
     function t:getDisplayOrder() return self:getIndexInParent() end
     function t:getDuration() local x=0 for _,r in ipairs(self.refs) do if r:getEnd()>x then x=r:getEnd() end end return x end
     function t:getNumGroups() return #self.refs end
@@ -280,8 +287,10 @@ local function makeTimeAxis()
         for _,position in ipairs(sortedKeys(self.tempo)) do result[#result+1]=self:getTempoMarkAt(position) end
         return result
     end
-    function axis:addTempoMark(position,bpm) self.tempo[position]=bpm end
-    function axis:removeTempoMark(position) if position==0 then return false end local had=self.tempo[position]~=nil; self.tempo[position]=nil; return had end
+    function axis:addTempoMark(position,bpm)
+        if self.tempo[position]==nil then self.tempo[position]=bpm end
+    end
+    function axis:removeTempoMark(position) local had=self.tempo[position]~=nil; self.tempo[position]=nil; return had end
     function axis:getMeasureMarkAt(measure)
         local effective=0
         for _,position in ipairs(sortedKeys(self.measures)) do
@@ -301,8 +310,10 @@ local function makeTimeAxis()
         for _,position in ipairs(sortedKeys(self.measures)) do result[#result+1]=self:getMeasureMarkAt(position) end
         return result
     end
-    function axis:addMeasureMark(measure,numerator,denominator) self.measures[measure]={numerator=numerator,denominator=denominator} end
-    function axis:removeMeasureMark(measure) if measure==0 then return false end local had=self.measures[measure]~=nil; self.measures[measure]=nil; return had end
+    function axis:addMeasureMark(measure,numerator,denominator)
+        if self.measures[measure]==nil then self.measures[measure]={numerator=numerator,denominator=denominator} end
+    end
+    function axis:removeMeasureMark(measure) local had=self.measures[measure]~=nil; self.measures[measure]=nil; return had end
     function axis:clone()
         local copy=makeTimeAxis()
         copy.tempo={}
@@ -418,17 +429,29 @@ call("convert_time",'{"quarters":2}')
 local undoBeforeStaleTimeAxis=project.undo
 callExpectError("set_time_axis",'{"expectedFingerprint":"stale","tempoMarks":[{"position":0,"bpm":100}]}',"STALE_TIME_AXIS")
 assert(project.undo==undoBeforeStaleTimeAxis,"stale time-axis edit must not create an undo record")
-callWrite("set_time_axis",'{"tempoMarks":[{"position":2822400000,"bpm":90}],"measureMarks":[{"measure":2,"numerator":3,"denominator":4}]}')
+local updatedTimeAxis=callWrite("set_time_axis",'{"tempoMarks":[{"position":0,"bpm":96},{"position":2822400000,"bpm":90}],"measureMarks":[{"measure":0,"numerator":4,"denominator":4},{"measure":2,"numerator":3,"denominator":4}]}')
+assert(updatedTimeAxis:find('"bpm":96',1,true),"position-zero tempo replacement was not retained")
+assert(updatedTimeAxis:find('"verified":true',1,true),"time-axis response was not postcondition-verified")
 
 call("list_tracks","{}")
 local addedTrack=callWrite("add_track",'{"name":"Lead Copy Source","displayColor":"#ABCDEF"}')
 assert(addedTrack:find('"mainGroup"',1,true),"add_track must return the main group locator")
 assert(addedTrack:find('"groupUuid"',1,true),"add_track must return the main group UUID")
+assert(addedTrack:find('"displayColorArgb":"ffabcdef"',1,true),"track color was not normalized to AARRGGBB")
+assert(project.tracks[2].color=="ffabcdef","host track color did not receive AARRGGBB")
 local track2GroupUuid=project.tracks[2].refs[1].group.uuid
 local advancedAdded=callWrite("add_notes",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","notes":[{"onset":0,"duration":705600000,"pitch":60,"lyrics":"hello","languageOverride":"english","musicalType":"rap","pitchAutoMode":false,"rapAccent":"2"}]}')
 assert(advancedAdded:find('"languageOverride":"english"',1,true),"advanced language field was not serialized")
 assert(advancedAdded:find('"musicalType":"rap"',1,true),"advanced musical type was not serialized")
 assert(advancedAdded:find('"pitchAutoMode":false',1,true),"advanced pitch mode was not serialized")
+notePitchAutoWriteSupported=false
+local fallbackAdded=callWrite("add_notes",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","notes":[{"onset":705600000,"duration":705600000,"pitch":64,"lyrics":"fallback","pitchAutoMode":true}]}')
+assert(fallbackAdded:find('"pitchAutoMode":true',1,true),"matching pitch mode should not require an unavailable setter")
+local fallbackFingerprint=assert(fallbackAdded:match('"fingerprint":"([^"]+)"'))
+local undoBeforeUnsupportedPitchMode=project.undo
+callExpectError("edit_notes",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","edits":[{"noteIndex":2,"fingerprint":"'..escape(fallbackFingerprint)..'","changes":{"pitchAutoMode":false}}]}',"UNSUPPORTED_HOST_CAPABILITY")
+assert(project.undo==undoBeforeUnsupportedPitchMode,"unsupported pitch mode edit must not create an undo record")
+notePitchAutoWriteSupported=true
 local track2Fingerprint="main-group:"..track2GroupUuid
 callWrite("update_track",'{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Lead Source","bounced":true}')
 callWrite("update_group",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","name":"Lead Main","voice":{"paramLoudness":-2}}')
@@ -479,7 +502,11 @@ local track1Fingerprint="main-group:"..project.tracks[1].refs[1].group.uuid
 callWrite("set_track_mixer",'{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","gainDecibel":-3,"pan":0.25,"muted":false,"solo":true}')
 call("get_track_mixer",'{"trackIndex":1}')
 call("playback",'{"operation":"seek","timeSeconds":1.5}')
+call("playback",'{"operation":"play"}')
+local paused=call("playback",'{"operation":"pause"}')
+assert(paused:find('"status":"stopped"',1,true),"pause must report SynthV's stopped status")
+assert(paused:find('"playheadSeconds":1.5',1,true),"pause must preserve a non-zero playhead")
 call("playback",'{"operation":"loop","timeSeconds":1,"endSeconds":2}')
 callWrite("delete_notes",'{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(newFingerprint)..'"}]}')
-assert(project.undo==14,"expected 14 undo records, got "..project.undo)
+assert(project.undo==15,"expected 15 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

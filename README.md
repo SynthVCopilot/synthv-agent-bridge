@@ -143,6 +143,30 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 
 All track, group, and note indices are **1-based**, matching the SynthV Lua API. Note and automation coordinates are group-local blicks unless the returned field explicitly says `absolute`. Playback positions are seconds.
 
+### Track colors
+
+Track write tools accept the backward-compatible `#RRGGBB` form or a native
+`AARRGGBB` value. The bridge converts `#RRGGBB` to opaque `ffRRGGBB` before
+calling SynthV and verifies the value retained by the host. Track reads preserve
+SynthV's raw `displayColor` and also return normalized `displayColorArgb` and
+`displayColorRgb` fields when the host value is recognizable.
+
+SynthV's editor offers a small preset palette, but the public scripting API only
+defines the value as a hexadecimal string. The bridge therefore validates the
+encoding without restricting callers to undocumented palette constants.
+
+### Host capability differences
+
+Some SynthV hosts expose `Note:getPitchAutoMode()` but fail to expose or execute
+`Note:setPitchAutoMode()`. If a requested value already matches the note, the
+bridge safely skips the setter. A real mode change on an incompatible host fails
+with `UNSUPPORTED_HOST_CAPABILITY` before an undo record is created.
+
+Time-axis replacement is performed as remove-then-add at occupied positions.
+Every successful `set_time_axis` response has `verified: true`; a host that does
+not retain the requested marks returns `HOST_POSTCONDITION_FAILED` instead of a
+false success.
+
 ## Safe editing workflow
 
 The server instructions tell an agent to follow this sequence:

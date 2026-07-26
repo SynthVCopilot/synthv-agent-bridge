@@ -17,10 +17,14 @@ const durationSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
 const midiPitchSchema = z.number().int().min(0).max(127);
 const fingerprintSchema = z.string().min(1);
 const groupUuidSchema = z.string().min(1);
+export const TRACK_DISPLAY_COLOR_PATTERN =
+  /^(?:#[0-9A-Fa-f]{6}|#?[0-9A-Fa-f]{8})$/;
 const displayColorSchema = z
   .string()
-  .regex(/^#[0-9A-Fa-f]{6}$/)
-  .describe("Track color in #RRGGBB format.");
+  .regex(TRACK_DISPLAY_COLOR_PATTERN)
+  .describe(
+    "Track color as #RRGGBB or AARRGGBB. #RRGGBB is normalized to opaque SynthV AARRGGBB.",
+  );
 const languageOverrideSchema = z.enum([
   "",
   "mandarin",

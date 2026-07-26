@@ -35,7 +35,6 @@ jobs:
       - run: luac -p synthv/StopSynthVAgentBridge.lua
       - name: Run mock SynthV integration smoke test
         id: lua-smoke
-        continue-on-error: true
         env:
           SYNTHV_AGENT_BRIDGE_DIR: ${{ github.workspace }}/.mock-ipc
           BRIDGE_SCRIPT: ${{ github.workspace }}/synthv/SynthVAgentBridge.lua

@@ -589,6 +589,79 @@ local function safeCall(callback, fallback)
     return fallback
 end
 
+local function normalizeDisplayColor(value, name)
+    value = requireString(value, name, false)
+    local hex = value:gsub("^#", "")
+    if not hex:match("^[0-9A-Fa-f]+$") or (#hex ~= 6 and #hex ~= 8) then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            name .. " must use #RRGGBB or AARRGGBB format"
+        )
+    end
+    if #hex == 6 then
+        hex = "ff" .. hex
+    end
+    return hex:lower()
+end
+
+local function describeDisplayColor(raw)
+    local result = {
+        displayColor = raw
+    }
+    if type(raw) ~= "string" then
+        return result
+    end
+
+    local hex = raw:gsub("^#", "")
+    if not hex:match("^[0-9A-Fa-f]+$") then
+        return result
+    end
+    if #hex == 6 then
+        result.displayColorArgb = ("ff" .. hex):lower()
+        result.displayColorRgb = ("#" .. hex):lower()
+    elseif #hex == 8 then
+        result.displayColorArgb = hex:lower()
+        result.displayColorRgb = ("#" .. hex:sub(3)):lower()
+    end
+    return result
+end
+
+local function setDisplayColorVerified(track, color, path)
+    local writeOk, writeError = pcall(function()
+        track:setDisplayColor(color)
+    end)
+    if not writeOk then
+        raiseBridgeError(
+            "UNSUPPORTED_HOST_CAPABILITY",
+            "This SynthV Lua host rejected the track display color",
+            {
+                capability = "Track.setDisplayColor",
+                field = path,
+                requestedArgb = color,
+                cause = tostring(writeError)
+            }
+        )
+    end
+
+    local raw = safeCall(function()
+        return track:getDisplayColor()
+    end, "")
+    local observed = describeDisplayColor(raw)
+    if observed.displayColorArgb ~= color then
+        raiseBridgeError(
+            "HOST_POSTCONDITION_FAILED",
+            "SynthV did not retain the requested track display color",
+            {
+                field = path,
+                requestedArgb = color,
+                actualRaw = raw,
+                actualArgb = observed.displayColorArgb or JSON_NULL
+            }
+        )
+    end
+
+end
+
 local function copyHostInfo()
     local result = {}
     local fields = {
@@ -966,14 +1039,16 @@ local function serializeMainGroupLocator(track, trackIndex)
 end
 
 local function serializeTrackSummary(track, trackIndex)
-    return {
+    local rawDisplayColor = safeCall(function()
+        return track:getDisplayColor()
+    end, "")
+    local color = describeDisplayColor(rawDisplayColor)
+    local result = {
         trackIndex = trackIndex,
         fingerprint = makeTrackFingerprint(track),
         mainGroupUuid = getMainGroupUuid(track),
         name = track:getName(),
-        displayColor = safeCall(function()
-            return track:getDisplayColor()
-        end, ""),
+        displayColor = color.displayColor,
         displayOrder = safeCall(function()
             return track:getDisplayOrder()
         end, trackIndex),
@@ -985,6 +1060,13 @@ local function serializeTrackSummary(track, trackIndex)
         end, false),
         mixer = serializeMixer(track)
     }
+    if color.displayColorArgb then
+        result.displayColorArgb = color.displayColorArgb
+    end
+    if color.displayColorRgb then
+        result.displayColorRgb = color.displayColorRgb
+    end
+    return result
 end
 
 local function serializeGroup(reference, groupIndex, offset, limit)
@@ -1204,7 +1286,64 @@ local NOTE_CHANGE_KEYS = {
     attributes = true
 }
 
-local function applyPreparedNoteChanges(note, changes)
+local function applyPitchAutoMode(note, value, path)
+    local readOk, currentValue = pcall(function()
+        return note:getPitchAutoMode()
+    end)
+    if readOk and type(currentValue) == "boolean" and currentValue == value then
+        return
+    end
+
+    local setterAvailable = safeCall(function()
+        return type(note.setPitchAutoMode) == "function"
+    end, false)
+    if not setterAvailable then
+        raiseBridgeError(
+            "UNSUPPORTED_HOST_CAPABILITY",
+            "This SynthV Lua host cannot change pitchAutoMode",
+            {
+                capability = "Note.setPitchAutoMode",
+                field = path,
+                requestedValue = value,
+                currentValue = readOk and currentValue or JSON_NULL
+            }
+        )
+    end
+
+    local writeOk, writeError = pcall(function()
+        note:setPitchAutoMode(value)
+    end)
+    if not writeOk then
+        raiseBridgeError(
+            "UNSUPPORTED_HOST_CAPABILITY",
+            "This SynthV Lua host rejected a pitchAutoMode change",
+            {
+                capability = "Note.setPitchAutoMode",
+                field = path,
+                requestedValue = value,
+                cause = tostring(writeError)
+            }
+        )
+    end
+
+    local verifyOk, actualValue = pcall(function()
+        return note:getPitchAutoMode()
+    end)
+    if verifyOk and type(actualValue) == "boolean" and actualValue ~= value then
+        raiseBridgeError(
+            "HOST_POSTCONDITION_FAILED",
+            "SynthV did not retain the requested pitchAutoMode value",
+            {
+                capability = "Note.setPitchAutoMode",
+                field = path,
+                requestedValue = value,
+                actualValue = actualValue
+            }
+        )
+    end
+end
+
+local function applyPreparedNoteChanges(note, changes, path)
     if changes.onset ~= nil and changes.duration ~= nil then
         note:setTimeRange(changes.onset, changes.duration)
     else
@@ -1234,7 +1373,7 @@ local function applyPreparedNoteChanges(note, changes)
         note:setMusicalType(changes.musicalType)
     end
     if changes.pitchAutoMode ~= nil then
-        note:setPitchAutoMode(changes.pitchAutoMode)
+        applyPitchAutoMode(note, changes.pitchAutoMode, path .. ".pitchAutoMode")
     end
     if changes.rapAccent ~= nil then
         note:setRapAccent(changes.rapAccent)
@@ -1317,9 +1456,12 @@ local function prepareNoteChanges(note, changes, path)
     -- from partially applying when a later setter rejects a value.
     local candidate = note:clone()
     local ok, validationError = pcall(function()
-        applyPreparedNoteChanges(candidate, prepared)
+        applyPreparedNoteChanges(candidate, prepared, path)
     end)
     if not ok then
+        if type(validationError) == "table" and getmetatable(validationError) == BRIDGE_ERROR_MT then
+            error(validationError, 0)
+        end
         raiseBridgeError("INVALID_ARGUMENT", "SynthV rejected the requested note changes", {
             cause = tostring(validationError)
         })
@@ -1469,18 +1611,38 @@ function handlers.set_time_axis(payload)
     end
 
     local preparedTempoMarks = {}
+    local tempoAdditionsByPosition = {}
     for index = 1, #tempoMarks do
         local mark = requireObject(tempoMarks[index], "tempoMarks[" .. index .. "]")
-        preparedTempoMarks[#preparedTempoMarks + 1] = {
+        local preparedMark = {
             position = requireInteger(mark.position, "tempoMarks[" .. index .. "].position", 0),
             bpm = requireFiniteNumber(mark.bpm, "tempoMarks[" .. index .. "].bpm", 1, 1000)
         }
+        if tempoAdditionsByPosition[preparedMark.position] then
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "tempoMarks contains the same position more than once",
+                { position = preparedMark.position }
+            )
+        end
+        tempoAdditionsByPosition[preparedMark.position] = preparedMark
+        preparedTempoMarks[#preparedTempoMarks + 1] = preparedMark
     end
 
     local preparedRemoveTempoPositions = {}
+    local tempoRemovalsByPosition = {}
     for index = 1, #removeTempoPositions do
-        preparedRemoveTempoPositions[#preparedRemoveTempoPositions + 1] =
+        local position =
             requireInteger(removeTempoPositions[index], "removeTempoPositions[" .. index .. "]", 0)
+        if tempoRemovalsByPosition[position] then
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "removeTempoPositions contains the same position more than once",
+                { position = position }
+            )
+        end
+        tempoRemovalsByPosition[position] = true
+        preparedRemoveTempoPositions[#preparedRemoveTempoPositions + 1] = position
     end
 
     local allowedDenominators = {
@@ -1493,23 +1655,56 @@ function handlers.set_time_axis(payload)
         [64] = true
     }
     local preparedMeasureMarks = {}
+    local measureAdditionsByPosition = {}
     for index = 1, #measureMarks do
         local mark = requireObject(measureMarks[index], "measureMarks[" .. index .. "]")
         local denominator = requireInteger(mark.denominator, "measureMarks[" .. index .. "].denominator", 1, 64)
         if not allowedDenominators[denominator] then
             raiseBridgeError("INVALID_ARGUMENT", "Time-signature denominator must be a power of two from 1 to 64")
         end
-        preparedMeasureMarks[#preparedMeasureMarks + 1] = {
+        local preparedMark = {
             measure = requireInteger(mark.measure, "measureMarks[" .. index .. "].measure", 0),
             numerator = requireInteger(mark.numerator, "measureMarks[" .. index .. "].numerator", 1, 32),
             denominator = denominator
         }
+        if measureAdditionsByPosition[preparedMark.measure] then
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "measureMarks contains the same measure more than once",
+                { measure = preparedMark.measure }
+            )
+        end
+        measureAdditionsByPosition[preparedMark.measure] = preparedMark
+        preparedMeasureMarks[#preparedMeasureMarks + 1] = preparedMark
     end
 
     local preparedRemoveMeasurePositions = {}
+    local measureRemovalsByPosition = {}
     for index = 1, #removeMeasurePositions do
-        preparedRemoveMeasurePositions[#preparedRemoveMeasurePositions + 1] =
+        local measure =
             requireInteger(removeMeasurePositions[index], "removeMeasurePositions[" .. index .. "]", 0)
+        if measureRemovalsByPosition[measure] then
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "removeMeasurePositions contains the same measure more than once",
+                { measure = measure }
+            )
+        end
+        measureRemovalsByPosition[measure] = true
+        preparedRemoveMeasurePositions[#preparedRemoveMeasurePositions + 1] = measure
+    end
+
+    if tempoRemovalsByPosition[0] and not tempoAdditionsByPosition[0] then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "The initial tempo mark can only be removed when a replacement at position 0 is supplied"
+        )
+    end
+    if measureRemovalsByPosition[0] and not measureAdditionsByPosition[0] then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "The initial time-signature mark can only be removed when a replacement at measure 0 is supplied"
+        )
     end
 
     local function applyOperations(target)
@@ -1521,19 +1716,95 @@ function handlers.set_time_axis(payload)
         end
         for index = 1, #preparedTempoMarks do
             local mark = preparedTempoMarks[index]
+            -- SynthV 2.2.1 can silently keep the old value when addTempoMark
+            -- targets an occupied position, despite the public API describing
+            -- this operation as an update. Remove first for deterministic
+            -- replacement semantics.
+            target:removeTempoMark(mark.position)
             target:addTempoMark(mark.position, mark.bpm)
         end
         for index = 1, #preparedMeasureMarks do
             local mark = preparedMeasureMarks[index]
+            target:removeMeasureMark(mark.measure)
             target:addMeasureMark(mark.measure, mark.numerator, mark.denominator)
+        end
+    end
+
+    local function assertPostconditions(serialized, errorCode, phase)
+        local temposByPosition = {}
+        for index = 1, #serialized.tempoMarks do
+            local mark = serialized.tempoMarks[index]
+            temposByPosition[mark.position] = mark
+        end
+        local measuresByPosition = {}
+        for index = 1, #serialized.measureMarks do
+            local mark = serialized.measureMarks[index]
+            measuresByPosition[mark.measure] = mark
+        end
+
+        for position, expected in pairs(tempoAdditionsByPosition) do
+            local actual = temposByPosition[position]
+            if not actual or math.abs(actual.bpm - expected.bpm) > 0.000001 then
+                raiseBridgeError(
+                    errorCode,
+                    "SynthV did not apply the requested tempo mark",
+                    {
+                        phase = phase,
+                        position = position,
+                        expectedBpm = expected.bpm,
+                        actualBpm = actual and actual.bpm or JSON_NULL
+                    }
+                )
+            end
+        end
+        for position, _value in pairs(tempoRemovalsByPosition) do
+            if not tempoAdditionsByPosition[position] and temposByPosition[position] then
+                raiseBridgeError(
+                    errorCode,
+                    "SynthV did not remove the requested tempo mark",
+                    { phase = phase, position = position }
+                )
+            end
+        end
+        for measure, expected in pairs(measureAdditionsByPosition) do
+            local actual = measuresByPosition[measure]
+            if not actual or
+                actual.numerator ~= expected.numerator or
+                actual.denominator ~= expected.denominator then
+                raiseBridgeError(
+                    errorCode,
+                    "SynthV did not apply the requested time-signature mark",
+                    {
+                        phase = phase,
+                        measure = measure,
+                        expectedNumerator = expected.numerator,
+                        expectedDenominator = expected.denominator,
+                        actualNumerator = actual and actual.numerator or JSON_NULL,
+                        actualDenominator = actual and actual.denominator or JSON_NULL
+                    }
+                )
+            end
+        end
+        for measure, _value in pairs(measureRemovalsByPosition) do
+            if not measureAdditionsByPosition[measure] and measuresByPosition[measure] then
+                raiseBridgeError(
+                    errorCode,
+                    "SynthV did not remove the requested time-signature mark",
+                    { phase = phase, measure = measure }
+                )
+            end
         end
     end
 
     local candidate = timeAxis:clone()
     local valid, validationError = pcall(function()
         applyOperations(candidate)
+        assertPostconditions(serializeTimeAxis(candidate), "INVALID_ARGUMENT", "validation")
     end)
     if not valid then
+        if type(validationError) == "table" and getmetatable(validationError) == BRIDGE_ERROR_MT then
+            error(validationError, 0)
+        end
         raiseBridgeError("INVALID_ARGUMENT", "SynthV rejected the requested time-axis edits", {
             cause = tostring(validationError)
         })
@@ -1542,9 +1813,11 @@ function handlers.set_time_axis(payload)
     project:newUndoRecord()
     applyOperations(timeAxis)
     local result = serializeTimeAxis(timeAxis)
+    assertPostconditions(result, "HOST_POSTCONDITION_FAILED", "project")
     result.appliedOperationCount =
         #preparedTempoMarks + #preparedRemoveTempoPositions +
         #preparedMeasureMarks + #preparedRemoveMeasurePositions
+    result.verified = true
     return result
 end
 
@@ -1678,14 +1951,14 @@ function handlers.add_track(payload)
     local project = getProject()
     local name = optionalString(payload.name, "name", false) or "New Track"
     local displayColor = optionalString(payload.displayColor, "displayColor", false)
-    if displayColor and not displayColor:match("^#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]$") then
-        raiseBridgeError("INVALID_ARGUMENT", "displayColor must use #RRGGBB format")
+    if displayColor then
+        displayColor = normalizeDisplayColor(displayColor, "displayColor")
     end
 
     local track = SV:create("Track")
     track:setName(name)
     if displayColor then
-        track:setDisplayColor(displayColor)
+        setDisplayColorVerified(track, displayColor, "displayColor")
     end
 
     project:newUndoRecord()
@@ -1709,8 +1982,8 @@ function handlers.update_track(payload)
     local name = optionalString(payload.name, "name", false)
     local displayColor = optionalString(payload.displayColor, "displayColor", false)
     local bounced = optionalBoolean(payload.bounced, "bounced")
-    if displayColor and not displayColor:match("^#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]$") then
-        raiseBridgeError("INVALID_ARGUMENT", "displayColor must use #RRGGBB format")
+    if displayColor then
+        displayColor = normalizeDisplayColor(displayColor, "displayColor")
     end
     if name == nil and displayColor == nil and bounced == nil then
         raiseBridgeError("INVALID_ARGUMENT", "At least one track field must be supplied")
@@ -1721,7 +1994,7 @@ function handlers.update_track(payload)
             target:setName(name)
         end
         if displayColor ~= nil then
-            target:setDisplayColor(displayColor)
+            setDisplayColorVerified(target, displayColor, "displayColor")
         end
         if bounced ~= nil then
             target:setBounced(bounced)
@@ -1733,6 +2006,9 @@ function handlers.update_track(payload)
         applyUpdates(candidate)
     end)
     if not valid then
+        if type(validationError) == "table" and getmetatable(validationError) == BRIDGE_ERROR_MT then
+            error(validationError, 0)
+        end
         raiseBridgeError("INVALID_ARGUMENT", "SynthV rejected the requested track changes", {
             cause = tostring(validationError)
         })
@@ -1754,8 +2030,8 @@ function handlers.clone_track(payload)
 
     local name = optionalString(payload.name, "name", false)
     local displayColor = optionalString(payload.displayColor, "displayColor", false)
-    if displayColor and not displayColor:match("^#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]$") then
-        raiseBridgeError("INVALID_ARGUMENT", "displayColor must use #RRGGBB format")
+    if displayColor then
+        displayColor = normalizeDisplayColor(displayColor, "displayColor")
     end
     local bounced = optionalBoolean(payload.bounced, "bounced")
     local clearNotes = optionalBoolean(payload.clearNotes, "clearNotes")
@@ -1775,7 +2051,7 @@ function handlers.clone_track(payload)
         clonedTrack:setName(name)
     end
     if displayColor ~= nil then
-        clonedTrack:setDisplayColor(displayColor)
+        setDisplayColorVerified(clonedTrack, displayColor, "displayColor")
     end
     if bounced ~= nil then
         clonedTrack:setBounced(bounced)
@@ -1982,7 +2258,11 @@ function handlers.add_notes(payload)
             note:setMusicalType(musicalType)
         end
         if isProvided(input.pitchAutoMode) then
-            note:setPitchAutoMode(requireBoolean(input.pitchAutoMode, "notes[" .. index .. "].pitchAutoMode"))
+            applyPitchAutoMode(
+                note,
+                requireBoolean(input.pitchAutoMode, "notes[" .. index .. "].pitchAutoMode"),
+                "notes[" .. index .. "].pitchAutoMode"
+            )
         end
         if isProvided(input.rapAccent) then
             local rapAccent = requireString(input.rapAccent, "notes[" .. index .. "].rapAccent", true)
@@ -2032,15 +2312,17 @@ function handlers.edit_notes(payload)
         seen[noteIndex] = true
         local fingerprint = requireString(edit.fingerprint, "edits[" .. index .. "].fingerprint", false)
         local note = validateFingerprint(group, noteIndex, fingerprint)
+        local changesPath = "edits[" .. index .. "].changes"
         prepared[#prepared + 1] = {
             note = note,
-            changes = prepareNoteChanges(note, edit.changes, "edits[" .. index .. "].changes")
+            changes = prepareNoteChanges(note, edit.changes, changesPath),
+            path = changesPath
         }
     end
 
     project:newUndoRecord()
     for index = 1, #prepared do
-        applyPreparedNoteChanges(prepared[index].note, prepared[index].changes)
+        applyPreparedNoteChanges(prepared[index].note, prepared[index].changes, prepared[index].path)
     end
 
     local notes = json.array()

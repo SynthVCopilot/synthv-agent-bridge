@@ -2,6 +2,20 @@
 
 All notable changes will be documented in this file.
 
+## Unreleased
+
+### Fixed
+
+- Normalize track colors from the public `#RRGGBB` form to the opaque `AARRGGBB` form retained by SynthV, verify color writes, and expose normalized RGB/ARGB read fields.
+- Replace occupied tempo and time-signature positions with an explicit remove/add sequence and verify time-axis postconditions so a silent host no-op is never reported as applied.
+- Treat `pitchAutoMode` writes as an optional host capability. Requests that already match the current value do not require a setter; unsupported changes now fail before an undo record with `UNSUPPORTED_HOST_CAPABILITY`.
+
+### Changed
+
+- The Lua mock now reproduces the SynthV 2.2.1 behaviors found during live testing, including strict ARGB track colors and occupied time-axis positions that require removal before replacement.
+- The Lua integration smoke test is now required to pass in CI.
+- Playback smoke coverage now verifies that `pause` reports `stopped` while preserving a non-zero playhead.
+
 ## 0.1.1 - 2026-07-26
 
 ### Added

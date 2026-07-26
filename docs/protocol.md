@@ -67,3 +67,24 @@ The bridge reports `STALE_GROUP`, `STALE_NOTE`, `STALE_TRACK`, `STALE_AUTOMATION
 - A protocol-version mismatch fails closed.
 - New action names and optional payload fields may be added without changing the v1 envelope.
 - Unknown fields may be added to read responses in minor releases; clients should ignore fields they do not recognize.
+
+### Track color compatibility
+
+- Track write actions accept `#RRGGBB`, `AARRGGBB`, or `#AARRGGBB`.
+- Six-digit RGB is normalized to an opaque native SynthV value by prepending `ff` and removing `#`.
+- Track reads keep the host's raw `displayColor` and may additionally include `displayColorArgb` and `displayColorRgb`.
+- A color write is verified through `Track:getDisplayColor()` before it is reported as successful.
+
+### Verified time-axis writes
+
+`set_time_axis` explicitly removes an occupied tempo/time-signature position
+before adding its replacement. The bridge validates the complete operation on a
+cloned `TimeAxis`, applies one undo record, and verifies the project-owned
+`TimeAxis` afterward. Successful responses include `verified: true`.
+
+### Optional host capabilities
+
+When the current SynthV Lua host cannot execute `Note:setPitchAutoMode()`, a
+request that would actually change the note fails with
+`UNSUPPORTED_HOST_CAPABILITY`. A request matching the current value succeeds
+without invoking the unavailable setter.
