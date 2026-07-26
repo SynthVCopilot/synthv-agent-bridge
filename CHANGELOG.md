@@ -2,14 +2,6 @@
 
 All notable changes will be documented in this file.
 
-## Unreleased
-
-### Fixed
-
-- Keep both Bridge and MCP heartbeat indicators visible in the narrow native
-  side panel, and clarify that project Undo requires main-editor focus or
-  **Edit > Undo** when a side-panel text field has focus.
-
 ## 0.1.4 - 2026-07-26
 
 ### Added
@@ -38,6 +30,28 @@ All notable changes will be documented in this file.
 - Group voice and phoneme reads now report current/selected editor context.
   Their write tools offer opt-in guards for the current piano-roll Group and
   selected notes while retaining explicit unselected-object automation.
+- Side-panel diagnostics, explicit task states, structured before/after/risk
+  previews, cancellation, and a clearable 20-entry privacy-limited history.
+- `sidebar_status` plus a read-only `npm run doctor` command for versions,
+  Bridge/MCP heartbeats, IPC state, installed scripts, and Codex configuration.
+- Full-preflight `apply_transaction` batches of up to 32 independent writes in
+  one undo record, with optional guarded reverse steps for current-session
+  `rollback_transaction`.
+- Range-constrained harmony-track creation, deterministic fingerprint-guarded
+  timing humanization, lyrics-to-note fitting, and scoop, falloff, vibrato,
+  crescendo, and breathiness expression presets.
+
+### Fixed
+
+- Keep both Bridge and MCP heartbeat indicators visible in the narrow native
+  side panel, and clarify that project Undo requires main-editor focus or
+  **Edit > Undo** when a side-panel text field has focus.
+- Detect whether the installed side-panel file actually changed, avoid
+  unnecessary rescans, and explain that a required SynthV rescan stops the
+  persistent Bridge and must be followed by one manual Bridge start.
+- Keep the real SynthV 2.2.1 `Project` object during transaction preflight and
+  intercept only the shared undo-record boundary, avoiding invalidated Lua
+  object proxies on the live host.
 
 ### Security
 

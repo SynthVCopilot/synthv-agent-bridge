@@ -13,6 +13,7 @@ import { FileIpcClient } from "./ipc/file-ipc-client.js";
 import {
   SIDEBAR_PREVIEW_ACTIONS,
   SidebarCoordinator,
+  TRANSACTION_STEP_ACTIONS,
 } from "./sidebar-coordinator.js";
 
 const indexSchema = z.number().int().min(1);
@@ -155,6 +156,13 @@ const noteChangesSchema = z
     message: "At least one note property must be changed.",
   });
 
+const fingerprintedNoteSchema = z.object({
+  noteIndex: indexSchema.describe("Current 1-based note index."),
+  fingerprint: fingerprintSchema.describe(
+    "Fingerprint from the latest note or selection read.",
+  ),
+});
+
 const automationPointSchema = z.object({
   position: blickSchema.describe("Group-local position in blicks."),
   value: z.number().finite(),
@@ -275,6 +283,18 @@ const trackMixerInputSchema = z
     { message: "At least one mixer field must be changed." },
   );
 
+const sidebarPreviewChangeSchema = z.object({
+  label: z.string().min(1).max(200),
+  before: z.string().max(1000).optional(),
+  after: z.string().max(1000).optional(),
+  count: z.number().int().min(0).optional(),
+});
+
+const transactionStepSchema = z.object({
+  action: z.enum(TRANSACTION_STEP_ACTIONS),
+  payload: z.record(z.string(), z.unknown()),
+});
+
 function jsonToolResult(value: unknown): CallToolResult {
   return {
     content: [
@@ -318,7 +338,7 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     {
       instructions:
-        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, voice, phoneme, library, automation, Smart Pitch state, or selection immediately before writing. When the user refers to the current or selected singer, group, or notes, inspect the returned selection context and enable the applicable selection guard. Explicitly located UUID/index/fingerprint operations may target unselected objects. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits. When the user asks to handle a request from the SynthV sidebar, call sidebar_get_request, read the latest applicable SynthV state, and publish exactly one guarded write through sidebar_publish_preview instead of executing it directly. The user confirms or dismisses that preview inside SynthV.",
+        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, voice, phoneme, library, automation, Smart Pitch state, or selection immediately before writing. When the user refers to the current or selected singer, group, or notes, inspect the returned selection context and enable the applicable selection guard. Explicitly located UUID/index/fingerprint operations may target unselected objects. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits. When the user asks to handle a request from the SynthV sidebar, call sidebar_get_request, read the latest applicable SynthV state, and publish exactly one guarded write or apply_transaction through sidebar_publish_preview instead of executing it directly. Include structured changes and risks. The user confirms or dismisses that preview inside SynthV.",
     },
   );
   sidebar.start();
@@ -355,11 +375,26 @@ export function createServer(config: BridgeConfig): McpServer {
   );
 
   server.registerTool(
+    "sidebar_status",
+    {
+      title: "Inspect SynthV Sidebar Status",
+      description:
+        "Read Bridge/MCP diagnostics, the current sidebar task state, IPC location, recent summaries, and the latest coordinator error.",
+      inputSchema: {},
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async () => runTool(async () => sidebar.getDiagnostics()),
+  );
+
+  server.registerTool(
     "sidebar_publish_preview",
     {
       title: "Publish SynthV Sidebar Preview",
       description:
-        "Publish one fully specified, fingerprint-guarded SynthV write for review in the native side panel. This does not edit the project; the user must click Apply in SynthV. Multi-tool transactions are not supported in v0.1.4.",
+        "Publish one fully specified, fingerprint-guarded SynthV write or transaction for review in the native side panel. This does not edit the project; the user must click Apply in SynthV.",
       inputSchema: {
         requestId: z
           .string()
@@ -377,6 +412,20 @@ export function createServer(config: BridgeConfig): McpServer {
           .max(8000)
           .optional()
           .describe("Optional review details, safety constraints, and expected changes."),
+        changes: z
+          .array(sidebarPreviewChangeSchema)
+          .max(100)
+          .optional()
+          .describe(
+            "Structured before/after/count rows shown in the SynthV preview.",
+          ),
+        risks: z
+          .array(z.string().min(1).max(1000))
+          .max(100)
+          .optional()
+          .describe(
+            "Staleness, selection, range, or other review warnings shown prominently.",
+          ),
         action: z.enum(SIDEBAR_PREVIEW_ACTIONS),
         payload: z
           .record(z.string(), z.unknown())
@@ -403,6 +452,8 @@ export function createServer(config: BridgeConfig): McpServer {
             : { requestId: input.requestId }),
           summary: input.summary,
           ...(input.details === undefined ? {} : { details: input.details }),
+          ...(input.changes === undefined ? {} : { changes: input.changes }),
+          ...(input.risks === undefined ? {} : { risks: input.risks }),
           action: input.action,
           payload: input.payload,
           replace: input.replace,
@@ -1639,6 +1690,164 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     async (input) =>
       runTool(async () => client.send("set_track_mixer", input)),
+  );
+
+  server.registerTool(
+    "apply_transaction",
+    {
+      title: "Apply SynthV Transaction",
+      description:
+        "Preflight every independent project-write step, then execute the complete batch in one SynthV undo record. Validation failures leave the project unchanged. Optional reverse steps are stored for guarded rollback during the current Bridge session.",
+      inputSchema: {
+        summary: z.string().min(1).max(1000),
+        steps: z.array(transactionStepSchema).min(1).max(32),
+        rollbackSteps: z
+          .array(transactionStepSchema)
+          .max(32)
+          .optional()
+          .describe(
+            "Optional reverse steps. Payload values may use {$result:{step:1,path:['field']}} references to forward results.",
+          ),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("apply_transaction", input)),
+  );
+
+  server.registerTool(
+    "rollback_transaction",
+    {
+      title: "Rollback SynthV Transaction",
+      description:
+        "Execute the guarded reverse steps stored by apply_transaction. Current fingerprints must still match, and the rollback becomes one new SynthV undo record.",
+      inputSchema: {
+        transactionId: z.string().min(1).max(300),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("rollback_transaction", input)),
+  );
+
+  server.registerTool(
+    "create_harmony_track",
+    {
+      title: "Create SynthV Harmony Track",
+      description:
+        "Clone a fingerprint-verified vocal track, transpose its notes, keep pitches inside an optional voice range by octave displacement, and set the cloned track mixer in one undo record.",
+      inputSchema: {
+        sourceTrackIndex: indexSchema,
+        sourceTrackFingerprint: fingerprintSchema,
+        name: z.string().min(1).max(200).optional(),
+        intervalSemitones: z.number().int().min(-36).max(36).refine((v) => v !== 0),
+        minimumPitch: midiPitchSchema.default(0),
+        maximumPitch: midiPitchSchema.default(127),
+        rangePolicy: z.enum(["reject", "octave"]).default("octave"),
+        gainDecibel: z.number().finite().min(-24).max(24).optional(),
+        pan: z.number().finite().min(-1).max(1).optional(),
+        displayColor: displayColorSchema.optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("create_harmony_track", input)),
+  );
+
+  server.registerTool(
+    "humanize_notes",
+    {
+      title: "Humanize SynthV Note Timing",
+      description:
+        "Apply deterministic, fingerprint-guarded onset and duration variation to a note set. Chords can share one onset offset so their internal timing remains aligned.",
+      inputSchema: {
+        ...groupLocatorShape,
+        notes: z.array(fingerprintedNoteSchema).min(1).max(512),
+        seed: z.number().int().min(0).max(2_147_483_647).default(1),
+        maxOnsetOffset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+        maxDurationOffset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+        preserveChords: z.boolean().default(true),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => runTool(async () => client.send("humanize_notes", input)),
+  );
+
+  server.registerTool(
+    "apply_expression_preset",
+    {
+      title: "Apply SynthV Expression Preset",
+      description:
+        "Apply a fingerprint-guarded scoop, falloff, vibrato, crescendo, or breathiness preset using documented note attributes and group automation.",
+      inputSchema: {
+        ...groupLocatorShape,
+        preset: z.enum([
+          "scoop",
+          "falloff",
+          "vibrato",
+          "crescendo",
+          "breathiness",
+        ]),
+        notes: z.array(fingerprintedNoteSchema).min(1).max(512).optional(),
+        expectedAutomationFingerprint: fingerprintSchema.optional(),
+        beginPosition: blickSchema.optional(),
+        endPosition: blickSchema.optional(),
+        strength: z.number().finite().min(0).max(2).default(1),
+        startValue: z.number().finite().optional(),
+        endValue: z.number().finite().optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("apply_expression_preset", input)),
+  );
+
+  server.registerTool(
+    "fit_lyrics",
+    {
+      title: "Fit Lyrics to SynthV Notes",
+      description:
+        "Assign one supplied lyric syllable and optional phoneme sequence to each fingerprint-verified note in one undo record.",
+      inputSchema: {
+        ...groupLocatorShape,
+        notes: z.array(fingerprintedNoteSchema).min(1).max(512),
+        syllables: z.array(z.string().max(1000)).min(1).max(512),
+        phonemes: z.array(z.string().max(4000)).max(512).optional(),
+        fillRemainder: z.enum(["reject", "keep", "hyphen"]).default("reject"),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) => runTool(async () => client.send("fit_lyrics", input)),
   );
 
   server.registerTool(

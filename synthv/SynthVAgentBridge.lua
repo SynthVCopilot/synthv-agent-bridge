@@ -34,6 +34,13 @@ if type(runtimeState) ~= "table" then
     }
     rawset(_G, RUNTIME_STATE_KEY, runtimeState)
 end
+-- Rollback plans are intentionally scoped to one loaded Bridge session. Other
+-- runtime fields survive hot reload so selection observers are not duplicated.
+runtimeState.rollbackTransactions = {}
+runtimeState.transactionRevision = 0
+
+local TRANSACTION_VALIDATION_SENTINEL = {}
+local transactionMode = nil
 
 function json.array(values)
     return setmetatable(values or {}, JSON_ARRAY_MT)
@@ -426,6 +433,7 @@ local RELOAD_FILE = PREFIX .. ".reload"
 local INSTALL_FILE = PREFIX .. ".install.json"
 local SESSION_FILE = PREFIX .. ".session.json"
 local SIDEBAR_ACTIVITY_FILE = PREFIX .. ".sidebar.activity.txt"
+local SIDEBAR_HISTORY_FILE = PREFIX .. ".sidebar.history.json"
 
 math.randomseed(os.time() + math.floor(os.clock() * 1000000))
 local SESSION_TOKEN = string.format("%d-%d-%06d", os.time(), math.floor(os.clock() * 1000000), math.random(0, 999999))
@@ -748,16 +756,37 @@ local function isoTimestamp()
 end
 
 local function writeSidebarActivity(action)
-    local content = table.concat({
+    local now = os.time() * 1000
+    local history = readJson(SIDEBAR_HISTORY_FILE)
+    if not json.isArray(history) then history = json.array() end
+    history[#history + 1] = {
+        id = SESSION_TOKEN .. "-" .. tostring(now),
+        status = "success",
+        action = action,
+        summary = action,
+        updatedAtEpochMs = now
+    }
+    while #history > 20 do table.remove(history, 1) end
+    writeJsonAtomically(SIDEBAR_HISTORY_FILE, history)
+
+    local lines = {
         "synthv-agent-bridge-sidebar-activity-v1",
         "status=success",
         "action=" .. action,
-        "updatedAtEpochMs=" .. tostring(os.time() * 1000),
+        "updatedAtEpochMs=" .. tostring(now),
         "最近操作：已完成",
         action,
-        "撤销：先点击 SynthV 主编辑区，再按 Ctrl+Z；也可使用“编辑 → 撤销”。",
-        ""
-    }, "\n")
+        "撤销：先点击 SynthV 主编辑区，再按 Ctrl+Z；也可使用“编辑 → 撤销”。"
+    }
+    if #history > 1 then
+        lines[#lines + 1] = ""
+        lines[#lines + 1] = "历史："
+        for index = math.max(1, #history - 5), #history - 1 do
+            lines[#lines + 1] = "✓ " .. tostring(history[index].summary)
+        end
+    end
+    lines[#lines + 1] = ""
+    local content = table.concat(lines, "\n")
     writeFileAtomically(SIDEBAR_ACTIVITY_FILE, content)
 end
 
@@ -809,6 +838,16 @@ local function getProject()
         raiseBridgeError("PROJECT_UNAVAILABLE", "No Synthesizer V project is open")
     end
     return project
+end
+
+local function createUndoRecord(project)
+    if transactionMode == "validate" then
+        error(TRANSACTION_VALIDATION_SENTINEL, 0)
+    end
+    if transactionMode == "execute" then
+        return
+    end
+    project:newUndoRecord()
 end
 
 local function resolveTrack(payload)
@@ -1062,7 +1101,7 @@ local function makeTrackFingerprint(track)
 end
 
 local function validateTrackFingerprint(track, expectedFingerprint, trackIndex)
-    if not expectedFingerprint then
+    if transactionMode == "execute" or not expectedFingerprint then
         return
     end
     local actual = makeTrackFingerprint(track)
@@ -1753,7 +1792,7 @@ local function serializeTimeAxis(timeAxis)
 end
 
 local function validateExpectedFingerprint(actual, expected, staleCode, message)
-    if expected and actual ~= expected then
+    if transactionMode ~= "execute" and expected and actual ~= expected then
         raiseBridgeError(staleCode, message, {
             expected = expected,
             actual = actual
@@ -1762,7 +1801,7 @@ local function validateExpectedFingerprint(actual, expected, staleCode, message)
 end
 
 local function validateReferenceFingerprint(reference, expected, trackIndex, groupIndex)
-    if not expected then
+    if transactionMode == "execute" or not expected then
         return
     end
     local actual = makeReferenceFingerprint(reference)
@@ -1983,6 +2022,9 @@ local function validateFingerprint(group, noteIndex, expectedFingerprint)
     local noteCount = group:getNumNotes()
     requireInteger(noteIndex, "noteIndex", 1, noteCount)
     local note = group:getNote(noteIndex)
+    if transactionMode == "execute" then
+        return note
+    end
     local actual = makeNoteFingerprint(group:getUUID(), noteIndex, note)
     if actual ~= expectedFingerprint then
         raiseBridgeError("STALE_NOTE", "The note changed after it was read; read the group again before writing", {
@@ -2663,6 +2705,7 @@ local function resolveScriptDataObject(payload)
     )
 end
 
+local PROJECT_WRITE_ACTIONS = nil
 local handlers = {}
 local reloadRequested = nil
 
@@ -3179,7 +3222,7 @@ function handlers.set_time_axis(payload)
         })
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     applyOperations(timeAxis)
     local result = serializeTimeAxis(timeAxis)
     assertPostconditions(result, "HOST_POSTCONDITION_FAILED", "project")
@@ -3233,7 +3276,7 @@ function handlers.create_note_group(payload)
         group:addNote(createNoteFromInput(noteInputs[noteIndex], "notes[" .. noteIndex .. "]"))
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     local libraryIndex = project:addNoteGroup(group, suggestedIndex)
     if type(libraryIndex) ~= "number" then
         libraryIndex = group:getIndexInParent()
@@ -3277,7 +3320,7 @@ function handlers.clone_note_group(payload)
         1,
         project:getNumNoteGroupsInLibrary() + 1
     )
-    project:newUndoRecord()
+    createUndoRecord(project)
     local libraryIndex = project:addNoteGroup(cloned, suggestedIndex)
     if type(libraryIndex) ~= "number" then
         libraryIndex = cloned:getIndexInParent()
@@ -3291,7 +3334,7 @@ function handlers.delete_note_group(payload)
     payload = requireObject(payload, "payload")
     local project, group, libraryIndex = resolveLibraryGroup(payload)
     local deleted = serializeLibraryGroup(project, group, libraryIndex)
-    project:newUndoRecord()
+    createUndoRecord(project)
     project:removeNoteGroup(libraryIndex)
     return {
         deletedGroup = deleted,
@@ -3333,7 +3376,7 @@ function handlers.add_group_reference(payload)
     if voice ~= nil then reference:setVoice(voice) end
     if timeRange ~= nil then reference:setTimeRange(timeRange.onset, timeRange.duration) end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     local groupIndex = track:addGroupReference(reference)
     if type(groupIndex) ~= "number" then
         groupIndex = reference:getIndexInParent()
@@ -3393,7 +3436,7 @@ function handlers.clone_group_reference(payload)
         reference:setTimeRange(sourceReference:getOnset(), sourceReference:getDuration())
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     local libraryIndex = nil
     if not linked then
         libraryIndex = project:addNoteGroup(targetGroup)
@@ -3859,7 +3902,7 @@ function handlers.add_track(payload)
         setDisplayColorVerified(track, displayColor, "displayColor")
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     local trackIndex = project:addTrack(track)
     if type(trackIndex) ~= "number" then
         trackIndex = project:getNumTracks()
@@ -3912,7 +3955,7 @@ function handlers.update_track(payload)
         })
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     applyUpdates(track)
     return serializeTrackSummary(track, trackIndex)
 end
@@ -3943,6 +3986,17 @@ function handlers.clone_track(payload)
         127,
         0
     )
+    local minimumPitch = optionalInteger(payload.minimumPitch, "minimumPitch", 0, 127, 0)
+    local maximumPitch = optionalInteger(payload.maximumPitch, "maximumPitch", 0, 127, 127)
+    if minimumPitch > maximumPitch then
+        raiseBridgeError("INVALID_ARGUMENT", "minimumPitch must not exceed maximumPitch")
+    end
+    local rangePolicy = optionalString(payload.rangePolicy, "rangePolicy", false) or "reject"
+    if rangePolicy ~= "reject" and rangePolicy ~= "octave" then
+        raiseBridgeError("INVALID_ARGUMENT", "rangePolicy must be reject or octave")
+    end
+    local gainDecibel = optionalNumber(payload.gainDecibel, "gainDecibel", -24, 24)
+    local pan = optionalNumber(payload.pan, "pan", -1, 1)
 
     local clonedTrack = sourceTrack:clone()
     if name ~= nil then
@@ -3983,12 +4037,20 @@ function handlers.clone_track(payload)
                     for noteIndex = 1, clonedGroup:getNumNotes() do
                         local note = clonedGroup:getNote(noteIndex)
                         local newPitch = note:getPitch() + transposeSemitones
-                        if newPitch < 0 or newPitch > 127 then
+                        if rangePolicy == "octave" then
+                            while newPitch < minimumPitch do newPitch = newPitch + 12 end
+                            while newPitch > maximumPitch do newPitch = newPitch - 12 end
+                        end
+                        if newPitch < minimumPitch or newPitch > maximumPitch
+                            or newPitch < 0 or newPitch > 127 then
                             raiseBridgeError("PITCH_OUT_OF_RANGE", "A cloned note would leave MIDI range 0..127", {
                                 groupIndex = groupIndex,
                                 noteIndex = noteIndex,
                                 originalPitch = note:getPitch(),
-                                requestedPitch = newPitch
+                                requestedPitch = newPitch,
+                                minimumPitch = minimumPitch,
+                                maximumPitch = maximumPitch,
+                                rangePolicy = rangePolicy
                             })
                         end
                         note:setPitch(newPitch)
@@ -3999,7 +4061,11 @@ function handlers.clone_track(payload)
         end
     end
 
-    project:newUndoRecord()
+    local clonedMixer = clonedTrack:getMixer()
+    if gainDecibel ~= nil then clonedMixer:setGainDecibel(gainDecibel) end
+    if pan ~= nil then clonedMixer:setPan(pan) end
+
+    createUndoRecord(project)
     local trackIndex = project:addTrack(clonedTrack)
     if type(trackIndex) ~= "number" then
         trackIndex = project:getNumTracks()
@@ -4010,6 +4076,38 @@ function handlers.clone_track(payload)
     result.clearNotes = clearNotes
     result.transposeSemitones = transposeSemitones
     result.affectedNoteCount = affectedNoteCount
+    result.voiceRange = { minimumPitch = minimumPitch, maximumPitch = maximumPitch }
+    result.rangePolicy = rangePolicy
+    result.mixer = serializeMixer(clonedTrack)
+    return result
+end
+
+function handlers.create_harmony_track(payload)
+    payload = requireObject(payload, "payload")
+    local sourceTrackIndex = requireInteger(payload.sourceTrackIndex, "sourceTrackIndex", 1)
+    local sourceTrackFingerprint =
+        requireString(payload.sourceTrackFingerprint, "sourceTrackFingerprint", false)
+    local intervalSemitones =
+        requireInteger(payload.intervalSemitones, "intervalSemitones", -36, 36)
+    if intervalSemitones == 0 then
+        raiseBridgeError("INVALID_ARGUMENT", "intervalSemitones must not be zero")
+    end
+    local direction = intervalSemitones > 0 and "+" or ""
+    local result = handlers.clone_track({
+        trackIndex = sourceTrackIndex,
+        trackFingerprint = sourceTrackFingerprint,
+        name = optionalString(payload.name, "name", false)
+            or ("Harmony " .. direction .. tostring(intervalSemitones)),
+        displayColor = payload.displayColor,
+        transposeSemitones = intervalSemitones,
+        minimumPitch = optionalInteger(payload.minimumPitch, "minimumPitch", 0, 127, 0),
+        maximumPitch = optionalInteger(payload.maximumPitch, "maximumPitch", 0, 127, 127),
+        rangePolicy = optionalString(payload.rangePolicy, "rangePolicy", false) or "octave",
+        gainDecibel = optionalNumber(payload.gainDecibel, "gainDecibel", -24, 24),
+        pan = optionalNumber(payload.pan, "pan", -1, 1)
+    })
+    result.semanticAction = "create_harmony_track"
+    result.intervalSemitones = intervalSemitones
     return result
 end
 
@@ -4026,7 +4124,7 @@ function handlers.delete_track(payload)
     end
 
     local deletedTrack = serializeTrackSummary(track, trackIndex)
-    project:newUndoRecord()
+    createUndoRecord(project)
     project:removeTrack(trackIndex)
     return {
         deletedTrack = deletedTrack,
@@ -4098,7 +4196,7 @@ function handlers.update_group(payload)
         })
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     applyReferenceUpdates(reference)
     if name ~= nil and group then
         group:setName(name)
@@ -4122,7 +4220,7 @@ function handlers.set_group_voice(payload)
     local voiceUpdate, checks, expectedVocalModes =
         prepareGroupVoiceUpdate(reference, payload)
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     local applied, applyError = pcall(function()
         reference:setVoice(voiceUpdate)
     end)
@@ -4158,7 +4256,7 @@ function handlers.delete_group_reference(payload)
         raiseBridgeError("MAIN_GROUP", "A track's main group reference cannot be removed")
     end
     local deletedGroup = serializeGroup(reference, groupIndex, 0, 0)
-    project:newUndoRecord()
+    createUndoRecord(project)
     track:removeGroupReference(groupIndex)
     return {
         trackIndex = trackIndex,
@@ -4177,7 +4275,7 @@ function handlers.add_notes(payload)
         prepared[#prepared + 1] = createNoteFromInput(noteInputs[index], "notes[" .. index .. "]")
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     for index = 1, #prepared do
         group:addNote(prepared[index])
     end
@@ -4220,7 +4318,7 @@ function handlers.edit_notes(payload)
         }
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     for index = 1, #prepared do
         applyPreparedNoteChanges(prepared[index].note, prepared[index].changes, prepared[index].path)
     end
@@ -4237,6 +4335,311 @@ function handlers.edit_notes(payload)
         editedCount = #notes,
         notes = notes
     }
+end
+
+local function makeDeterministicRandom(seed)
+    local state = seed % 2147483647
+    if state == 0 then state = 1 end
+    return function(minimum, maximum)
+        state = (state * 48271) % 2147483647
+        local span = maximum - minimum + 1
+        return minimum + (state % span)
+    end
+end
+
+function handlers.humanize_notes(payload)
+    payload = requireObject(payload, "payload")
+    local _project, _track, trackIndex, _reference, group, groupIndex =
+        resolveGroup(payload)
+    local targets = requireArray(payload.notes, "notes", 1, 512)
+    local seed = optionalInteger(payload.seed, "seed", 0, 2147483647, 1)
+    local maxOnsetOffset =
+        requireInteger(payload.maxOnsetOffset, "maxOnsetOffset", 0)
+    local maxDurationOffset =
+        requireInteger(payload.maxDurationOffset, "maxDurationOffset", 0)
+    local preserveChords = optionalBoolean(payload.preserveChords, "preserveChords")
+    if preserveChords == nil then preserveChords = true end
+    if maxOnsetOffset == 0 and maxDurationOffset == 0 then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "At least one humanization offset must be greater than zero"
+        )
+    end
+
+    local randomInteger = makeDeterministicRandom(seed)
+    local chordOffsets = {}
+    local edits = json.array()
+    local seen = {}
+    for index = 1, #targets do
+        local path = "notes[" .. index .. "]"
+        local target = requireObject(targets[index], path)
+        local noteIndex = requireInteger(
+            target.noteIndex,
+            path .. ".noteIndex",
+            1,
+            group:getNumNotes()
+        )
+        if seen[noteIndex] then
+            raiseBridgeError("INVALID_ARGUMENT", "The same noteIndex appears more than once", {
+                noteIndex = noteIndex
+            })
+        end
+        seen[noteIndex] = true
+        local fingerprint = requireString(
+            target.fingerprint,
+            path .. ".fingerprint",
+            false
+        )
+        local note = validateFingerprint(group, noteIndex, fingerprint)
+        local onsetOffset
+        if preserveChords then
+            local chordKey = tostring(note:getOnset())
+            onsetOffset = chordOffsets[chordKey]
+            if onsetOffset == nil then
+                onsetOffset = randomInteger(-maxOnsetOffset, maxOnsetOffset)
+                chordOffsets[chordKey] = onsetOffset
+            end
+        else
+            onsetOffset = randomInteger(-maxOnsetOffset, maxOnsetOffset)
+        end
+        local durationOffset =
+            randomInteger(-maxDurationOffset, maxDurationOffset)
+        edits[#edits + 1] = {
+            noteIndex = noteIndex,
+            fingerprint = fingerprint,
+            changes = {
+                onset = math.max(0, note:getOnset() + onsetOffset),
+                duration = math.max(1, note:getDuration() + durationOffset)
+            }
+        }
+    end
+
+    local result = handlers.edit_notes({
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        groupUuid = group:getUUID(),
+        edits = edits
+    })
+    result.semanticAction = "humanize_notes"
+    result.seed = seed
+    result.maxOnsetOffset = maxOnsetOffset
+    result.maxDurationOffset = maxDurationOffset
+    result.preserveChords = preserveChords
+    return result
+end
+
+function handlers.fit_lyrics(payload)
+    payload = requireObject(payload, "payload")
+    local _project, _track, trackIndex, _reference, group, groupIndex =
+        resolveGroup(payload)
+    local targets = requireArray(payload.notes, "notes", 1, 512)
+    local syllables = requireArray(payload.syllables, "syllables", 1, 512)
+    local phonemes = isProvided(payload.phonemes)
+        and requireArray(payload.phonemes, "phonemes", 0, 512) or nil
+    local fillRemainder =
+        optionalString(payload.fillRemainder, "fillRemainder", false) or "reject"
+    if fillRemainder ~= "reject" and fillRemainder ~= "keep"
+        and fillRemainder ~= "hyphen" then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "fillRemainder must be reject, keep, or hyphen"
+        )
+    end
+    if #syllables > #targets then
+        raiseBridgeError("LYRIC_COUNT_MISMATCH", "There are more syllables than target notes", {
+            noteCount = #targets,
+            syllableCount = #syllables
+        })
+    end
+    if fillRemainder == "reject" and #syllables ~= #targets then
+        raiseBridgeError("LYRIC_COUNT_MISMATCH", "Syllable and note counts must match", {
+            noteCount = #targets,
+            syllableCount = #syllables
+        })
+    end
+    if phonemes and #phonemes ~= 0 and #phonemes ~= #syllables then
+        raiseBridgeError(
+            "PHONEME_COUNT_MISMATCH",
+            "phonemes must be empty or contain one entry per supplied syllable"
+        )
+    end
+
+    local edits = json.array()
+    local seen = {}
+    for index = 1, #targets do
+        local path = "notes[" .. index .. "]"
+        local target = requireObject(targets[index], path)
+        local noteIndex = requireInteger(
+            target.noteIndex,
+            path .. ".noteIndex",
+            1,
+            group:getNumNotes()
+        )
+        if seen[noteIndex] then
+            raiseBridgeError("INVALID_ARGUMENT", "The same noteIndex appears more than once", {
+                noteIndex = noteIndex
+            })
+        end
+        seen[noteIndex] = true
+        local fingerprint = requireString(
+            target.fingerprint,
+            path .. ".fingerprint",
+            false
+        )
+        local changes = {}
+        if index <= #syllables then
+            changes.lyrics = requireString(
+                syllables[index],
+                "syllables[" .. index .. "]",
+                true
+            )
+            if phonemes and #phonemes > 0 then
+                changes.phonemes = requireString(
+                    phonemes[index],
+                    "phonemes[" .. index .. "]",
+                    true
+                )
+            end
+        elseif fillRemainder == "hyphen" then
+            changes.lyrics = "-"
+        end
+        if next(changes) ~= nil then
+            edits[#edits + 1] = {
+                noteIndex = noteIndex,
+                fingerprint = fingerprint,
+                changes = changes
+            }
+        end
+    end
+    if #edits == 0 then
+        raiseBridgeError("INVALID_ARGUMENT", "No note lyrics would change")
+    end
+    local result = handlers.edit_notes({
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        groupUuid = group:getUUID(),
+        edits = edits
+    })
+    result.semanticAction = "fit_lyrics"
+    result.syllableCount = #syllables
+    result.fillRemainder = fillRemainder
+    return result
+end
+
+function handlers.apply_expression_preset(payload)
+    payload = requireObject(payload, "payload")
+    local preset = requireString(payload.preset, "preset", false)
+    local strength = optionalNumber(payload.strength, "strength", 0, 2) or 1
+    if preset == "vibrato" then
+        local targets = requireArray(payload.notes, "notes", 1, 512)
+        local edits = json.array()
+        for index = 1, #targets do
+            local target = requireObject(targets[index], "notes[" .. index .. "]")
+            edits[#edits + 1] = {
+                noteIndex = target.noteIndex,
+                fingerprint = target.fingerprint,
+                changes = {
+                    attributes = { dF0VbrMod = strength }
+                }
+            }
+        end
+        local result = handlers.edit_notes({
+            trackIndex = payload.trackIndex,
+            groupIndex = payload.groupIndex,
+            groupUuid = payload.groupUuid,
+            edits = edits
+        })
+        result.semanticAction = "apply_expression_preset"
+        result.preset = preset
+        result.strength = strength
+        return result
+    end
+
+    local beginPosition = requireInteger(payload.beginPosition, "beginPosition", 0)
+    local endPosition = requireInteger(
+        payload.endPosition,
+        "endPosition",
+        beginPosition + 1
+    )
+    local expectedFingerprint = requireString(
+        payload.expectedAutomationFingerprint,
+        "expectedAutomationFingerprint",
+        false
+    )
+    local parameter
+    local points = json.array()
+    if preset == "scoop" then
+        parameter = "pitchDelta"
+        points[#points + 1] = {
+            position = beginPosition,
+            value = -math.min(1200, 150 * strength)
+        }
+        points[#points + 1] = {
+            position = beginPosition + math.floor((endPosition - beginPosition) * 0.2),
+            value = 0
+        }
+    elseif preset == "falloff" then
+        parameter = "pitchDelta"
+        points[#points + 1] = {
+            position = endPosition - math.floor((endPosition - beginPosition) * 0.2),
+            value = 0
+        }
+        points[#points + 1] = {
+            position = endPosition,
+            value = -math.min(1200, 150 * strength)
+        }
+    elseif preset == "crescendo" then
+        parameter = "loudness"
+        local startValue =
+            optionalNumber(payload.startValue, "startValue", -48, 12)
+                or (-3 * strength)
+        local endValue =
+            optionalNumber(payload.endValue, "endValue", -48, 12) or 0
+        points[#points + 1] = {
+            position = beginPosition,
+            value = startValue
+        }
+        points[#points + 1] = {
+            position = endPosition,
+            value = endValue
+        }
+    elseif preset == "breathiness" then
+        parameter = "breathiness"
+        local startValue =
+            optionalNumber(payload.startValue, "startValue", -1, 1) or 0
+        local endValue =
+            optionalNumber(payload.endValue, "endValue", -1, 1)
+                or math.min(1, 0.3 * strength)
+        points[#points + 1] = {
+            position = beginPosition,
+            value = startValue
+        }
+        points[#points + 1] = {
+            position = endPosition,
+            value = endValue
+        }
+    else
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "preset must be scoop, falloff, vibrato, crescendo, or breathiness"
+        )
+    end
+
+    local result = handlers.set_automation_points({
+        trackIndex = payload.trackIndex,
+        groupIndex = payload.groupIndex,
+        groupUuid = payload.groupUuid,
+        parameter = parameter,
+        expectedFingerprint = expectedFingerprint,
+        clearMode = "range",
+        rangeBegin = beginPosition,
+        rangeEnd = endPosition,
+        points = points
+    })
+    result.semanticAction = "apply_expression_preset"
+    result.preset = preset
+    result.strength = strength
+    return result
 end
 
 function handlers.set_note_phoneme_properties(payload)
@@ -4288,7 +4691,7 @@ function handlers.set_note_phoneme_properties(payload)
         }
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     for index = 1, #prepared do
         applyPreparedNoteChanges(prepared[index].note, prepared[index].changes, prepared[index].path)
     end
@@ -4332,7 +4735,7 @@ function handlers.delete_notes(payload)
     table.sort(prepared, function(left, right)
         return left.noteIndex > right.noteIndex
     end)
-    project:newUndoRecord()
+    createUndoRecord(project)
     for index = 1, #prepared do
         group:removeNote(prepared[index].noteIndex)
     end
@@ -4377,7 +4780,7 @@ function handlers.generate_note_retake(payload)
         raiseBridgeError("INVALID_ARGUMENT", "At least one retake variation must be enabled")
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     local takeId = retakes:generateTake(newDuration, newPitch, newTimbre)
     local tracked = getTrackedRetakeIds(retakes)
     tracked[#tracked + 1] = takeId
@@ -4407,7 +4810,7 @@ function handlers.activate_note_retake(payload)
             { takeId = takeId, trackedTakeIds = tracked }
         )
     end
-    project:newUndoRecord()
+    createUndoRecord(project)
     retakes:setActiveTake(takeId)
     local result = serializeRetakes(group, note, noteIndex, retakes)
     result.trackIndex = trackIndex
@@ -4436,7 +4839,7 @@ function handlers.delete_note_retake(payload)
             remaining[#remaining + 1] = tracked[index]
         end
     end
-    project:newUndoRecord()
+    createUndoRecord(project)
     retakes:deleteTake(takeId)
     retakes:setScriptData(RETAKE_IDS_KEY, remaining)
     local result = serializeRetakes(group, note, noteIndex, retakes)
@@ -4500,7 +4903,7 @@ function handlers.add_pitch_controls(payload)
         prepared[#prepared + 1] = controlOrError
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     for index = 1, #prepared do
         group:addPitchControl(prepared[index])
     end
@@ -4558,7 +4961,7 @@ function handlers.edit_pitch_controls(payload)
         }
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     for index = 1, #prepared do
         prepared[index].apply(prepared[index].control)
     end
@@ -4606,7 +5009,7 @@ function handlers.delete_pitch_controls(payload)
     table.sort(prepared, function(left, right)
         return left.pitchControlIndex > right.pitchControlIndex
     end)
-    project:newUndoRecord()
+    createUndoRecord(project)
     for index = 1, #prepared do
         group:removePitchControl(prepared[index].pitchControlIndex)
     end
@@ -4716,7 +5119,7 @@ function handlers.simplify_automation(payload)
         })
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     local changed
     if threshold == nil then
         changed = automation:simplify(beginPosition, endPosition)
@@ -4775,7 +5178,7 @@ function handlers.set_automation_points(payload)
         }
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     if clearMode == "all" then
         automation:removeAll()
     elseif clearMode == "range" then
@@ -4818,7 +5221,7 @@ function handlers.clear_automation(payload)
         rangeEnd = requireInteger(payload.rangeEnd, "rangeEnd", rangeBegin)
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     if rangeBegin then
         automation:remove(rangeBegin, rangeEnd)
     else
@@ -4959,14 +5362,14 @@ function handlers.script_data(payload)
                 cause = tostring(encodeError)
             })
         end
-        project:newUndoRecord()
+        createUndoRecord(project)
         object:setScriptData(key, payload.value)
         result.exists = true
         result.value = sanitizeForJson(object:getScriptData(key))
         return result
     elseif operation == "remove" then
         local existed = object:hasScriptData(key)
-        project:newUndoRecord()
+        createUndoRecord(project)
         object:removeScriptData(key)
         result.removed = existed
         return result
@@ -4999,7 +5402,7 @@ function handlers.set_track_mixer(payload)
         raiseBridgeError("INVALID_ARGUMENT", "At least one mixer field must be supplied")
     end
 
-    project:newUndoRecord()
+    createUndoRecord(project)
     local mixer = track:getMixer()
     if gain ~= nil then
         mixer:setGainDecibel(gain)
@@ -5051,6 +5454,314 @@ function handlers.playback(payload)
     }
 end
 
+local function transactionScopeKey(action, payload)
+    if action == "set_time_axis" then
+        return "time-axis"
+    end
+    if action == "create_note_group" or action == "add_track"
+        or action == "clone_track" or action == "create_harmony_track" then
+        return nil
+    end
+    if isProvided(payload.trackIndex) then
+        return "track:" .. tostring(payload.trackIndex)
+    end
+    if isProvided(payload.targetTrackIndex) then
+        return "track:" .. tostring(payload.targetTrackIndex)
+    end
+    if isProvided(payload.sourceTrackIndex) and action ~= "clone_group_reference" then
+        return "track:" .. tostring(payload.sourceTrackIndex)
+    end
+    if isProvided(payload.groupUuid) then
+        return "library-group:" .. tostring(payload.groupUuid)
+    end
+    if isProvided(payload.libraryIndex) then
+        return "library-group-index:" .. tostring(payload.libraryIndex)
+    end
+    return action
+end
+
+local function validateTransactionSteps(value, path)
+    local rawSteps = requireArray(value, path, 1, 32)
+    local steps = {}
+    for index = 1, #rawSteps do
+        local stepPath = path .. "[" .. index .. "]"
+        local rawStep = requireObject(rawSteps[index], stepPath)
+        local action = requireString(rawStep.action, stepPath .. ".action", false)
+        if action == "apply_transaction" or action == "rollback_transaction"
+            or not PROJECT_WRITE_ACTIONS[action] or not handlers[action] then
+            raiseBridgeError(
+                "INVALID_TRANSACTION_ACTION",
+                "A transaction step must be a supported non-transaction project write",
+                { stepIndex = index, action = action }
+            )
+        end
+        steps[#steps + 1] = {
+            action = action,
+            payload = requireObject(rawStep.payload, stepPath .. ".payload")
+        }
+    end
+    return steps
+end
+
+local function preflightTransaction(steps)
+    local scopes = {}
+    for index = 1, #steps do
+        local step = steps[index]
+        if #steps > 1
+            and (step.action == "delete_track"
+                or step.action == "delete_note_group") then
+            raiseBridgeError(
+                "TRANSACTION_SCOPE_CONFLICT",
+                "Index-shifting deletes must be the only step in a generic transaction",
+                {
+                    stepIndex = index,
+                    action = step.action
+                }
+            )
+        end
+        local scope = transactionScopeKey(step.action, step.payload)
+        if scope and scopes[scope] then
+            raiseBridgeError(
+                "TRANSACTION_SCOPE_CONFLICT",
+                "Transaction steps may not mutate the same guarded scope twice",
+                {
+                    scope = scope,
+                    firstStepIndex = scopes[scope],
+                    stepIndex = index,
+                    action = step.action
+                }
+            )
+        end
+        if scope then scopes[scope] = index end
+
+        transactionMode = "validate"
+        local ok, resultOrError = pcall(handlers[step.action], step.payload)
+        transactionMode = nil
+        if ok then
+            raiseBridgeError(
+                "TRANSACTION_PREFLIGHT_INCOMPLETE",
+                "A transaction step did not reach its validated undo boundary",
+                { stepIndex = index, action = step.action }
+            )
+        end
+        if resultOrError ~= TRANSACTION_VALIDATION_SENTINEL then
+            if type(resultOrError) == "table"
+                and getmetatable(resultOrError) == BRIDGE_ERROR_MT then
+                raiseBridgeError(
+                    resultOrError.code or "TRANSACTION_PREFLIGHT_FAILED",
+                    resultOrError.message or "Transaction preflight failed",
+                    {
+                        stepIndex = index,
+                        action = step.action,
+                        causeDetails = resultOrError.details or JSON_NULL
+                    }
+                )
+            end
+            raiseBridgeError(
+                "TRANSACTION_PREFLIGHT_FAILED",
+                "Transaction preflight failed before any project change",
+                {
+                    stepIndex = index,
+                    action = step.action,
+                    cause = tostring(resultOrError)
+                }
+            )
+        end
+    end
+end
+
+local function executeTransactionSteps(steps)
+    preflightTransaction(steps)
+    local project = SV:getProject()
+    if not project then
+        raiseBridgeError("PROJECT_UNAVAILABLE", "No Synthesizer V project is open")
+    end
+    createUndoRecord(project)
+    local results = json.array()
+    transactionMode = "execute"
+    local ok, resultOrError = xpcall(function()
+        for index = 1, #steps do
+            results[#results + 1] = handlers[steps[index].action](steps[index].payload)
+        end
+        return results
+    end, function(errorValue)
+        return errorValue
+    end)
+    transactionMode = nil
+    if not ok then
+        if type(resultOrError) == "table"
+            and getmetatable(resultOrError) == BRIDGE_ERROR_MT then
+            error(resultOrError, 0)
+        end
+        raiseBridgeError(
+            "TRANSACTION_EXECUTION_FAILED",
+            "SynthV rejected a prevalidated transaction during execution",
+            {
+                cause = tostring(resultOrError),
+                undoGuidance = "Use SynthV Edit > Undo to revert the transaction."
+            }
+        )
+    end
+    return results
+end
+
+local function resolveResultReferences(value, results, path)
+    if value == JSON_NULL or type(value) ~= "table" then
+        return value
+    end
+    if isObject(value) and isProvided(value["$result"]) then
+        local reference = requireObject(value["$result"], path .. ".$result")
+        local stepIndex = requireInteger(
+            reference.step,
+            path .. ".$result.step",
+            1,
+            #results
+        )
+        local segments = requireArray(
+            reference.path,
+            path .. ".$result.path",
+            0,
+            16
+        )
+        local current = results[stepIndex]
+        for segmentIndex = 1, #segments do
+            local segment = segments[segmentIndex]
+            if type(segment) ~= "string"
+                and (type(segment) ~= "number" or segment % 1 ~= 0) then
+                raiseBridgeError(
+                    "INVALID_ROLLBACK_REFERENCE",
+                    "A rollback result-reference path segment must be a string or integer"
+                )
+            end
+            if type(current) ~= "table" or current[segment] == nil then
+                raiseBridgeError(
+                    "INVALID_ROLLBACK_REFERENCE",
+                    "A rollback result-reference path does not exist",
+                    {
+                        stepIndex = stepIndex,
+                        pathIndex = segmentIndex,
+                        segment = segment
+                    }
+                )
+            end
+            current = current[segment]
+        end
+        return current
+    end
+    if isSequentialArray(value) then
+        local result = json.array()
+        for index = 1, #value do
+            result[index] = resolveResultReferences(
+                value[index],
+                results,
+                path .. "[" .. index .. "]"
+            )
+        end
+        return result
+    end
+    local result = {}
+    for key, nested in pairs(value) do
+        result[key] = resolveResultReferences(
+            nested,
+            results,
+            path .. "." .. tostring(key)
+        )
+    end
+    return result
+end
+
+function handlers.apply_transaction(payload)
+    payload = requireObject(payload, "payload")
+    local summary = requireString(payload.summary, "summary", false)
+    local steps = validateTransactionSteps(payload.steps, "steps")
+    local rawRollbackSteps = nil
+    if isProvided(payload.rollbackSteps) then
+        rawRollbackSteps = validateTransactionSteps(
+            payload.rollbackSteps,
+            "rollbackSteps"
+        )
+    end
+    local results = executeTransactionSteps(steps)
+    runtimeState.transactionRevision = runtimeState.transactionRevision + 1
+    local transactionId =
+        SESSION_TOKEN .. "-tx-" .. tostring(runtimeState.transactionRevision)
+    local rollbackAvailable = false
+    local rollbackError = nil
+    if rawRollbackSteps and #rawRollbackSteps > 0 then
+        local resolvedRollback = json.array()
+        local resolvedOk, resolvedOrError = pcall(function()
+            for index = 1, #rawRollbackSteps do
+                resolvedRollback[index] = {
+                    action = rawRollbackSteps[index].action,
+                    payload = resolveResultReferences(
+                        rawRollbackSteps[index].payload,
+                        results,
+                        "rollbackSteps[" .. index .. "].payload"
+                    )
+                }
+            end
+        end)
+        if resolvedOk then
+            runtimeState.rollbackTransactions[transactionId] = {
+                projectFile = SV:getProject():getFileName() or "",
+                summary = summary,
+                steps = resolvedRollback,
+                createdAtEpochMs = os.time() * 1000
+            }
+            rollbackAvailable = true
+        else
+            rollbackError = tostring(resolvedOrError)
+        end
+    end
+    return {
+        transactionId = transactionId,
+        summary = summary,
+        stepCount = #steps,
+        results = results,
+        rollbackAvailable = rollbackAvailable,
+        rollbackError = rollbackError or JSON_NULL,
+        undoRecordCount = 1
+    }
+end
+
+function handlers.rollback_transaction(payload)
+    payload = requireObject(payload, "payload")
+    local transactionId =
+        requireString(payload.transactionId, "transactionId", false)
+    local stored = runtimeState.rollbackTransactions[transactionId]
+    if not stored then
+        raiseBridgeError(
+            "ROLLBACK_NOT_AVAILABLE",
+            "No rollback steps are available for this transaction in the current Bridge session",
+            { transactionId = transactionId }
+        )
+    end
+    local project = SV:getProject()
+    local projectFile = project and (project:getFileName() or "") or ""
+    if projectFile ~= stored.projectFile then
+        raiseBridgeError(
+            "ROLLBACK_PROJECT_MISMATCH",
+            "The rollback belongs to a different SynthV project",
+            {
+                transactionId = transactionId,
+                expectedProjectFile = stored.projectFile,
+                actualProjectFile = projectFile
+            }
+        )
+    end
+    local steps = validateTransactionSteps(stored.steps, "storedRollbackSteps")
+    local results = executeTransactionSteps(steps)
+    runtimeState.rollbackTransactions[transactionId] = nil
+    return {
+        transactionId = transactionId,
+        rolledBack = true,
+        originalSummary = stored.summary,
+        stepCount = #steps,
+        results = results,
+        undoRecordCount = 1
+    }
+end
+
 local function validateRequest(request)
     request = requireObject(request, "request")
     if request.protocolVersion ~= PROTOCOL_VERSION then
@@ -5069,7 +5780,7 @@ local function validateRequest(request)
     return requestId, handler, payload, action
 end
 
-local PROJECT_WRITE_ACTIONS = {
+PROJECT_WRITE_ACTIONS = {
     set_time_axis = true,
     create_note_group = true,
     clone_note_group = true,
@@ -5096,7 +5807,13 @@ local PROJECT_WRITE_ACTIONS = {
     simplify_automation = true,
     set_automation_points = true,
     clear_automation = true,
-    set_track_mixer = true
+    set_track_mixer = true,
+    apply_transaction = true,
+    rollback_transaction = true,
+    create_harmony_track = true,
+    humanize_notes = true,
+    apply_expression_preset = true,
+    fit_lyrics = true
 }
 
 local function processRequestFile()
@@ -5138,10 +5855,11 @@ local function processRequestFile()
     end, normalizeError)
 
     if ok then
-        if PROJECT_WRITE_ACTIONS[processedAction]
+        if not (processedPayload and processedPayload._sidebarPlanId)
+            and (PROJECT_WRITE_ACTIONS[processedAction]
             or (processedAction == "script_data"
                 and processedPayload
-                and (processedPayload.operation == "set" or processedPayload.operation == "remove"))
+                and (processedPayload.operation == "set" or processedPayload.operation == "remove")))
         then
             writeSidebarActivity(processedAction)
         end

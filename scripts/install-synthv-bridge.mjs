@@ -24,6 +24,14 @@ async function readBridgeStatus(statusFile) {
   }
 }
 
+async function readOptionalText(filePath) {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
 async function requestHotReload() {
   const ipcDirectory = path.resolve(
     process.env.SYNTHV_AGENT_BRIDGE_DIR?.trim() || os.tmpdir(),
@@ -39,11 +47,22 @@ async function requestHotReload() {
     typeof status?.updatedAtEpochMs === "number"
       ? Math.max(0, Date.now() - status.updatedAtEpochMs)
       : Number.POSITIVE_INFINITY;
-  if (status?.state !== "running" || ageMs > statusStaleMs) {
+  const recoverableStaleSession =
+    status?.state === "running" &&
+    ageMs <= Math.max(60_000, statusStaleMs * 12);
+  if (status?.state !== "running" || (!recoverableStaleSession && ageMs > statusStaleMs)) {
     console.log(
-      "Bridge is not currently connected; start the installed script manually once.",
+      "Bridge is not currently connected. Run Scripts → SynthV Agent Bridge → Start SynthV Agent Bridge once.",
+    );
+    console.log(
+      "Use npm run doctor -- --target <SynthV scripts directory> for a full local diagnosis.",
     );
     return;
+  }
+  if (ageMs > statusStaleMs) {
+    console.log(
+      `Bridge heartbeat is ${Math.round(ageMs)} ms old; attempting a recovery reload before requiring manual startup.`,
+    );
   }
 
   const previousSessionToken = status.sessionToken;
@@ -110,6 +129,20 @@ if (!suppliedTarget) {
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const sourceDirectory = path.join(repositoryRoot, "synthv");
   const destinationDirectory = path.resolve(suppliedTarget, "SynthV Agent Bridge");
+  const sourceSidebarFile = path.join(
+    sourceDirectory,
+    "SynthVAgentSidebar.lua",
+  );
+  const destinationSidebarFile = path.join(
+    destinationDirectory,
+    "SynthVAgentSidebar.lua",
+  );
+  const [sourceSidebar, installedSidebarBefore] = await Promise.all([
+    readOptionalText(sourceSidebarFile),
+    readOptionalText(destinationSidebarFile),
+  ]);
+  const rescanRequired =
+    sourceSidebar === null || installedSidebarBefore !== sourceSidebar;
 
   await mkdir(destinationDirectory, { recursive: true });
   for (const fileName of [
@@ -126,10 +159,16 @@ if (!suppliedTarget) {
     path.join(destinationDirectory, "SynthVAgentBridge.lua"),
   );
   console.log(`Installed SynthV Agent Bridge scripts to ${destinationDirectory}`);
-  console.log(
-    "Choose Scripts → Rescan in SynthV to load or refresh the SynthV Agent side panel.",
-  );
   if (reloadEnabled) {
     await requestHotReload();
+  }
+  if (rescanRequired) {
+    console.log(
+      "The side-panel script changed. Choose Scripts → Rescan in SynthV; Rescan stops persistent scripts, so then run Scripts → SynthV Agent Bridge → Start SynthV Agent Bridge once.",
+    );
+  } else {
+    console.log(
+      "The installed side-panel script is unchanged; no SynthV script rescan is required.",
+    );
   }
 }

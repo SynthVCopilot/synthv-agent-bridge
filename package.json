@@ -28,7 +28,8 @@
     "check": "npm run typecheck && npm test",
     "start": "node dist/src/cli.js",
     "inspector": "npm run build && npx @modelcontextprotocol/inspector node dist/src/cli.js",
-    "install:synthv": "node scripts/install-synthv-bridge.mjs"
+    "install:synthv": "node scripts/install-synthv-bridge.mjs",
+    "doctor": "node scripts/doctor.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",

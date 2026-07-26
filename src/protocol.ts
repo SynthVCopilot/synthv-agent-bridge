@@ -55,6 +55,12 @@ export const BRIDGE_ACTIONS = [
   "script_data",
   "get_track_mixer",
   "set_track_mixer",
+  "apply_transaction",
+  "rollback_transaction",
+  "create_harmony_track",
+  "humanize_notes",
+  "apply_expression_preset",
+  "fit_lyrics",
   "playback",
 ] as const;
 

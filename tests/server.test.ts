@@ -31,6 +31,7 @@ test("every protocol action is registered exactly once as an MCP tool", async ()
         (name) =>
           name !== "bridge_status" &&
           name !== "sidebar_get_request" &&
+          name !== "sidebar_status" &&
           name !== "sidebar_publish_preview",
       )
       .sort(),

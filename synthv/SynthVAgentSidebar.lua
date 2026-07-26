@@ -60,6 +60,7 @@ local INSTRUCTION_FILE = PREFIX .. ".sidebar.instruction.txt"
 local PREVIEW_FILE = PREFIX .. ".sidebar.preview.txt"
 local COMMAND_FILE = PREFIX .. ".sidebar.command.txt"
 local ACTIVITY_FILE = PREFIX .. ".sidebar.activity.txt"
+local STATE_FILE = PREFIX .. ".sidebar.state.txt"
 local CLIENT_STATUS_FILE = PREFIX .. ".sidebar.client-status.txt"
 
 math.randomseed(os.time() + math.floor(os.clock() * 1000000))
@@ -163,19 +164,24 @@ end
 
 local bridgeStatusValue = SV:create("WidgetValue")
 local clientStatusValue = SV:create("WidgetValue")
+local taskStateValue = SV:create("WidgetValue")
 local selectionValue = SV:create("WidgetValue")
 local instructionValue = SV:create("WidgetValue")
 local previewValue = SV:create("WidgetValue")
 local activityValue = SV:create("WidgetValue")
 local refreshButtonValue = SV:create("WidgetValue")
+local diagnosticsButtonValue = SV:create("WidgetValue")
 local submitButtonValue = SV:create("WidgetValue")
 local clearButtonValue = SV:create("WidgetValue")
+local cancelRequestButtonValue = SV:create("WidgetValue")
 local applyButtonValue = SV:create("WidgetValue")
 local dismissButtonValue = SV:create("WidgetValue")
 local undoHelpButtonValue = SV:create("WidgetValue")
+local clearHistoryButtonValue = SV:create("WidgetValue")
 
 bridgeStatusValue:setEnabled(false)
 clientStatusValue:setEnabled(false)
+taskStateValue:setEnabled(false)
 selectionValue:setEnabled(false)
 previewValue:setEnabled(false)
 activityValue:setEnabled(false)
@@ -185,7 +191,10 @@ local bridgeConnected = false
 local clientConnected = false
 local currentPlanId = nil
 local currentPlanStatus = nil
+local currentRequestId = nil
+local currentTaskStatus = "idle"
 local lastStatusText = nil
+local lastTaskStateText = nil
 local lastSelectionText = nil
 local lastPreviewRaw = nil
 local lastActivityRaw = nil
@@ -339,6 +348,38 @@ local function updateStatus()
     end
 end
 
+local TASK_STATUS_LABELS = {
+    idle = { "○ 空闲", "○ Idle" },
+    queued = { "◷ 已排队", "◷ Queued" },
+    claimed = { "◷ Codex 已读取", "◷ Read by Codex" },
+    stale = { "⚠ 请求待确认", "⚠ Request is stale" },
+    awaiting_confirmation = { "● 等待确认", "● Awaiting confirmation" },
+    applying = { "◷ 正在应用", "◷ Applying" },
+    success = { "✓ 已完成", "✓ Completed" },
+    error = { "! 操作失败", "! Failed" },
+    dismissed = { "○ 已放弃", "○ Dismissed" },
+    cancelled = { "○ 已取消", "○ Cancelled" }
+}
+
+local function updateTaskState()
+    local raw = readFile(STATE_FILE)
+    local status = raw and lineValue(raw, "status") or "idle"
+    if not TASK_STATUS_LABELS[status] then
+        status = "idle"
+    end
+    currentTaskStatus = status
+    currentRequestId = raw and lineValue(raw, "requestId") or currentRequestId
+    local translated = TASK_STATUS_LABELS[status]
+    local updated = text(translated[1], translated[2])
+    if updated ~= lastTaskStateText then
+        lastTaskStateText = updated
+        taskStateValue:setValue(updated)
+    end
+    cancelRequestButtonValue:setEnabled(
+        status == "queued" or status == "claimed" or status == "stale"
+    )
+end
+
 local function updateSelection()
     local updated = selectionSummary()
     if updated ~= lastSelectionText then
@@ -394,6 +435,7 @@ end
 
 local function refreshAll()
     updateStatus()
+    updateTaskState()
     updateSelection()
     updatePreview()
     updateActivity()
@@ -404,6 +446,46 @@ local function showMessage(message)
     safeCall(function()
         SV:showMessageBoxAsync(SCRIPT_NAME, message)
     end)
+end
+
+local function ageText(updatedAt)
+    if not updatedAt then
+        return text("未知", "unknown")
+    end
+    local ageSeconds = math.max(0, math.floor((os.time() * 1000 - updatedAt) / 1000))
+    return tostring(ageSeconds) .. "s"
+end
+
+local function showDiagnostics()
+    local bridgeStatus = readFile(STATUS_FILE)
+    local clientStatus = readFile(CLIENT_STATUS_FILE)
+    local taskState = readFile(STATE_FILE)
+    local bridgeVersion = jsonStringValue(bridgeStatus, "bridgeVersion") or "?"
+    local bridgeUpdatedAt = jsonNumberValue(bridgeStatus, "updatedAtEpochMs")
+    local clientVersion = clientStatus and lineValue(clientStatus, "version") or "?"
+    local clientUpdatedAt = tonumber(
+        clientStatus and lineValue(clientStatus, "updatedAtEpochMs") or ""
+    )
+    local message = table.concat({
+        text("Bridge：", "Bridge: ")
+            .. (bridgeConnected and "connected" or "offline")
+            .. " · v" .. bridgeVersion
+            .. " · " .. ageText(bridgeUpdatedAt),
+        text("MCP：", "MCP: ")
+            .. (clientConnected and "connected" or "offline")
+            .. " · v" .. clientVersion
+            .. " · " .. ageText(clientUpdatedAt),
+        text("任务：", "Task: ") .. tostring(taskState and lineValue(taskState, "status") or "idle"),
+        text("IPC：", "IPC: ") .. IPC_DIRECTORY,
+        text("最后错误：", "Last error: ")
+            .. tostring(clientStatus and lineValue(clientStatus, "lastErrorMessage") or text("无", "none")),
+        "",
+        text(
+            "B 离线：运行“脚本 → SynthV Agent Bridge → Start SynthV Agent Bridge”。\nM 离线：确认 Codex MCP 已启用；只有脚本布局变化才需要“重新扫描”。",
+            "B offline: run Scripts > SynthV Agent Bridge > Start SynthV Agent Bridge.\nM offline: verify the Codex MCP is enabled; use Rescan only for script layout changes."
+        )
+    }, "\n")
+    showMessage(message)
 end
 
 local function newRequestId()
@@ -437,6 +519,18 @@ local function submitInstruction()
         )
         return
     end
+    currentRequestId = requestId
+    currentTaskStatus = "queued"
+    writeFileAtomically(STATE_FILE, table.concat({
+        "synthv-agent-bridge-sidebar-state-v1",
+        "status=queued",
+        "updatedAtEpochMs=" .. tostring(os.time() * 1000),
+        "requestId=" .. requestId,
+        "message=" .. text("请求已排队，等待 Codex 读取。", "Queued for Codex."),
+        ""
+    }, "\n"))
+    taskStateValue:setValue(text("◷ 已排队", "◷ Queued"))
+    cancelRequestButtonValue:setEnabled(true)
 
     local prompt = table.concat({
         text(
@@ -444,8 +538,8 @@ local function submitInstruction()
             "Please handle the request just submitted from the SynthV Agent Bridge side panel."
         ),
         text(
-            "调用 sidebar_get_request 读取请求，重新读取当前 SynthV 状态并使用最新指纹；不要直接写入工程，而是调用 sidebar_publish_preview 将一项完整变更发回侧边栏等待我确认。",
-            "Call sidebar_get_request, re-read the current SynthV state and use fresh fingerprints. Do not write to the project directly; call sidebar_publish_preview with one complete change for my confirmation."
+            "调用 sidebar_get_request 读取请求，重新读取当前 SynthV 状态并使用最新指纹；不要直接写入工程，而是调用 sidebar_publish_preview 将一项完整变更或事务发回侧边栏等待我确认。",
+            "Call sidebar_get_request, re-read the current SynthV state and use fresh fingerprints. Do not write to the project directly; call sidebar_publish_preview with one complete change or transaction for my confirmation."
         ),
         text("请求 ID：", "Request ID: ") .. requestId,
         "",
@@ -453,8 +547,7 @@ local function submitInstruction()
         instruction
     }, "\n")
     SV:setHostClipboard(prompt)
-    instructionValue:setValue("")
-    submitButtonValue:setEnabled(false)
+    submitButtonValue:setEnabled(true)
     activityValue:setValue(
         text(
             "请求已排队，并已复制到剪贴板。请粘贴到 Codex 发送。",
@@ -463,17 +556,19 @@ local function submitInstruction()
     )
 end
 
-local function writeCommand(operation)
-    if not currentPlanId then
+local function writeCommand(operation, planId, requestId)
+    if (operation == "apply" or operation == "dismiss") and not planId then
         return
     end
-    local content = table.concat({
+    local lines = {
         "synthv-agent-bridge-sidebar-command-v1",
         "operation=" .. operation,
-        "planId=" .. currentPlanId,
-        "createdAtEpochMs=" .. tostring(os.time() * 1000),
-        ""
-    }, "\n")
+        "createdAtEpochMs=" .. tostring(os.time() * 1000)
+    }
+    if planId then lines[#lines + 1] = "planId=" .. planId end
+    if requestId then lines[#lines + 1] = "requestId=" .. requestId end
+    lines[#lines + 1] = ""
+    local content = table.concat(lines, "\n")
     local wrote, writeError = writeFileAtomically(COMMAND_FILE, content)
     if not wrote then
         showMessage(
@@ -482,16 +577,22 @@ local function writeCommand(operation)
         )
         return
     end
-    applyButtonValue:setEnabled(false)
-    dismissButtonValue:setEnabled(false)
     if operation == "apply" then
+        applyButtonValue:setEnabled(false)
+        dismissButtonValue:setEnabled(false)
         previewValue:setValue(text("正在提交变更…", "Submitting the change…"))
-    else
+    elseif operation == "dismiss" then
+        applyButtonValue:setEnabled(false)
+        dismissButtonValue:setEnabled(false)
         previewValue:setValue(text("正在放弃预览…", "Dismissing the preview…"))
+    elseif operation == "cancel_request" then
+        cancelRequestButtonValue:setEnabled(false)
+        taskStateValue:setValue(text("○ 正在取消…", "○ Cancelling…"))
     end
 end
 
 refreshButtonValue:setValueChangeCallback(refreshAll)
+diagnosticsButtonValue:setValueChangeCallback(showDiagnostics)
 instructionValue:setValueChangeCallback(function(value)
     submitButtonValue:setEnabled(trim(tostring(value or "")) ~= "")
 end)
@@ -502,13 +603,22 @@ clearButtonValue:setValueChangeCallback(function()
 end)
 applyButtonValue:setValueChangeCallback(function()
     if currentPlanStatus == "pending" and bridgeConnected and clientConnected then
-        writeCommand("apply")
+        writeCommand("apply", currentPlanId, currentRequestId)
     end
 end)
 dismissButtonValue:setValueChangeCallback(function()
     if currentPlanId and currentPlanStatus ~= "applying" then
-        writeCommand("dismiss")
+        writeCommand("dismiss", currentPlanId, currentRequestId)
     end
+end)
+cancelRequestButtonValue:setValueChangeCallback(function()
+    if currentTaskStatus == "queued" or currentTaskStatus == "claimed"
+        or currentTaskStatus == "stale" then
+        writeCommand("cancel_request", nil, currentRequestId)
+    end
+end)
+clearHistoryButtonValue:setValueChangeCallback(function()
+    writeCommand("clear_history")
 end)
 undoHelpButtonValue:setValueChangeCallback(function()
     showMessage(
@@ -588,6 +698,22 @@ function getSidePanelSectionState()
                 }
             },
             {
+                type = "Container",
+                columns = {
+                    {
+                        type = "TextBox",
+                        value = taskStateValue,
+                        width = 0.68
+                    },
+                    {
+                        type = "Button",
+                        text = text("诊断", "Details"),
+                        value = diagnosticsButtonValue,
+                        width = 0.32
+                    }
+                }
+            },
+            {
                 type = "Label",
                 text = text("当前上下文", "Current context")
             },
@@ -624,13 +750,19 @@ function getSidePanelSectionState()
                         type = "Button",
                         text = text("复制并排队", "Copy & queue"),
                         value = submitButtonValue,
-                        width = 0.72
+                        width = 0.52
+                    },
+                    {
+                        type = "Button",
+                        text = text("取消任务", "Cancel"),
+                        value = cancelRequestButtonValue,
+                        width = 0.28
                     },
                     {
                         type = "Button",
                         text = text("清空", "Clear"),
                         value = clearButtonValue,
-                        width = 0.28
+                        width = 0.20
                     }
                 }
             },
@@ -644,7 +776,7 @@ function getSidePanelSectionState()
                     {
                         type = "TextArea",
                         value = previewValue,
-                        height = 116,
+                        height = 152,
                         width = 1.0
                     }
                 }
@@ -676,7 +808,7 @@ function getSidePanelSectionState()
                     {
                         type = "TextArea",
                         value = activityValue,
-                        height = 96,
+                        height = 132,
                         width = 1.0
                     }
                 }
@@ -688,7 +820,13 @@ function getSidePanelSectionState()
                         type = "Button",
                         text = text("撤销说明", "Undo help"),
                         value = undoHelpButtonValue,
-                        width = 1.0
+                        width = 0.5
+                    },
+                    {
+                        type = "Button",
+                        text = text("清空记录", "Clear history"),
+                        value = clearHistoryButtonValue,
+                        width = 0.5
                     }
                 }
             }

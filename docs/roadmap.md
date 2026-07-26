@@ -12,14 +12,20 @@
 - Group UUID plus note, track, automation, and time-axis concurrency guards.
 - SynthV undo integration.
 
-## v0.1.4 — native side-panel MVP
+## v0.1.4 — side panel, transactions, and semantic helpers
 
 - Persistent SynthV side-panel connection and current-selection summaries.
 - Network-free instruction queue with clipboard handoff to Codex.
-- One-write preview/apply/dismiss flow through the existing serialized Node
-  client.
-- Latest Bridge-write status and native Ctrl+Z guidance.
-- MCP tools for reading queued panel requests and publishing guarded previews.
+- Structured write/transaction preview with task states, Apply/Dismiss/Cancel,
+  recent summaries, diagnostics, and native Ctrl+Z guidance.
+- MCP tools for reading queued requests, publishing guarded previews, and
+  inspecting panel diagnostics.
+- Complete preflight of up to 32 independent write steps followed by one undo
+  record, plus in-session guarded rollback.
+- Range-constrained harmony tracks, deterministic note humanization, expression
+  presets, and lyrics-to-note fitting.
+- A read-only doctor for installed versions, heartbeats, IPC state, and Codex
+  configuration.
 
 ## Current — official API coverage expansion
 
@@ -35,23 +41,18 @@
 - Typed Group voice and Vocal Mode settings, dedicated phoneme properties, and
   host-validated experimental Unison access.
 
-## v0.2 — preview and transaction layer
+## Next — transaction depth and phrase analysis
 
-- Dry-run change plans and human-readable diffs.
-- Snapshot/commit workflow for multi-tool edits.
-- Explicit rollback records and project-revision checks.
-- Selected-range helpers and cross-object batch operations.
-
-## v0.3 — musical semantic tools
-
-- Harmony generation with voice-range constraints.
-- Phrase timing humanization.
-- Pitch scoop, falloff, vibrato, crescendo, and breathiness presets.
-- Lyrics-to-note fitting and pronunciation helpers.
+- Dependency-aware transactions that can safely pass newly created object
+  locators into later forward steps.
+- Durable rollback metadata with explicit project-revision checks.
+- Selected-range helpers and richer cross-object batch operations.
+- Phrase analysis and recommendation-only previews before edits.
+- Harmony voicing beyond fixed intervals, pronunciation diagnostics, and
+  configurable humanization/expression profiles.
 
 ## Later
 
-- Expanded side-panel presets, history, and multi-write transactions.
 - Render-and-analyze feedback loops.
 - Optional remote transport with authentication.
 - Adapters for Remy and non-MCP clients.

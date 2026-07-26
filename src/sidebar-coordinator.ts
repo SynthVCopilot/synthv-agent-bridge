@@ -10,10 +10,13 @@ const SIDEBAR_REQUEST_MARKER = "synthv-agent-bridge-sidebar-request-v1";
 const SIDEBAR_PREVIEW_MARKER = "synthv-agent-bridge-sidebar-preview-v1";
 const SIDEBAR_COMMAND_MARKER = "synthv-agent-bridge-sidebar-command-v1";
 const SIDEBAR_ACTIVITY_MARKER = "synthv-agent-bridge-sidebar-activity-v1";
+const SIDEBAR_STATE_MARKER = "synthv-agent-bridge-sidebar-state-v1";
 const MAX_SIDEBAR_TEXT_BYTES = 64 * 1024;
 const MAX_SIDEBAR_PLAN_BYTES = 1024 * 1024;
+const MAX_HISTORY_ENTRIES = 20;
+const STALE_INSTRUCTION_MS = 5 * 60 * 1000;
 
-export const SIDEBAR_PREVIEW_ACTIONS = [
+export const TRANSACTION_STEP_ACTIONS = [
   "set_time_axis",
   "create_note_group",
   "clone_note_group",
@@ -41,6 +44,16 @@ export const SIDEBAR_PREVIEW_ACTIONS = [
   "set_automation_points",
   "clear_automation",
   "set_track_mixer",
+  "create_harmony_track",
+  "humanize_notes",
+  "apply_expression_preset",
+  "fit_lyrics",
+] as const satisfies readonly BridgeAction[];
+
+export const SIDEBAR_PREVIEW_ACTIONS = [
+  ...TRANSACTION_STEP_ACTIONS,
+  "apply_transaction",
+  "rollback_transaction",
 ] as const satisfies readonly BridgeAction[];
 
 export type SidebarPreviewAction = (typeof SIDEBAR_PREVIEW_ACTIONS)[number];
@@ -56,9 +69,39 @@ export interface PublishSidebarPreviewInput {
   readonly requestId?: string;
   readonly summary: string;
   readonly details?: string;
+  readonly changes?: readonly SidebarPreviewChange[];
+  readonly risks?: readonly string[];
   readonly action: SidebarPreviewAction;
   readonly payload: Record<string, unknown>;
   readonly replace?: boolean;
+}
+
+export interface SidebarPreviewChange {
+  readonly label: string;
+  readonly before?: string | undefined;
+  readonly after?: string | undefined;
+  readonly count?: number | undefined;
+}
+
+export type SidebarTaskStatus =
+  | "idle"
+  | "queued"
+  | "claimed"
+  | "stale"
+  | "awaiting_confirmation"
+  | "applying"
+  | "success"
+  | "error"
+  | "dismissed"
+  | "cancelled";
+
+export interface SidebarHistoryEntry {
+  readonly id: string;
+  readonly status: "success" | "error" | "dismissed" | "cancelled";
+  readonly action: string;
+  readonly summary: string;
+  readonly message?: string;
+  readonly updatedAtEpochMs: number;
 }
 
 interface SidebarPlan {
@@ -68,6 +111,8 @@ interface SidebarPlan {
   readonly createdAtEpochMs: number;
   readonly summary: string;
   readonly details: string;
+  readonly changes: readonly SidebarPreviewChange[];
+  readonly risks: readonly string[];
   readonly action: SidebarPreviewAction;
   readonly payload: Record<string, unknown>;
   readonly status: "pending" | "applying" | "error";
@@ -76,8 +121,13 @@ interface SidebarPlan {
 }
 
 interface SidebarCommand {
-  readonly operation: "apply" | "dismiss";
-  readonly planId: string;
+  readonly operation:
+    | "apply"
+    | "dismiss"
+    | "cancel_request"
+    | "clear_history";
+  readonly planId?: string;
+  readonly requestId?: string;
 }
 
 const PREVIEW_ACTION_SET = new Set<string>(SIDEBAR_PREVIEW_ACTIONS);
@@ -143,6 +193,65 @@ function lineValue(text: string, key: string): string | undefined {
   return undefined;
 }
 
+function sanitizeLine(value: string): string {
+  return value.replace(/[\r\n]+/gu, " ").slice(0, 2000);
+}
+
+function parsePreviewChanges(value: unknown): readonly SidebarPreviewChange[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > 100) {
+    throw new BridgeError(
+      "The pending SynthV sidebar preview has invalid changes.",
+      "SIDEBAR_PREVIEW_INVALID",
+    );
+  }
+  return value.map((entry) => {
+    if (!isRecord(entry) || typeof entry.label !== "string" || entry.label === "") {
+      throw new BridgeError(
+        "The pending SynthV sidebar preview has an invalid change entry.",
+        "SIDEBAR_PREVIEW_INVALID",
+      );
+    }
+    const { before, after, count } = entry;
+    if (
+      (before !== undefined && typeof before !== "string") ||
+      (after !== undefined && typeof after !== "string") ||
+      (count !== undefined &&
+        (typeof count !== "number" || !Number.isInteger(count) || count < 0))
+    ) {
+      throw new BridgeError(
+        "The pending SynthV sidebar preview has an invalid change entry.",
+        "SIDEBAR_PREVIEW_INVALID",
+      );
+    }
+    return {
+      label: entry.label,
+      ...(before === undefined ? {} : { before }),
+      ...(after === undefined ? {} : { after }),
+      ...(count === undefined ? {} : { count }),
+    };
+  });
+}
+
+function parseRisks(value: unknown): readonly string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (
+    !Array.isArray(value) ||
+    value.length > 100 ||
+    value.some((entry) => typeof entry !== "string" || entry === "")
+  ) {
+    throw new BridgeError(
+      "The pending SynthV sidebar preview has invalid risks.",
+      "SIDEBAR_PREVIEW_INVALID",
+    );
+  }
+  return value as string[];
+}
+
 function parsePlan(value: unknown): SidebarPlan {
   if (!isRecord(value) || value.version !== 1) {
     throw new BridgeError(
@@ -157,6 +266,8 @@ function parsePlan(value: unknown): SidebarPlan {
     createdAtEpochMs,
     summary,
     details,
+    changes,
+    risks,
     action,
     payload,
     status,
@@ -191,6 +302,8 @@ function parsePlan(value: unknown): SidebarPlan {
     createdAtEpochMs,
     summary,
     details,
+    changes: parsePreviewChanges(changes),
+    risks: parseRisks(risks),
     action: action as SidebarPreviewAction,
     payload,
     status,
@@ -216,39 +329,72 @@ function renderPreview(plan: SidebarPlan): string {
   if (plan.details.trim() !== "") {
     sections.push("", plan.details);
   }
+  if (plan.changes.length > 0) {
+    sections.push("", "变更明细：");
+    for (const change of plan.changes) {
+      const transition =
+        change.before !== undefined || change.after !== undefined
+          ? `：${change.before ?? "—"} → ${change.after ?? "—"}`
+          : "";
+      const count =
+        change.count === undefined ? "" : `（${change.count} 项）`;
+      sections.push(`• ${change.label}${transition}${count}`);
+    }
+  }
+  if (plan.risks.length > 0) {
+    sections.push("", "风险与约束：");
+    for (const risk of plan.risks) {
+      sections.push(`⚠ ${risk}`);
+    }
+  }
   if (plan.errorMessage) {
     sections.push("", plan.errorMessage);
   }
   return `${sections.join("\n")}\n`;
 }
 
-function renderActivity(
-  status: "success" | "error" | "dismissed",
-  action: string,
-  summary: string,
-  message?: string,
-): string {
-  const heading =
-    status === "success"
-      ? "最近操作：已完成"
-      : status === "dismissed"
-        ? "最近操作：已放弃预览"
-        : "最近操作：失败";
+function renderActivity(entries: readonly SidebarHistoryEntry[]): string {
+  const latest = entries.at(-1);
+  if (latest === undefined) {
+    return `${SIDEBAR_ACTIVITY_MARKER}\nstatus=empty\naction=none\nupdatedAtEpochMs=${Date.now()}\n尚无操作记录。\n`;
+  }
+  const heading = {
+    success: "最近操作：已完成",
+    error: "最近操作：失败",
+    dismissed: "最近操作：已放弃预览",
+    cancelled: "最近操作：已取消请求",
+  }[latest.status];
   const sections = [
     SIDEBAR_ACTIVITY_MARKER,
-    `status=${status}`,
-    `action=${action}`,
-    `updatedAtEpochMs=${Date.now()}`,
+    `status=${latest.status}`,
+    `action=${latest.action}`,
+    `updatedAtEpochMs=${latest.updatedAtEpochMs}`,
     heading,
-    summary,
+    latest.summary,
   ];
-  if (message) {
-    sections.push(message);
+  if (latest.message) {
+    sections.push(latest.message);
   }
-  if (status === "success") {
+  if (latest.status === "success") {
     sections.push(
       "撤销：先点击 SynthV 主编辑区，再按 Ctrl+Z；也可使用“编辑 → 撤销”。",
     );
+  }
+  const previous = entries.slice(Math.max(0, entries.length - 6), -1).reverse();
+  if (previous.length > 0) {
+    sections.push("", "历史：");
+    for (const entry of previous) {
+      const time = new Date(entry.updatedAtEpochMs).toLocaleTimeString("zh-CN", {
+        hour12: false,
+      });
+      const icon =
+        entry.status === "success"
+          ? "✓"
+          : entry.status === "error"
+            ? "!"
+            : "○";
+      sections.push(`${icon} ${time} ${entry.summary}`);
+    }
   }
   return `${sections.join("\n")}\n`;
 }
@@ -263,23 +409,40 @@ function parseCommand(text: string): SidebarCommand {
   }
   const operation = lineValue(text, "operation");
   const planId = lineValue(text, "planId");
+  const requestId = lineValue(text, "requestId");
   if (
-    (operation !== "apply" && operation !== "dismiss") ||
-    typeof planId !== "string" ||
-    planId.length === 0
+    operation !== "apply" &&
+    operation !== "dismiss" &&
+    operation !== "cancel_request" &&
+    operation !== "clear_history"
   ) {
     throw new BridgeError(
       "The SynthV sidebar command has invalid fields.",
       "SIDEBAR_COMMAND_INVALID",
     );
   }
-  return { operation, planId };
+  if (
+    (operation === "apply" || operation === "dismiss") &&
+    (typeof planId !== "string" || planId.length === 0)
+  ) {
+    throw new BridgeError(
+      "The SynthV sidebar command has no preview plan ID.",
+      "SIDEBAR_COMMAND_INVALID",
+    );
+  }
+  return {
+    operation,
+    ...(planId === undefined ? {} : { planId }),
+    ...(requestId === undefined ? {} : { requestId }),
+  };
 }
 
 export class SidebarCoordinator {
   private pollTimer: NodeJS.Timeout | null = null;
   private polling = false;
   private lastHeartbeatAt = 0;
+  private lastError: { readonly code: string; readonly message: string } | null =
+    null;
 
   public constructor(
     private readonly config: BridgeConfig,
@@ -291,7 +454,10 @@ export class SidebarCoordinator {
       return;
     }
     this.pollTimer = setInterval(() => {
-      void this.pollOnce().catch(() => undefined);
+      void this.pollOnce().catch(async (error: unknown) => {
+        this.lastError = toPublicError(error);
+        await this.writeClientStatus("running").catch(() => undefined);
+      });
     }, Math.max(100, this.config.pollIntervalMs));
     this.pollTimer.unref();
     this.lastHeartbeatAt = Date.now();
@@ -328,6 +494,17 @@ export class SidebarCoordinator {
       );
     }
     const stat = await fs.stat(this.config.paths.sidebarInstructionFile);
+    const ageMs = Date.now() - stat.mtimeMs;
+    await this.writeTaskState(
+      ageMs > STALE_INSTRUCTION_MS ? "stale" : "claimed",
+      {
+        requestId,
+        message:
+          ageMs > STALE_INSTRUCTION_MS
+            ? "请求等待时间较长；请确认当前选区后再生成预览。"
+            : "Codex 已读取请求，正在准备变更预览。",
+      },
+    );
     return {
       pending: true,
       requestId,
@@ -371,6 +548,8 @@ export class SidebarCoordinator {
       createdAtEpochMs: Date.now(),
       summary: input.summary,
       details: input.details ?? "",
+      changes: input.changes ?? [],
+      risks: input.risks ?? [],
       action: input.action,
       payload: input.payload,
       status: "pending",
@@ -387,8 +566,43 @@ export class SidebarCoordinator {
       this.config.paths.sidebarPreviewTextFile,
       renderPreview(plan),
     );
+    await this.writeTaskState("awaiting_confirmation", {
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      planId: plan.planId,
+      message: "预览已生成，等待在 SynthV 中确认。",
+    });
     await this.removeMatchingInstruction(input.requestId);
     return { planId: plan.planId, status: "pending", action: plan.action };
+  }
+
+  public async getDiagnostics(): Promise<Record<string, unknown>> {
+    const [bridgeStatusRaw, clientStatusRaw, taskStateRaw, history] =
+      await Promise.all([
+        readLimitedText(this.config.paths.statusFile, MAX_SIDEBAR_TEXT_BYTES),
+        readLimitedText(
+          this.config.paths.sidebarClientStatusFile,
+          MAX_SIDEBAR_TEXT_BYTES,
+        ),
+        readLimitedText(this.config.paths.sidebarStateFile, MAX_SIDEBAR_TEXT_BYTES),
+        this.readHistory(),
+      ]);
+    let bridgeStatus: unknown = null;
+    if (bridgeStatusRaw !== null) {
+      try {
+        bridgeStatus = JSON.parse(bridgeStatusRaw) as unknown;
+      } catch {
+        bridgeStatus = { invalid: true };
+      }
+    }
+    return {
+      version: SERVER_VERSION,
+      ipcDirectory: this.config.paths.directory,
+      bridgeStatus,
+      clientStatus: clientStatusRaw,
+      taskState: taskStateRaw,
+      history,
+      lastError: this.lastError,
+    };
   }
 
   public async pollOnce(): Promise<void> {
@@ -400,6 +614,7 @@ export class SidebarCoordinator {
       if (Date.now() - this.lastHeartbeatAt >= 1000) {
         await this.writeClientStatus("running");
       }
+      await this.refreshQueuedState();
       await this.recoverStaleCommand();
       let claimed = false;
       try {
@@ -457,27 +672,91 @@ export class SidebarCoordinator {
   }
 
   private async processCommand(command: SidebarCommand): Promise<void> {
+    if (command.operation === "clear_history") {
+      await this.clearHistory();
+      this.lastError = null;
+      return;
+    }
+
+    if (command.operation === "cancel_request") {
+      const instruction = await readLimitedText(
+        this.config.paths.sidebarInstructionFile,
+        MAX_SIDEBAR_TEXT_BYTES,
+      );
+      const currentRequestId =
+        instruction === null ? undefined : lineValue(instruction, "requestId");
+      if (
+        command.requestId !== undefined &&
+        currentRequestId !== undefined &&
+        command.requestId !== currentRequestId
+      ) {
+        await this.writeTaskState("queued", {
+          requestId: currentRequestId,
+          message:
+            "已忽略过期的取消命令；当前较新的请求仍在等待 Codex 读取。",
+        });
+        return;
+      }
+      if (
+        command.requestId === undefined ||
+        currentRequestId === undefined ||
+        command.requestId === currentRequestId
+      ) {
+        await removeIfExists(this.config.paths.sidebarInstructionFile);
+      }
+      await this.appendHistory({
+        id: randomUUID(),
+        status: "cancelled",
+        action: "sidebar_request",
+        summary: "已取消侧边栏请求。",
+        updatedAtEpochMs: Date.now(),
+      });
+      await this.writeTaskState("cancelled", {
+        ...(currentRequestId === undefined
+          ? {}
+          : { requestId: currentRequestId }),
+        message: "请求已取消；可以修改指令后重新排队。",
+      });
+      this.lastError = null;
+      return;
+    }
+
     const plan = await this.readPlan();
     if (plan === null || plan.planId !== command.planId) {
-      await writeTextAtomically(
-        this.config.paths.sidebarActivityFile,
-        renderActivity(
-          "error",
-          "preview",
-          "无法处理侧边栏预览。",
-          "预览已经过期或已被替换，请让 Codex 重新生成。",
-        ),
-      );
+      this.lastError = {
+        code: "SIDEBAR_PREVIEW_STALE",
+        message: "预览已经过期或已被替换，请让 Codex 重新生成。",
+      };
+      await this.appendHistory({
+        id: randomUUID(),
+        status: "error",
+        action: "preview",
+        summary: "无法处理侧边栏预览。",
+        message: "预览已经过期或已被替换，请让 Codex 重新生成。",
+        updatedAtEpochMs: Date.now(),
+      });
+      await this.writeTaskState("error", {
+        message: "预览已经过期或已被替换。",
+      });
       return;
     }
 
     if (command.operation === "dismiss") {
       await removeIfExists(this.config.paths.sidebarPreviewFile);
       await removeIfExists(this.config.paths.sidebarPreviewTextFile);
-      await writeTextAtomically(
-        this.config.paths.sidebarActivityFile,
-        renderActivity("dismissed", plan.action, plan.summary),
-      );
+      await this.appendHistory({
+        id: plan.planId,
+        status: "dismissed",
+        action: plan.action,
+        summary: plan.summary,
+        updatedAtEpochMs: Date.now(),
+      });
+      await this.writeTaskState("dismissed", {
+        ...(plan.requestId === undefined ? {} : { requestId: plan.requestId }),
+        planId: plan.planId,
+        message: "预览已放弃；工程未修改。",
+      });
+      this.lastError = null;
       return;
     }
 
@@ -493,17 +772,35 @@ export class SidebarCoordinator {
       this.config.paths.sidebarPreviewTextFile,
       renderPreview(applyingPlan),
     );
+    await this.writeTaskState("applying", {
+      ...(plan.requestId === undefined ? {} : { requestId: plan.requestId }),
+      planId: plan.planId,
+      message: "正在通过 Bridge 应用变更。",
+    });
 
     try {
-      await this.client.send(plan.action, plan.payload);
+      await this.client.send(plan.action, {
+        ...plan.payload,
+        _sidebarPlanId: plan.planId,
+      });
       await removeIfExists(this.config.paths.sidebarPreviewFile);
       await removeIfExists(this.config.paths.sidebarPreviewTextFile);
-      await writeTextAtomically(
-        this.config.paths.sidebarActivityFile,
-        renderActivity("success", plan.action, plan.summary),
-      );
+      await this.appendHistory({
+        id: plan.planId,
+        status: "success",
+        action: plan.action,
+        summary: plan.summary,
+        updatedAtEpochMs: Date.now(),
+      });
+      await this.writeTaskState("success", {
+        ...(plan.requestId === undefined ? {} : { requestId: plan.requestId }),
+        planId: plan.planId,
+        message: "变更已应用；可在主编辑区使用 Ctrl+Z 撤销。",
+      });
+      this.lastError = null;
     } catch (error) {
       const publicError = toPublicError(error);
+      this.lastError = publicError;
       const failedPlan: SidebarPlan = {
         ...plan,
         status: "error",
@@ -518,15 +815,19 @@ export class SidebarCoordinator {
         this.config.paths.sidebarPreviewTextFile,
         renderPreview(failedPlan),
       );
-      await writeTextAtomically(
-        this.config.paths.sidebarActivityFile,
-        renderActivity(
-          "error",
-          plan.action,
-          plan.summary,
-          `${publicError.code}: ${publicError.message}`,
-        ),
-      );
+      await this.appendHistory({
+        id: plan.planId,
+        status: "error",
+        action: plan.action,
+        summary: plan.summary,
+        message: `${publicError.code}: ${publicError.message}`,
+        updatedAtEpochMs: Date.now(),
+      });
+      await this.writeTaskState("error", {
+        ...(plan.requestId === undefined ? {} : { requestId: plan.requestId }),
+        planId: plan.planId,
+        message: `${publicError.code}: ${publicError.message}`,
+      });
     }
   }
 
@@ -543,6 +844,140 @@ export class SidebarCoordinator {
     if (current !== null && lineValue(current, "requestId") === requestId) {
       await removeIfExists(this.config.paths.sidebarInstructionFile);
     }
+  }
+
+  private async readHistory(): Promise<SidebarHistoryEntry[]> {
+    const raw = await readLimitedText(
+      this.config.paths.sidebarHistoryFile,
+      MAX_SIDEBAR_PLAN_BYTES,
+    );
+    if (raw === null) {
+      return [];
+    }
+    try {
+      const value = JSON.parse(raw) as unknown;
+      if (!Array.isArray(value)) {
+        return [];
+      }
+      return value
+        .filter((entry): entry is Record<string, unknown> => isRecord(entry))
+        .flatMap((entry) => {
+          const { id, status, action, summary, message, updatedAtEpochMs } =
+            entry;
+          if (
+            typeof id !== "string" ||
+            (status !== "success" &&
+              status !== "error" &&
+              status !== "dismissed" &&
+              status !== "cancelled") ||
+            typeof action !== "string" ||
+            typeof summary !== "string" ||
+            (message !== undefined && typeof message !== "string") ||
+            typeof updatedAtEpochMs !== "number" ||
+            !Number.isFinite(updatedAtEpochMs)
+          ) {
+            return [];
+          }
+          const validStatus: SidebarHistoryEntry["status"] = status;
+          return [
+            {
+              id,
+              status: validStatus,
+              action,
+              summary,
+              ...(message === undefined ? {} : { message }),
+              updatedAtEpochMs,
+            },
+          ];
+        })
+        .slice(-MAX_HISTORY_ENTRIES);
+    } catch {
+      return [];
+    }
+  }
+
+  private async appendHistory(entry: SidebarHistoryEntry): Promise<void> {
+    const history = await this.readHistory();
+    history.push(entry);
+    const bounded = history.slice(-MAX_HISTORY_ENTRIES);
+    await writeTextAtomically(
+      this.config.paths.sidebarHistoryFile,
+      `${JSON.stringify(bounded, null, 2)}\n`,
+    );
+    await writeTextAtomically(
+      this.config.paths.sidebarActivityFile,
+      renderActivity(bounded),
+    );
+  }
+
+  private async clearHistory(): Promise<void> {
+    await removeIfExists(this.config.paths.sidebarHistoryFile);
+    await writeTextAtomically(
+      this.config.paths.sidebarActivityFile,
+      renderActivity([]),
+    );
+  }
+
+  private async refreshQueuedState(): Promise<void> {
+    const stat = await fs
+      .stat(this.config.paths.sidebarInstructionFile)
+      .catch(() => null);
+    if (stat === null) {
+      return;
+    }
+    const raw = await readLimitedText(
+      this.config.paths.sidebarInstructionFile,
+      MAX_SIDEBAR_TEXT_BYTES,
+    );
+    const requestId = raw === null ? undefined : lineValue(raw, "requestId");
+    const stale = Date.now() - stat.mtimeMs > STALE_INSTRUCTION_MS;
+    const currentState = await readLimitedText(
+      this.config.paths.sidebarStateFile,
+      MAX_SIDEBAR_TEXT_BYTES,
+    );
+    if (
+      !stale &&
+      currentState !== null &&
+      lineValue(currentState, "requestId") === requestId &&
+      lineValue(currentState, "status") === "claimed"
+    ) {
+      return;
+    }
+    await this.writeTaskState(stale ? "stale" : "queued", {
+      ...(requestId === undefined ? {} : { requestId }),
+      message: stale
+        ? "请求等待超过 5 分钟；继续前请重新确认当前选区。"
+        : "请求已排队，等待 Codex 读取。",
+    });
+  }
+
+  private async writeTaskState(
+    status: SidebarTaskStatus,
+    fields: {
+      readonly requestId?: string;
+      readonly planId?: string;
+      readonly message?: string;
+    } = {},
+  ): Promise<void> {
+    const lines = [
+      SIDEBAR_STATE_MARKER,
+      `status=${status}`,
+      `updatedAtEpochMs=${Date.now()}`,
+    ];
+    if (fields.requestId !== undefined) {
+      lines.push(`requestId=${sanitizeLine(fields.requestId)}`);
+    }
+    if (fields.planId !== undefined) {
+      lines.push(`planId=${sanitizeLine(fields.planId)}`);
+    }
+    if (fields.message !== undefined) {
+      lines.push(`message=${sanitizeLine(fields.message)}`);
+    }
+    lines.push("");
+    await writeTextAtomically(
+      this.config.paths.sidebarStateFile,
+      lines.join("\n"),
+    );
   }
 
   private async recoverStaleCommand(): Promise<void> {
@@ -571,15 +1006,21 @@ export class SidebarCoordinator {
 
   private async writeClientStatus(state: "running" | "stopped"): Promise<void> {
     const now = Date.now();
+    const lines = [
+      "synthv-agent-bridge-sidebar-client-status-v1",
+      `state=${state}`,
+      `version=${SERVER_VERSION}`,
+      `updatedAtEpochMs=${now}`,
+      `ipcDirectory=${sanitizeLine(this.config.paths.directory)}`,
+    ];
+    if (this.lastError !== null) {
+      lines.push(`lastErrorCode=${sanitizeLine(this.lastError.code)}`);
+      lines.push(`lastErrorMessage=${sanitizeLine(this.lastError.message)}`);
+    }
+    lines.push("");
     await writeTextAtomically(
       this.config.paths.sidebarClientStatusFile,
-      [
-        "synthv-agent-bridge-sidebar-client-status-v1",
-        `state=${state}`,
-        `version=${SERVER_VERSION}`,
-        `updatedAtEpochMs=${now}`,
-        "",
-      ].join("\n"),
+      lines.join("\n"),
     );
     this.lastHeartbeatAt = now;
   }

@@ -967,6 +967,112 @@ callWrite("script_data",'{"operation":"remove","objectType":"project","key":"syn
 
 callWrite("delete_note_group",'{"groupUuid":"'..libraryUuid..'"}')
 assert(project.tracks[1]:getNumGroups()==1 and project.tracks[2]:getNumGroups()==1,"deleting a library group must remove linked references")
-callWrite("delete_notes",'{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(newFingerprint)..'"}]}')
-assert(project.undo==36,"expected 36 undo records, got "..project.undo)
+
+local transactionUndoBefore=project.undo
+local transactionResponse=call(
+    "apply_transaction",
+    '{"summary":"Update two independent tracks","steps":['..
+        '{"action":"update_track","payload":{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","name":"Transaction Lead"}},'..
+        '{"action":"set_track_mixer","payload":{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","gainDecibel":-6}}'..
+    '],"rollbackSteps":['..
+        '{"action":"update_track","payload":{"trackIndex":1,"trackFingerprint":{"$result":{"step":1,"path":["fingerprint"]}},"name":"Track"}},'..
+        '{"action":"set_track_mixer","payload":{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","gainDecibel":0}}'..
+    ']}'
+)
+assert(project.undo==transactionUndoBefore+1,"transaction must create one undo record")
+assert(project.tracks[1].name=="Transaction Lead","transaction did not update track 1")
+assert(project.tracks[2].mixer.gain==-6,"transaction did not update track 2 mixer")
+assert(transactionResponse:find('"rollbackAvailable":true',1,true),"transaction rollback was not stored")
+local transactionId=extractJsonString(transactionResponse,"transactionId")
+callWrite("rollback_transaction",'{"transactionId":"'..escape(transactionId)..'"}')
+assert(project.tracks[1].name=="Track","transaction rollback did not restore the track name")
+assert(project.tracks[2].mixer.gain==0,"transaction rollback did not restore the mixer")
+
+local transactionFailureUndoBefore=project.undo
+local transactionFailureNameBefore=project.tracks[1].name
+callExpectError(
+    "apply_transaction",
+    '{"summary":"Reject stale second step","steps":['..
+        '{"action":"update_track","payload":{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","name":"Must Not Apply"}},'..
+        '{"action":"set_track_mixer","payload":{"trackIndex":2,"trackFingerprint":"stale","pan":-0.5}}'..
+    ']}',
+    "STALE_TRACK"
+)
+assert(project.undo==transactionFailureUndoBefore,"failed transaction preflight created an undo record")
+assert(project.tracks[1].name==transactionFailureNameBefore,"failed transaction preflight partially changed the project")
+
+local exclusiveDeleteUndoBefore=project.undo
+local exclusiveDeleteTrackCountBefore=#project.tracks
+callExpectError(
+    "apply_transaction",
+    '{"summary":"Reject index-shifting delete batch","steps":['..
+        '{"action":"delete_track","payload":{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'"}},'..
+        '{"action":"update_track","payload":{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","name":"Must Not Apply"}}'..
+    ']}',
+    "TRANSACTION_SCOPE_CONFLICT"
+)
+assert(project.undo==exclusiveDeleteUndoBefore,"exclusive delete rejection created an undo record")
+assert(#project.tracks==exclusiveDeleteTrackCountBefore,"exclusive delete rejection changed tracks")
+
+local harmonyTrackCountBefore=#project.tracks
+callWrite(
+    "create_harmony_track",
+    '{"sourceTrackIndex":2,"sourceTrackFingerprint":"'..track2Fingerprint..'","name":"Harmony +7","intervalSemitones":7,"minimumPitch":55,"maximumPitch":76,"rangePolicy":"octave","gainDecibel":-5,"pan":0.4}'
+)
+assert(#project.tracks==harmonyTrackCountBefore+1,"harmony track was not created")
+local harmonyTrack=project.tracks[#project.tracks]
+assert(harmonyTrack.refs[1].group.notes[1].pitch==67,"harmony notes were not transposed")
+assert(harmonyTrack.mixer.gain==-5 and harmonyTrack.mixer.pan==0.4,"harmony mixer was not applied")
+local harmonyFingerprint="main-group:"..harmonyTrack.refs[1].group.uuid
+callWrite("delete_track",'{"trackIndex":'..#project.tracks..',"trackFingerprint":"'..harmonyFingerprint..'"}')
+
+local semanticNotes=call("get_track_notes",'{"trackIndex":1,"offset":0,"limit":100}')
+local semanticFingerprints={}
+for value in semanticNotes:gmatch('"fingerprint":"([^"]+)"') do
+    if value:find("|",1,true) then semanticFingerprints[#semanticFingerprints+1]=value end
+end
+callWrite(
+    "humanize_notes",
+    '{"trackIndex":1,"groupIndex":1,"notes":['..
+        '{"noteIndex":1,"fingerprint":"'..escape(semanticFingerprints[1])..'"},'..
+        '{"noteIndex":2,"fingerprint":"'..escape(semanticFingerprints[2])..'"}'..
+    '],"seed":42,"maxOnsetOffset":1000,"maxDurationOffset":1000,"preserveChords":true}'
+)
+local lyricsNotes=call("get_track_notes",'{"trackIndex":1,"offset":0,"limit":100}')
+local lyricsFingerprints={}
+for value in lyricsNotes:gmatch('"fingerprint":"([^"]+)"') do
+    if value:find("|",1,true) then lyricsFingerprints[#lyricsFingerprints+1]=value end
+end
+callWrite(
+    "fit_lyrics",
+    '{"trackIndex":1,"groupIndex":1,"notes":['..
+        '{"noteIndex":1,"fingerprint":"'..escape(lyricsFingerprints[1])..'"},'..
+        '{"noteIndex":2,"fingerprint":"'..escape(lyricsFingerprints[2])..'"}'..
+    '],"syllables":["你","好"],"fillRemainder":"reject"}'
+)
+assert(project.tracks[1].refs[1].group.notes[1].lyrics=="你","lyrics were not fitted")
+local vibratoNotes=call("get_track_notes",'{"trackIndex":1,"offset":0,"limit":100}')
+local vibratoFingerprints={}
+for value in vibratoNotes:gmatch('"fingerprint":"([^"]+)"') do
+    if value:find("|",1,true) then vibratoFingerprints[#vibratoFingerprints+1]=value end
+end
+callWrite(
+    "apply_expression_preset",
+    '{"trackIndex":1,"groupIndex":1,"preset":"vibrato","strength":0.6,"notes":['..
+        '{"noteIndex":1,"fingerprint":"'..escape(vibratoFingerprints[1])..'"}'..
+    ']}'
+)
+assert(project.tracks[1].refs[1].group.notes[1].attrs.dF0VbrMod==0.6,"vibrato preset was not applied")
+local loudnessBefore=call("get_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness"}')
+local loudnessFingerprint=extractJsonString(loudnessBefore,"fingerprint")
+callWrite(
+    "apply_expression_preset",
+    '{"trackIndex":1,"groupIndex":1,"preset":"crescendo","strength":1,"expectedAutomationFingerprint":"'..
+        escape(loudnessFingerprint)..'","beginPosition":0,"endPosition":1411200000,"startValue":-4,"endValue":0}'
+)
+
+local finalNotes=call("get_track_notes",'{"trackIndex":1,"offset":0,"limit":100}')
+local finalFingerprint=extractJsonString(finalNotes,"fingerprint")
+callWrite("delete_notes",'{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(finalFingerprint)..'"}]}')
+assert(project.undo==44,"expected 44 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

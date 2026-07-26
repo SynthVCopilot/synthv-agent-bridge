@@ -4,7 +4,10 @@ A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server 
 
 The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse or rewrite `.svp` files, open a network port, or call an AI API by itself.
 
-> Status: **v0.1.4 pre-release**. The protocol, safety guards, broad official scripting-API coverage, editor lifecycle operations, and first native side-panel workflow are implemented. Test on copies of important projects.
+> Status: **v0.1.4 pre-release**. The protocol, safety guards, broad official
+> scripting-API coverage, native side-panel workflow, guarded transactions,
+> and first musical semantic tools are implemented. Test on copies of important
+> projects.
 
 ## What it can do
 
@@ -21,10 +24,14 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 - Add, replace, sample, simplify, or clear automation curves such as pitch deviation, loudness, tension, breathiness, voicing, gender, and Vocal Mode.
 - Read and change selection and viewport state, use grid snapping and coordinate conversion, and exchange text through SynthV's host clipboard.
 - Control gain, pan, mute, solo, play, pause, stop, seek, and loop.
-- Put each successful write call into one SynthV undo record.
+- Preflight up to 32 independent writes and apply the complete transaction in
+  one SynthV undo record, with optional in-session guarded rollback.
+- Create range-constrained harmony tracks, humanize note timing, fit lyrics to
+  notes, and apply scoop, falloff, vibrato, crescendo, or breathiness presets.
+- Put each successful write call or transaction into one SynthV undo record.
 - Use a native SynthV side panel to inspect connection/current-selection context,
-  queue an instruction, review one guarded write, apply or dismiss it, and see
-  the latest Bridge operation.
+  queue an instruction, review a structured guarded write or transaction,
+  apply/dismiss/cancel it, inspect diagnostics, and see recent activity.
 
 ## Architecture
 
@@ -79,13 +86,21 @@ The installer copies these files into a `SynthV Agent Bridge` subfolder of the d
 - `StopSynthVAgentBridge.lua`
 - `SynthVAgentSidebar.lua`
 
-Alternatively, set `SYNTHV_SCRIPTS_DIR` to the scripts directory before running `npm run install:synthv`. The installer creates a `SynthV Agent Bridge` subfolder. After copying the files, choose **Scripts → Rescan**. SynthV then loads **SynthV Agent** as a custom side-panel section.
+Alternatively, set `SYNTHV_SCRIPTS_DIR` to the scripts directory before running
+`npm run install:synthv`. The installer creates a `SynthV Agent Bridge`
+subfolder. When the side-panel file changed, choose **Scripts → Rescan**.
+SynthV then loads **SynthV Agent** as a custom side-panel section. Rescan stops
+persistent scripts, so afterward run **Start SynthV Agent Bridge** once. When
+the side-panel file is unchanged, the installer explicitly says that no rescan
+is required.
 
 If a hot-reload-capable Bridge session is already running, the installer asks
 it to load the copied Lua file and waits for a new session heartbeat. This uses
 the Bridge's file IPC and Lua `loadfile()`—not UI automation or hooks. Use
 `--no-reload` to copy without requesting a reload. The first installation of a
-hot-reload-capable version must still be started manually once.
+hot-reload-capable version must still be started manually once. A required
+side-panel rescan also stops the current Bridge and therefore needs one manual
+start afterward.
 
 ### 3. Start the in-editor bridge
 
@@ -126,7 +141,8 @@ an AI API itself:
    directory and copies a handoff prompt to the host clipboard.
 3. Paste the prompt into the connected Codex task.
 4. Codex reads fresh SynthV state and publishes one fingerprint-guarded write
-   back to the panel.
+   or complete transaction back to the panel, including structured changes and
+   risks.
 5. Review the preview in SynthV, then click **Apply** or **Dismiss**.
 
 Apply commands are consumed by the Node coordinator and sent through the same
@@ -153,7 +169,8 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 |---|---:|---|
 | `bridge_status` | Read | Read the heartbeat without requiring a round trip. |
 | `sidebar_get_request` | Read | Read the latest instruction and selection summary queued by the native side panel. |
-| `sidebar_publish_preview` | Control | Publish one complete guarded write for Apply/Dismiss confirmation in SynthV. |
+| `sidebar_status` | Read | Read Bridge/MCP diagnostics, task state, IPC path, recent summaries, and the latest coordinator error. |
+| `sidebar_publish_preview` | Control | Publish one complete guarded write or transaction, structured changes, and risks for confirmation in SynthV. |
 | `ping` | Read | Test the complete Node → Lua → Node path. |
 | `reload_bridge` | Control | Reload the installed Lua Bridge in the current script session. |
 | `get_host_info` | Read | SynthV host version, OS, language, project, and IPC information. |
@@ -208,6 +225,12 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 | `script_data` | Read/Write | Manage namespaced Bridge JSON metadata on SynthV objects. |
 | `get_track_mixer` | Read | Read gain, pan, mute, and solo. |
 | `set_track_mixer` | Write | Change gain, pan, mute, and solo. |
+| `apply_transaction` | Destructive | Preflight up to 32 independent write steps and apply them in one undo record, optionally storing guarded reverse steps. |
+| `rollback_transaction` | Destructive | Apply the stored guarded reverse steps for a transaction in one new undo record. |
+| `create_harmony_track` | Write | Clone a guarded vocal track, transpose it, octave-fit an optional voice range, and set its mixer. |
+| `humanize_notes` | Destructive | Apply deterministic fingerprint-guarded onset/duration variation, optionally preserving chord alignment. |
+| `apply_expression_preset` | Destructive | Apply scoop, falloff, vibrato, crescendo, or breathiness through note attributes or automation. |
+| `fit_lyrics` | Destructive | Assign syllables and optional phonemes to fingerprint-verified notes. |
 | `playback` | Control | Read status, play, pause, stop, seek, or loop. |
 
 All track, group, and note indices are **1-based**, matching the SynthV Lua API. Note and automation coordinates are group-local blicks unless the returned field explicitly says `absolute`. Playback positions are seconds.
@@ -243,7 +266,9 @@ The server instructions tell an agent to follow this sequence:
 1. Read the project, time axis, track, group, automation, or current selection immediately before editing.
 2. Present or internally construct a small, reviewable change.
 3. Copy the latest applicable group/reference UUIDs and fingerprints, track fingerprint, automation/time-axis fingerprint, and note or Smart Pitch fingerprints.
-4. Call the smallest write tool that completes the intended change in one undo record.
+4. Call the smallest write tool that completes the intended change. Use
+   `apply_transaction` only for a complete independent multi-object batch that
+   benefits from one undo record.
 5. If SynthV reports any `STALE_*` error, read again rather than guessing.
 
 A note fingerprint includes the group UUID, note index, onset, duration, pitch, detune, lyrics, phonemes, language, musical type, pitch mode, rap accent, retake count, and note attributes. This prevents an agent from applying an old plan to a note that the user has already changed.
@@ -315,13 +340,33 @@ CI runs TypeScript tests on Node 20 and 22, parses all three production Lua
 files with Lua 5.4, and exercises both the persistent Bridge and side panel
 through mock SynthV integration harnesses.
 
+For a local installation and connection report, run:
+
+```bash
+npm run doctor -- --target "/path/to/Synthesizer V Studio 2/scripts"
+```
+
+The doctor checks source/installed versions and exact script contents, Bridge
+and MCP heartbeats, the resolved IPC directory, residual processing/control
+files, and Codex configuration. Add `--json` for machine-readable output. It
+never modifies the project or installed files.
+
 ## Current limitations
 
 - One request may be in flight at a time.
 - A client-side timeout is ambiguous: SynthV may still finish the operation. The processing marker remains until the Lua host completes, and the agent should read the current project before deciding whether to retry a write.
-- Multi-call preview/commit transactions are planned but not implemented in v0.1.
-- The v0.1.4 side panel confirms one Bridge write at a time; multi-tool
-  preview/commit transactions remain planned for v0.2.
+- The side panel holds one pending preview at a time. That preview may contain
+  either one write or one `apply_transaction` batch.
+- Generic transactions deliberately reject multiple steps that mutate the
+  same guarded scope and cannot feed a newly created object into a later
+  forward step. Index-shifting track/library-group deletes must be the only
+  step. Purpose-built semantic actions cover common dependent edits.
+- Transaction validation failures make no project changes. An unexpected host
+  failure after execution begins may leave a partial batch inside the single
+  undo record; immediately use **Edit > Undo**.
+- Rollback plans are held in Bridge memory for the current project/session and
+  are lost when the Bridge reloads or SynthV closes. A rollback is a new
+  guarded write and is refused if its fingerprints are stale.
 - The panel cannot initiate a Codex turn by itself. **Copy & queue** writes a
   local request and puts a handoff prompt on the clipboard for the user to paste.
 - SynthV's public scripting API does not expose an Undo command. The panel shows
@@ -330,7 +375,8 @@ through mock SynthV integration harnesses.
 - SynthV's public scripting API does not expose project save, audio rendering, selecting an installed singer database by display name, or Voice Panel scale/mode settings. These remain out of scope; `clone_track` can inherit an already-selected singer.
 - `singers` and `spacing` are returned by SynthV 2.2.1 but are not documented in the public `getVoice` field list. The typed Unison surface is therefore experimental and refuses writes unless the host returns and retains the requested fields on a cloned reference.
 - The Retake API does not enumerate Take IDs or expose the active Take ID. The bridge therefore activates and deletes only the default Take or IDs it generated and stored itself.
-- Semantic expression presets are not implemented yet; the primitive Smart Pitch and automation tools are available.
+- Expression presets are intentionally small building blocks, not phrase
+  analysis or pronunciation-quality scoring.
 - The bridge has not yet been validated against every SynthV 2.x patch and every voice database.
 - ChatGPT does not connect directly to this local stdio server. Use Codex or another local MCP host; a future remote adapter would need explicit authentication and transport security.
 

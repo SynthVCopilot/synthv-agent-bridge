@@ -22,6 +22,8 @@ export interface BridgePaths {
   readonly sidebarCommandFile: string;
   readonly sidebarCommandProcessingFile: string;
   readonly sidebarActivityFile: string;
+  readonly sidebarHistoryFile: string;
+  readonly sidebarStateFile: string;
   readonly sidebarClientStatusFile: string;
 }
 
@@ -106,6 +108,8 @@ export function loadConfig(
       sidebarCommandFile: `${prefix}.sidebar.command.txt`,
       sidebarCommandProcessingFile: `${prefix}.sidebar.command.processing.txt`,
       sidebarActivityFile: `${prefix}.sidebar.activity.txt`,
+      sidebarHistoryFile: `${prefix}.sidebar.history.json`,
+      sidebarStateFile: `${prefix}.sidebar.state.txt`,
       sidebarClientStatusFile: `${prefix}.sidebar.client-status.txt`,
     },
     timeoutMs,

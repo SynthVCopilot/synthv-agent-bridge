@@ -39,6 +39,18 @@ test("loadConfig builds all IPC paths from a shared directory", () => {
     ),
     true,
   );
+  assert.equal(
+    config.paths.sidebarHistoryFile.endsWith(
+      "synthv-agent-bridge.sidebar.history.json",
+    ),
+    true,
+  );
+  assert.equal(
+    config.paths.sidebarStateFile.endsWith(
+      "synthv-agent-bridge.sidebar.state.txt",
+    ),
+    true,
+  );
   assert.equal(config.timeoutMs, 1234);
   assert.equal(config.pollIntervalMs, 7);
   assert.equal(config.staleRequestMs, 4567);

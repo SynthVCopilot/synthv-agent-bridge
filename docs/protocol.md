@@ -89,10 +89,46 @@ Retakes, automation sampling/simplification, full selection control, viewport
 navigation, host clipboard/dialog helpers, coordinate conversion, and
 namespaced script data. Later additive actions expose typed Group voice/Vocal
 Mode settings, host-validated experimental Unison fields, and dedicated
-per-note phoneme properties without changing the v1 envelope.
+per-note phoneme properties without changing the v1 envelope. Version 0.1.4
+also adds `apply_transaction`, `rollback_transaction`,
+`create_harmony_track`, `humanize_notes`, `apply_expression_preset`, and
+`fit_lyrics` as additive v1 actions.
 
 `script_data` only exposes keys beginning with `synthv-agent-bridge.`. It never
 lists, clears, or overwrites another script's namespace.
+
+### Guarded transactions
+
+`apply_transaction` uses the ordinary v1 envelope:
+
+```json
+{
+  "protocolVersion": 1,
+  "requestId": "example",
+  "action": "apply_transaction",
+  "createdAt": "2026-07-26T00:00:00.000Z",
+  "payload": {
+    "summary": "Update two independent tracks",
+    "steps": [
+      {"action": "update_track", "payload": {"trackIndex": 1, "trackFingerprint": "...", "name": "Lead"}},
+      {"action": "set_track_mixer", "payload": {"trackIndex": 2, "trackFingerprint": "...", "gainDecibel": -3}}
+    ]
+  }
+}
+```
+
+The batch contains 1–32 non-transaction project-write steps. The Bridge
+preflights every step before one undo record is created. Validation failure
+leaves the project unchanged. Steps that mutate the same guarded scope are
+rejected because their validation would be order-dependent. Track and
+library-group deletes, which shift later indices, must be the only step.
+
+Optional `rollbackSteps` may refer to a forward result with a value shaped as
+`{"$result":{"step":1,"path":["fingerprint"]}}`; `step` is 1-based and `path`
+walks fields in that result. Resolved reverse steps are stored only in the
+current Bridge session. `rollback_transaction` accepts the returned
+`transactionId`, revalidates current fingerprints, and creates one new undo
+record.
 
 ### Track color compatibility
 

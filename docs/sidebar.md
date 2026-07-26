@@ -13,9 +13,14 @@ The panel:
   range, time range, selected Groups, and selected Smart Pitch controls;
 - writes one instruction plus that summary to a local queue;
 - copies a Codex handoff prompt to SynthV's host clipboard;
-- displays one pending guarded Bridge write;
-- writes Apply or Dismiss commands for the Node coordinator; and
-- displays the latest successful Bridge write or preview error.
+- displays one pending guarded Bridge write or transaction with structured
+  before/after/count rows and risk warnings;
+- shows `queued`, `claimed`, `awaiting_confirmation`, `applying`, and terminal
+  task states;
+- writes Apply, Dismiss, or Cancel commands for the Node coordinator;
+- shows Bridge/MCP versions, heartbeat ages, IPC path, and the latest error in
+  a diagnostics dialog; and
+- keeps up to 20 privacy-limited operation summaries that can be cleared.
 
 The panel does not call an AI API, open a socket, parse `.svp` files, or mutate
 SynthV project objects.
@@ -29,7 +34,7 @@ SynthV selection + typed instruction
        sidebar.instruction.txt
                  │ sidebar_get_request
                  ▼
-        Codex reads fresh state
+        Codex claims request and reads fresh state
                  │ sidebar_publish_preview
                  ▼
  sidebar.preview.json + preview.txt
@@ -43,20 +48,29 @@ SynthV selection + typed instruction
 
 `sidebar.preview.json` contains the complete Bridge action and payload. The
 panel reads only `sidebar.preview.txt`, which contains the generated plan ID,
-status, and human-readable description. On Apply, the coordinator verifies the
-plan ID and sends the stored payload; it does not accept a payload from the
-panel command file.
+status, human-readable description, structured changes, and risks. On Apply,
+the coordinator verifies the plan ID and sends the stored payload; it does not
+accept a payload from the panel command file.
+
+`sidebar.state.txt` records the current task state. `sidebar.history.json`
+stores at most 20 summaries with timestamps, results, affected action, and
+safe error details. The history deliberately excludes complete lyrics, note
+payloads, and preview bodies. `sidebar.activity.txt` is the display-oriented
+view of those summaries.
 
 ## Safety properties
 
-- Only project-write actions are accepted as panel previews.
+- Only project-write actions, `apply_transaction`, and guarded rollback are
+  accepted as panel previews.
 - The preview payload must already contain every UUID and fingerprint required
   by the selected Bridge action.
 - Only one pending or applying preview is allowed unless Codex explicitly
   replaces it.
 - The existing `FileIpcClient` lock and serialization remain authoritative.
 - Failed and stale writes stay visible and are not automatically retried.
-- Successful writes remain one native SynthV undo record.
+- A successful write or transaction remains one native SynthV undo record.
+- Cancel removes a queued request or unapplied preview; it does not interrupt a
+  write that the Lua host has already started.
 
 SynthV's public scripting API exposes `Project:newUndoRecord()` but no Undo
 operation. The panel therefore provides undo guidance rather than simulating
@@ -64,11 +78,30 @@ keyboard input. Click the main editor before pressing **Ctrl+Z** so a focused
 side-panel text field does not consume the shortcut; **Edit > Undo** is the
 focus-independent fallback.
 
+## Recovery and diagnosis
+
+The panel's **Diagnostics** button and the read-only `sidebar_status` MCP tool
+show the same core facts: Bridge/MCP version and freshness, IPC directory,
+current task state, recent summaries, and last coordinator error. The recovery
+message distinguishes these cases:
+
+- Rescan scripts when the panel or installed version is missing.
+- Start **SynthV Agent Bridge** when the Lua heartbeat is offline.
+- Restart/reconnect the MCP host when only the MCP heartbeat is offline.
+
+`npm run doctor -- --target "<SynthV scripts directory>"` performs equivalent
+read-only checks outside SynthV.
+
 ## Current limitations
 
-- One Bridge write can be previewed at a time.
+- One preview can be pending at a time, although it may contain a transaction
+  of up to 32 independent write steps.
 - The user must paste the copied handoff prompt into Codex; an MCP server cannot
   initiate a model turn.
-- Preview history is limited to the current preview and latest activity.
-- Full multi-tool preview/commit and rollback belong to the planned v0.2
-  transaction layer.
+- History contains summaries only and is intentionally capped at 20 entries.
+- Stored rollback plans survive only for the current Bridge process and
+  project session.
+- The SynthV side-panel API does not provide a way for this script to make
+  buttons sticky during host scrolling or to define arbitrary status colors,
+  so the panel uses compact symbols, dedicated status rows, and visible action
+  rows instead.

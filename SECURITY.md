@@ -11,10 +11,13 @@ This project controls a local Synthesizer V Studio session and can modify the op
   reference, library-group, automation, and time-axis writes support matching
   optimistic-concurrency guards.
 - Script data is restricted to the `synthv-agent-bridge.` namespace.
-- Each write creates an undo record in SynthV.
+- Each write or preflighted transaction creates one undo record in SynthV.
 - The side panel exchanges instructions, human-readable previews, and one
-  structured pending write only through files in the configured local IPC
-  directory. It does not call an AI API or write project objects directly.
+  structured pending write or transaction only through files in the
+  configured local IPC directory. It does not call an AI API or write project
+  objects directly.
+- Side-panel history is capped at 20 summaries and excludes complete lyrics,
+  note payloads, and preview bodies.
 
 ## Operational guidance
 
@@ -29,5 +32,7 @@ This project controls a local Synthesizer V Studio session and can modify the op
 - Side-panel request and preview files may contain user instructions and
   project locators. Keep the IPC directory private to the local user and do not
   place it in a synchronized or shared folder.
+- Rollback steps are volatile Bridge-process memory. They are fingerprint
+  guarded, tied to the current project/session, and are discarded on reload.
 
 Report a suspected vulnerability privately to the repository owner rather than opening a public issue with exploit details.

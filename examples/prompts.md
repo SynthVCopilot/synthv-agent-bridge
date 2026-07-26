@@ -23,6 +23,11 @@ Before a write operation, ask the agent to read the current state and describe t
 - Read the current selection, then transpose it down three semitones. Use the returned fingerprints and make one reviewable edit call.
 - Clone track 1 as `Harmony -3st` and transpose the clone down three semitones. Preserve the source singer and reject the operation if any pitch would leave MIDI 0–127.
 - Read track 2, then rename it and enable it in the Render Panel using its latest track fingerprint.
+- Read the selected notes and fit the supplied syllables one-to-one. Show a
+  structured preview of the lyric count and do not store the complete lyrics
+  in side-panel history.
+- Humanize the selected phrase with deterministic onset and duration variation,
+  preserving shared chord onsets and using the latest note fingerprints.
 
 ## Expression
 
@@ -31,6 +36,21 @@ Before a write operation, ask the agent to read the current state and describe t
 - Set the selected notes to English and manual pitch mode without changing their lyrics or timing.
 - Read the current Smart Pitch controls, then add a short upward scoop before the first selected note using a curve control.
 - Sample the tension curve every eighth note and simplify the selected range without changing its audible shape beyond a 0.002 threshold.
+- Apply the vibrato expression preset to the selected notes after listing their
+  fresh fingerprints.
+- Preview a short falloff over the selected phrase, warning that existing pitch
+  deviation points inside that range will be replaced.
+
+## Harmony and transactions
+
+- Read the lead track, then create a harmony a minor third below. Keep notes
+  between MIDI 55 and 79 by octave displacement, set gain to -4 dB, pan to
+  0.25, and preview the range policy before applying.
+- Read tracks 1 and 2, then publish one side-panel transaction that renames
+  track 1 and changes track 2 gain. Include structured before/after rows,
+  preflight both fingerprints, and store guarded reverse steps.
+- Inspect the latest transaction result and preview its rollback only if the
+  stored transaction ID and current fingerprints still match.
 
 ## Groups and Retakes
 

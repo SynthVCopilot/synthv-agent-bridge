@@ -36,6 +36,15 @@ writeFile(
         ""
     }, "\n")
 )
+writeFile(
+    prefix .. ".sidebar.state.txt",
+    table.concat({
+        "synthv-agent-bridge-sidebar-state-v1",
+        "status=idle",
+        "updatedAtEpochMs=" .. tostring(now),
+        ""
+    }, "\n")
+)
 
 local function makeWidgetValue()
     local widget = {
@@ -113,6 +122,7 @@ function arrangement:getSelection() return arrangementSelection end
 
 local scheduledCallback = nil
 local clipboard = nil
+local lastMessage = nil
 SV = {}
 function SV:getHostInfo()
     return {
@@ -128,7 +138,7 @@ function SV:getMainEditor() return editor end
 function SV:getArrangement() return arrangement end
 function SV:blick2Quarter(value) return value / 1411200000 end
 function SV:setHostClipboard(value) clipboard = value end
-function SV:showMessageBoxAsync(_title, _message) end
+function SV:showMessageBoxAsync(_title, message) lastMessage = message end
 function SV:setTimeout(_milliseconds, callback) scheduledCallback = callback end
 
 assert(loadfile(sidebarScript))()
@@ -139,18 +149,23 @@ assert(clientInfo.versionNumber == 4, "side panel version number was not updated
 
 local state = getSidePanelSectionState()
 assert(state.title:find("0.1.4", 1, true), "side panel title has no version")
-assert(#state.rows == 13, "unexpected side panel row count")
+assert(#state.rows == 14, "unexpected side panel row count")
 
 local bridgeStatusWidget = state.rows[2].columns[1].value
 local clientStatusWidget = state.rows[2].columns[2].value
-local selectionWidget = state.rows[4].columns[1].value
+local taskStateWidget = state.rows[3].columns[1].value
+local diagnosticsWidget = state.rows[3].columns[2].value
+local selectionWidget = state.rows[5].columns[1].value
 assert(bridgeStatusWidget.value:find("B 0.1.4", 1, true), "Bridge heartbeat was not displayed")
 assert(clientStatusWidget.value:find("M 0.1.4", 1, true), "MCP heartbeat was not displayed")
+assert(taskStateWidget.value:find("Idle", 1, true), "task state was not displayed")
+diagnosticsWidget.callback()
+assert(lastMessage and lastMessage:find("IPC:", 1, true), "diagnostics did not show the IPC path")
 assert(selectionWidget.value:find("2 notes", 1, true), "selected notes were not summarized")
 assert(selectionWidget.value:find("C4", 1, true), "selected pitch range was not summarized")
 
-local instructionWidget = state.rows[6].columns[1].value
-local submitWidget = state.rows[7].columns[1].value
+local instructionWidget = state.rows[7].columns[1].value
+local submitWidget = state.rows[8].columns[1].value
 instructionWidget:emit("Transpose the selected notes down three semitones.")
 assert(submitWidget.enabled, "submit button did not enable for a non-empty instruction")
 assert(submitWidget.callback, "submit callback was not registered")
@@ -176,8 +191,8 @@ writeFile(
 assert(scheduledCallback, "side panel poll was not scheduled")
 scheduledCallback()
 
-local previewWidget = state.rows[9].columns[1].value
-local applyWidget = state.rows[10].columns[1].value
+local previewWidget = state.rows[10].columns[1].value
+local applyWidget = state.rows[11].columns[1].value
 assert(previewWidget.value:find("Transpose two", 1, true), "preview was not displayed")
 assert(applyWidget.enabled, "Apply was not enabled for a connected pending preview")
 assert(applyWidget.callback, "Apply callback was not registered")

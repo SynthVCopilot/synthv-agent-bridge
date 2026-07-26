@@ -46,18 +46,25 @@ async function createFixture(context: CleanupContext) {
 
 async function writeCommand(
   filePath: string,
-  operation: "apply" | "dismiss",
-  planId: string,
+  operation: "apply" | "dismiss" | "cancel_request" | "clear_history",
+  planId?: string,
+  requestId?: string,
 ): Promise<void> {
+  const lines = [
+    "synthv-agent-bridge-sidebar-command-v1",
+    `operation=${operation}`,
+    `createdAtEpochMs=${Date.now()}`,
+  ];
+  if (planId !== undefined) {
+    lines.push(`planId=${planId}`);
+  }
+  if (requestId !== undefined) {
+    lines.push(`requestId=${requestId}`);
+  }
+  lines.push("");
   await fs.writeFile(
     filePath,
-    [
-      "synthv-agent-bridge-sidebar-command-v1",
-      `operation=${operation}`,
-      `planId=${planId}`,
-      `createdAtEpochMs=${Date.now()}`,
-      "",
-    ].join("\n"),
+    lines.join("\n"),
     "utf8",
   );
 }
@@ -90,6 +97,10 @@ test("sidebar request can be read and acknowledged by publishing a preview", asy
     requestId: "request-1",
     summary: "Transpose two selected notes down three semitones.",
     details: "Only the selected notes will change.",
+    changes: [
+      { label: "Pitch", before: "C4, G4", after: "A3, E4", count: 2 },
+    ],
+    risks: ["Current note fingerprints must still match."],
     action: "edit_notes",
     payload: {
       trackIndex: 1,
@@ -109,6 +120,13 @@ test("sidebar request can be read and acknowledged by publishing a preview", asy
   assert.match(panelText, new RegExp(`planId=${preview.planId}`, "u"));
   assert.match(panelText, /status=pending/u);
   assert.match(panelText, /Transpose two selected notes/u);
+  assert.match(panelText, /C4, G4 → A3, E4/u);
+  assert.match(panelText, /Current note fingerprints/u);
+  const stateText = await fs.readFile(
+    fixture.config.paths.sidebarStateFile,
+    "utf8",
+  );
+  assert.match(stateText, /status=awaiting_confirmation/u);
 });
 
 test("sidebar applies a confirmed preview through the existing IPC client", async (context) => {
@@ -137,6 +155,7 @@ test("sidebar applies a confirmed preview through the existing IPC client", asyn
         trackIndex: 1,
         trackFingerprint: "main-group:uuid",
         gainDecibel: -3,
+        _sidebarPlanId: preview.planId,
       },
     },
   ]);
@@ -151,6 +170,10 @@ test("sidebar applies a confirmed preview through the existing IPC client", asyn
   assert.match(activity, /status=success/u);
   assert.match(activity, /Ctrl\+Z/u);
   assert.match(activity, /编辑 → 撤销/u);
+  const history = JSON.parse(
+    await fs.readFile(fixture.config.paths.sidebarHistoryFile, "utf8"),
+  ) as Array<{ status: string }>;
+  assert.equal(history.at(-1)?.status, "success");
 });
 
 test("sidebar dismisses a matching preview without calling SynthV", async (context) => {
@@ -207,4 +230,92 @@ test("sidebar keeps a failed preview visible with a public error", async (contex
   );
   assert.match(panelText, /status=error/u);
   assert.match(panelText, /simulated failure/u);
+  const diagnostics = await coordinator.getDiagnostics();
+  assert.deepEqual(diagnostics.lastError, {
+    code: "INTERNAL_ERROR",
+    message: "simulated failure",
+  });
+});
+
+test("sidebar can cancel a queued request and clear bounded history", async (context) => {
+  const fixture = await createFixture(context);
+  await fs.writeFile(
+    fixture.config.paths.sidebarInstructionFile,
+    [
+      "synthv-agent-bridge-sidebar-request-v1",
+      "requestId=request-cancel",
+      `createdAtEpochMs=${Date.now()}`,
+      "instruction-begin",
+      "Cancel me",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await writeCommand(
+    fixture.config.paths.sidebarCommandFile,
+    "cancel_request",
+    undefined,
+    "request-cancel",
+  );
+  await fixture.coordinator.pollOnce();
+  await assert.rejects(
+    fs.access(fixture.config.paths.sidebarInstructionFile),
+    /ENOENT/u,
+  );
+  const cancelledState = await fs.readFile(
+    fixture.config.paths.sidebarStateFile,
+    "utf8",
+  );
+  assert.match(cancelledState, /status=cancelled/u);
+
+  await writeCommand(
+    fixture.config.paths.sidebarCommandFile,
+    "clear_history",
+  );
+  await fixture.coordinator.pollOnce();
+  await assert.rejects(
+    fs.access(fixture.config.paths.sidebarHistoryFile),
+    /ENOENT/u,
+  );
+  const activity = await fs.readFile(
+    fixture.config.paths.sidebarActivityFile,
+    "utf8",
+  );
+  assert.match(activity, /status=empty/u);
+});
+
+test("sidebar ignores an outdated cancel command for a newer request", async (context) => {
+  const fixture = await createFixture(context);
+  await fs.writeFile(
+    fixture.config.paths.sidebarInstructionFile,
+    [
+      "synthv-agent-bridge-sidebar-request-v1",
+      "requestId=request-new",
+      `createdAtEpochMs=${Date.now()}`,
+      "instruction-begin",
+      "Keep me",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await writeCommand(
+    fixture.config.paths.sidebarCommandFile,
+    "cancel_request",
+    undefined,
+    "request-old",
+  );
+
+  await fixture.coordinator.pollOnce();
+
+  const instruction = await fs.readFile(
+    fixture.config.paths.sidebarInstructionFile,
+    "utf8",
+  );
+  assert.match(instruction, /requestId=request-new/u);
+  const state = await fs.readFile(
+    fixture.config.paths.sidebarStateFile,
+    "utf8",
+  );
+  assert.match(state, /status=queued/u);
+  assert.match(state, /requestId=request-new/u);
 });

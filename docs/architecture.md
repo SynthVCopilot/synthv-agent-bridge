@@ -43,12 +43,37 @@ The optional v0.1.4 side panel uses a separate local sideband:
 - `synthv-agent-bridge.sidebar.command.txt`
 - `synthv-agent-bridge.sidebar.activity.txt`
 - `synthv-agent-bridge.sidebar.client-status.txt`
+- `synthv-agent-bridge.sidebar.state.txt`
+- `synthv-agent-bridge.sidebar.history.json`
 
 The panel never writes the project. An Apply click creates a sideband command;
 the TypeScript coordinator claims it and submits the stored action through the
 same serialized `FileIpcClient` and v1 request channel as a normal MCP call.
 
 The Node side serializes calls and owns the lock. It writes requests using a temporary file plus rename. The Lua side claims a request by renaming it to the processing filename, executes it on SynthV's script thread, and publishes one correlated response.
+
+## Transaction layer
+
+`apply_transaction` accepts up to 32 existing project-write actions. Before
+creating an undo record, the Lua executor runs every step in validation mode.
+A shared undo-record helper intercepts each step at its normal
+`Project:newUndoRecord()` boundary while keeping the real SynthV `Project`
+object intact. This occurs after that handler has completed its input,
+fingerprint, clone, and host-capability checks. If every step passes, the
+executor creates one real undo record and reruns the steps while suppressing
+their nested undo calls.
+
+The generic engine conservatively rejects multiple forward steps that mutate
+the same guarded scope. This avoids making a later step's preflight depend on
+an earlier mutation. Index-shifting track and library-group deletes are
+exclusive single-step transactions. Common dependent operations are
+implemented as dedicated single-write actions such as
+`create_harmony_track`.
+
+Optional reverse steps are resolved from forward results and retained only in
+Bridge memory, associated with the current project/session. A later
+`rollback_transaction` revalidates those steps and applies them in one new undo
+record. A Bridge reload intentionally discards this volatile rollback state.
 
 ## Safety model
 
@@ -63,7 +88,11 @@ automation, and time-axis operations use optimistic concurrency:
 5. If any target changed, the complete request is rejected with the applicable
    `STALE_*` error.
 
-All inputs are validated before an undo record is created. Each successful write tool creates one SynthV undo record, so the user can undo the operation in the editor.
+All inputs are validated before an undo record is created. Each successful
+write tool or transaction creates one SynthV undo record, so the user can undo
+the operation in the editor. If an unexpected host exception occurs only after
+transaction execution begins, the single undo record is the recovery boundary;
+the Bridge reports the failure and directs the user to **Edit > Undo**.
 
 Selection, viewport, clipboard, dialog, and playback controls change host UI
 state rather than project model data and therefore do not create undo records.
