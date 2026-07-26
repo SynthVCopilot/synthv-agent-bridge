@@ -4,13 +4,16 @@ A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server 
 
 The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse or rewrite `.svp` files, open a network port, or call an AI API by itself.
 
-> Status: **v0.1 foundation**. The protocol, safety guards, and core editor operations are implemented. Test on copies of important projects while the project is still pre-release.
+> Status: **v0.1.1 foundation**. The protocol, safety guards, editor lifecycle operations, and time-axis tools are implemented. Test on copies of important projects while the project is still pre-release.
 
 ## What it can do
 
-- Read project metadata, playback state, tracks, note groups, notes, current selection, automation curves, and track mixer state.
-- Add tracks and notes.
+- Read project metadata, the complete tempo/time-signature map, playback state, tracks, note groups, notes, current selection, computed phonemes/pitch, automation curves, and track mixer state.
+- Add, update, clone, or delete tracks; update or remove non-main Group references.
+- Clone an existing track to inherit its singer/database, optionally clearing or transposing cloned notes.
+- Add notes and edit per-note language, sing/rap type, pitch-auto mode, rap accent, timing, pitch, lyrics, phonemes, detune, and attributes.
 - Safely edit or delete notes using fresh note fingerprints.
+- Convert between seconds, quarter notes, and blicks, and edit tempo/time-signature marks.
 - Add, replace, or clear automation points such as pitch deviation, loudness, tension, breathiness, voicing, gender, and Vocal Mode curves.
 - Control gain, pan, mute, solo, play, pause, stop, seek, and loop.
 - Put each successful write call into one SynthV undo record.
@@ -115,10 +118,19 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 | `bridge_status` | Read | Read the heartbeat without requiring a round trip. |
 | `ping` | Read | Test the complete Node → Lua → Node path. |
 | `get_project_info` | Read | Project, timing, playback, host, and current editor location. |
+| `get_time_axis` | Read | All tempo/time-signature marks and a safe-write fingerprint. |
+| `convert_time` | Read | Convert seconds, quarter notes, or blicks through the current tempo map. |
+| `set_time_axis` | Destructive | Add, replace, or remove tempo/time-signature marks. |
 | `list_tracks` | Read | Track summaries, group counts, note counts, and mixer state. |
 | `get_track_notes` | Read | Groups, UUIDs, notes, attributes, offsets, and safe-write fingerprints. |
 | `get_selection` | Read | Current group, selected notes, and selected groups. |
-| `add_track` | Write | Create a track and its main group. |
+| `get_computed_group_data` | Read | Computed phoneme/rap attributes and optional pitch samples. |
+| `add_track` | Write | Create a track and return its main Group locator. |
+| `update_track` | Write | Rename, recolor, or change Render Panel inclusion. |
+| `clone_track` | Write | Deep-clone a track, preserving its singer/database, with optional clear/transpose. |
+| `delete_track` | Destructive | Delete a fingerprint-verified non-final track. |
+| `update_group` | Write | Change Group name, mute, offsets, range, or voice-expression properties. |
+| `delete_group_reference` | Destructive | Remove a non-main Group reference while preserving its library Group. |
 | `add_notes` | Write | Add notes to a specific group. |
 | `edit_notes` | Write | Edit fingerprint-verified notes. |
 | `delete_notes` | Destructive | Delete fingerprint-verified notes. |
@@ -135,13 +147,13 @@ All track, group, and note indices are **1-based**, matching the SynthV Lua API.
 
 The server instructions tell an agent to follow this sequence:
 
-1. Read the project, track, group, or current selection immediately before editing.
+1. Read the project, time axis, track, group, automation, or current selection immediately before editing.
 2. Present or internally construct a small, reviewable change.
-3. Copy `groupUuid` and each target note's `fingerprint` from that latest read.
-4. Call `edit_notes` or `delete_notes` with those values.
-5. If SynthV reports `STALE_GROUP` or `STALE_NOTE`, read again rather than guessing.
+3. Copy the latest applicable `groupUuid`, `trackFingerprint`, automation/time-axis `fingerprint`, and note fingerprints.
+4. Call the smallest write tool that completes the intended change in one undo record.
+5. If SynthV reports any `STALE_*` error, read again rather than guessing.
 
-A fingerprint includes the group UUID, note index, onset, duration, pitch, detune, lyrics, and phonemes. This prevents an agent from applying an old plan to a note that the user has already changed.
+A note fingerprint includes the group UUID, note index, onset, duration, pitch, detune, lyrics, phonemes, language, musical type, pitch mode, rap accent, and note attributes. This prevents an agent from applying an old plan to a note that the user has already changed.
 
 ## Example requests
 
@@ -159,6 +171,11 @@ the selected phrase without deleting points outside that phrase.
 Read track 1 and create a new harmony track a minor third below the selected notes.
 Do not apply anything until you have listed the resulting pitches and warned about
 notes outside MIDI 0–127.
+```
+
+```text
+Read track 1, then clone it as "Harmony -3st" with transposeSemitones -3.
+Use the latest track fingerprint so the cloned track inherits the same singer.
 ```
 
 More examples are in [examples/prompts.md](examples/prompts.md).
@@ -209,7 +226,8 @@ CI runs TypeScript tests on Node 20 and 22, parses both production Lua files wit
 - A client-side timeout is ambiguous: SynthV may still finish the operation. The processing marker remains until the Lua host completes, and the agent should read the current project before deciding whether to retry a write.
 - Multi-call preview/commit transactions are planned but not implemented in v0.1.
 - There is no SynthV side-panel UI yet.
-- Rendering, reference-audio analysis, phoneme alignment, and semantic expression presets are not implemented yet.
+- SynthV's public scripting API does not expose project save, audio rendering, or selecting an installed singer database by display name. Use editor UI automation for those operations; `clone_track` can inherit an already-selected singer.
+- Reference-audio analysis, pitch-control object editing, retake management, and semantic expression presets are not implemented yet.
 - The bridge has not yet been validated against every SynthV 2.x patch and every voice database.
 - ChatGPT does not connect directly to this local stdio server. Use Codex or another local MCP host; a future remote adapter would need explicit authentication and transport security.
 

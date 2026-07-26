@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 local SCRIPT_NAME = "Start SynthV Agent Bridge"
-local BRIDGE_VERSION = "0.1.0"
+local BRIDGE_VERSION = "0.1.1"
 local PROTOCOL_VERSION = 1
 local MIN_EDITOR_VERSION = 131329 -- Synthesizer V Studio 2.1.1
 local POLL_INTERVAL_MS = 100
@@ -800,6 +800,18 @@ local function makeNoteFingerprint(groupUuid, noteIndex, note)
     local lyrics = note:getLyrics() or ""
     local phonemes = note:getPhonemes() or ""
     local attributes = json.encode(sanitizeForJson(note:getAttributes()))
+    local languageOverride = safeCall(function()
+        return note:getLanguageOverride()
+    end, "") or ""
+    local musicalType = safeCall(function()
+        return note:getMusicalType()
+    end, "") or ""
+    local pitchAutoMode = safeCall(function()
+        return note:getPitchAutoMode()
+    end, nil)
+    local rapAccent = safeCall(function()
+        return note:getRapAccent()
+    end, "") or ""
     local parts = {
         groupUuid,
         tostring(noteIndex),
@@ -809,6 +821,10 @@ local function makeNoteFingerprint(groupUuid, noteIndex, note)
         tostring(note:getDetune()),
         tostring(#lyrics) .. ":" .. lyrics,
         tostring(#phonemes) .. ":" .. phonemes,
+        tostring(#languageOverride) .. ":" .. languageOverride,
+        tostring(#musicalType) .. ":" .. musicalType,
+        tostring(pitchAutoMode),
+        tostring(#rapAccent) .. ":" .. rapAccent,
         tostring(#attributes) .. ":" .. attributes
     }
     return table.concat(parts, "|")
@@ -868,6 +884,20 @@ local function serializeNote(group, reference, note, noteIndex)
         result.pitchAutoMode = pitchAutoMode
     end
 
+    local rapAccent = safeCall(function()
+        return note:getRapAccent()
+    end, nil)
+    if rapAccent ~= nil then
+        result.rapAccent = rapAccent
+    end
+
+    local retakeCount = safeCall(function()
+        return note:getRetakes():getNumTakes()
+    end, nil)
+    if retakeCount ~= nil then
+        result.retakeCount = retakeCount
+    end
+
     return result
 end
 
@@ -885,9 +915,61 @@ local function countTrackNotes(track)
     return count
 end
 
+local function getMainGroupUuid(track)
+    local reference = track:getGroupReference(1)
+    if reference and not reference:isInstrumental() then
+        local group = reference:getTarget()
+        if group then
+            return group:getUUID()
+        end
+    end
+    return nil
+end
+
+local function makeTrackFingerprint(track)
+    local mainGroupUuid = getMainGroupUuid(track)
+    if mainGroupUuid then
+        return "main-group:" .. mainGroupUuid
+    end
+    return table.concat({
+        "fallback",
+        track:getName() or "",
+        tostring(track:getNumGroups()),
+        tostring(track:getDuration())
+    }, "|")
+end
+
+local function validateTrackFingerprint(track, expectedFingerprint, trackIndex)
+    if not expectedFingerprint then
+        return
+    end
+    local actual = makeTrackFingerprint(track)
+    if actual ~= expectedFingerprint then
+        raiseBridgeError("STALE_TRACK", "trackFingerprint no longer matches trackIndex", {
+            trackIndex = trackIndex,
+            expected = expectedFingerprint,
+            actual = actual
+        })
+    end
+end
+
+local function serializeMainGroupLocator(track, trackIndex)
+    local reference = track:getGroupReference(1)
+    if not reference or reference:isInstrumental() or not reference:getTarget() then
+        return JSON_NULL
+    end
+    return {
+        trackIndex = trackIndex,
+        groupIndex = 1,
+        groupUuid = reference:getTarget():getUUID()
+    }
+end
+
 local function serializeTrackSummary(track, trackIndex)
     return {
         trackIndex = trackIndex,
+        fingerprint = makeTrackFingerprint(track),
+        mainGroupUuid = getMainGroupUuid(track),
         name = track:getName(),
         displayColor = safeCall(function()
             return track:getDisplayColor()
@@ -983,13 +1065,69 @@ local function serializeAutomation(group, parameterName)
         }
     end
 
+    local parameterType = automation:getType()
+    local interpolation = automation:getInterpolationMethod()
+    local fingerprint = table.concat({
+        group:getUUID(),
+        parameterType,
+        interpolation,
+        json.encode(points)
+    }, "|")
+
     return automation, {
-        parameter = automation:getType(),
-        interpolation = automation:getInterpolationMethod(),
+        parameter = parameterType,
+        interpolation = interpolation,
         definition = definition,
+        fingerprint = fingerprint,
         pointCount = #points,
         points = points
     }
+end
+
+local function serializeTimeAxis(timeAxis)
+    local rawTempoMarks = timeAxis:getAllTempoMarks()
+    local tempoMarks = json.array()
+    for index = 1, #rawTempoMarks do
+        local mark = rawTempoMarks[index]
+        tempoMarks[#tempoMarks + 1] = {
+            position = mark.position,
+            positionSeconds = mark.positionSeconds,
+            bpm = mark.bpm
+        }
+    end
+
+    local rawMeasureMarks = timeAxis:getAllMeasureMarks()
+    local measureMarks = json.array()
+    for index = 1, #rawMeasureMarks do
+        local mark = rawMeasureMarks[index]
+        measureMarks[#measureMarks + 1] = {
+            measure = mark.position,
+            position = mark.position,
+            positionBlick = mark.positionBlick,
+            numerator = mark.numerator,
+            denominator = mark.denominator
+        }
+    end
+
+    return {
+        fingerprint = json.encode({
+            tempoMarks = tempoMarks,
+            measureMarks = measureMarks
+        }),
+        tempoMarkCount = #tempoMarks,
+        tempoMarks = tempoMarks,
+        measureMarkCount = #measureMarks,
+        measureMarks = measureMarks
+    }
+end
+
+local function validateExpectedFingerprint(actual, expected, staleCode, message)
+    if expected and actual ~= expected then
+        raiseBridgeError(staleCode, message, {
+            expected = expected,
+            actual = actual
+        })
+    end
 end
 
 local function locateReference(reference)
@@ -1059,6 +1197,10 @@ local NOTE_CHANGE_KEYS = {
     lyrics = true,
     phonemes = true,
     detune = true,
+    languageOverride = true,
+    musicalType = true,
+    pitchAutoMode = true,
+    rapAccent = true,
     attributes = true
 }
 
@@ -1084,6 +1226,18 @@ local function applyPreparedNoteChanges(note, changes)
     end
     if changes.detune ~= nil then
         note:setDetune(changes.detune)
+    end
+    if changes.languageOverride ~= nil then
+        note:setLanguageOverride(changes.languageOverride)
+    end
+    if changes.musicalType ~= nil then
+        note:setMusicalType(changes.musicalType)
+    end
+    if changes.pitchAutoMode ~= nil then
+        note:setPitchAutoMode(changes.pitchAutoMode)
+    end
+    if changes.rapAccent ~= nil then
+        note:setRapAccent(changes.rapAccent)
     end
     if changes.attributes ~= nil then
         note:setAttributes(changes.attributes)
@@ -1118,6 +1272,37 @@ local function prepareNoteChanges(note, changes, path)
     end
     if isProvided(changes.detune) then
         prepared.detune = requireFiniteNumber(changes.detune, path .. ".detune")
+    end
+    if isProvided(changes.languageOverride) then
+        local languageOverride = requireString(changes.languageOverride, path .. ".languageOverride", true)
+        local allowedLanguages = {
+            [""] = true,
+            mandarin = true,
+            japanese = true,
+            english = true,
+            cantonese = true
+        }
+        if not allowedLanguages[languageOverride] then
+            raiseBridgeError("INVALID_ARGUMENT", path .. ".languageOverride is unsupported")
+        end
+        prepared.languageOverride = languageOverride
+    end
+    if isProvided(changes.musicalType) then
+        local musicalType = requireString(changes.musicalType, path .. ".musicalType", false)
+        if musicalType ~= "sing" and musicalType ~= "rap" then
+            raiseBridgeError("INVALID_ARGUMENT", path .. ".musicalType must be sing or rap")
+        end
+        prepared.musicalType = musicalType
+    end
+    if isProvided(changes.pitchAutoMode) then
+        prepared.pitchAutoMode = requireBoolean(changes.pitchAutoMode, path .. ".pitchAutoMode")
+    end
+    if isProvided(changes.rapAccent) then
+        local rapAccent = requireString(changes.rapAccent, path .. ".rapAccent", true)
+        if rapAccent ~= "" and not rapAccent:match("^[1-5]$") then
+            raiseBridgeError("INVALID_ARGUMENT", path .. ".rapAccent must be empty or 1..5")
+        end
+        prepared.rapAccent = rapAccent
     end
     if isProvided(changes.attributes) then
         prepared.attributes = requireObject(changes.attributes, path .. ".attributes")
@@ -1211,6 +1396,158 @@ function handlers.get_project_info(_payload)
     return result
 end
 
+function handlers.get_time_axis(_payload)
+    local project = getProject()
+    local result = serializeTimeAxis(project:getTimeAxis())
+    result.projectFile = project:getFileName() or ""
+    result.projectDurationBlicks = project:getDuration()
+    result.projectDurationSeconds = project:getTimeAxis():getSecondsFromBlick(project:getDuration())
+    return result
+end
+
+function handlers.convert_time(payload)
+    payload = requireObject(payload, "payload")
+    local project = getProject()
+    local timeAxis = project:getTimeAxis()
+    local supplied = 0
+    local blicks = nil
+
+    if isProvided(payload.blicks) then
+        supplied = supplied + 1
+        blicks = requireInteger(payload.blicks, "blicks", 0)
+    end
+    if isProvided(payload.quarters) then
+        supplied = supplied + 1
+        local quarters = requireFiniteNumber(payload.quarters, "quarters", 0)
+        blicks = math.floor(quarters * SV.QUARTER + 0.5)
+    end
+    if isProvided(payload.seconds) then
+        supplied = supplied + 1
+        local seconds = requireFiniteNumber(payload.seconds, "seconds", 0)
+        blicks = timeAxis:getBlickFromSeconds(seconds)
+    end
+    if supplied ~= 1 then
+        raiseBridgeError("INVALID_ARGUMENT", "Supply exactly one of blicks, quarters, or seconds")
+    end
+
+    local tempoMark = timeAxis:getTempoMarkAt(blicks)
+    local measureMark = timeAxis:getMeasureMarkAtBlick(blicks)
+    return {
+        blicks = blicks,
+        quarters = SV:blick2Quarter(blicks),
+        seconds = timeAxis:getSecondsFromBlick(blicks),
+        measure = timeAxis:getMeasureAt(blicks),
+        effectiveTempo = sanitizeForJson(tempoMark),
+        effectiveMeasure = sanitizeForJson(measureMark)
+    }
+end
+
+function handlers.set_time_axis(payload)
+    payload = requireObject(payload, "payload")
+    local project = getProject()
+    local timeAxis = project:getTimeAxis()
+    local before = serializeTimeAxis(timeAxis)
+    local expectedFingerprint = optionalString(payload.expectedFingerprint, "expectedFingerprint", false)
+    validateExpectedFingerprint(
+        before.fingerprint,
+        expectedFingerprint,
+        "STALE_TIME_AXIS",
+        "The tempo or time-signature map changed after it was read"
+    )
+
+    local tempoMarks = isProvided(payload.tempoMarks)
+        and requireArray(payload.tempoMarks, "tempoMarks", 0, 1000) or json.array()
+    local removeTempoPositions = isProvided(payload.removeTempoPositions)
+        and requireArray(payload.removeTempoPositions, "removeTempoPositions", 0, 1000) or json.array()
+    local measureMarks = isProvided(payload.measureMarks)
+        and requireArray(payload.measureMarks, "measureMarks", 0, 1000) or json.array()
+    local removeMeasurePositions = isProvided(payload.removeMeasurePositions)
+        and requireArray(payload.removeMeasurePositions, "removeMeasurePositions", 0, 1000) or json.array()
+
+    if #tempoMarks + #removeTempoPositions + #measureMarks + #removeMeasurePositions == 0 then
+        raiseBridgeError("INVALID_ARGUMENT", "At least one time-axis operation must be supplied")
+    end
+
+    local preparedTempoMarks = {}
+    for index = 1, #tempoMarks do
+        local mark = requireObject(tempoMarks[index], "tempoMarks[" .. index .. "]")
+        preparedTempoMarks[#preparedTempoMarks + 1] = {
+            position = requireInteger(mark.position, "tempoMarks[" .. index .. "].position", 0),
+            bpm = requireFiniteNumber(mark.bpm, "tempoMarks[" .. index .. "].bpm", 1, 1000)
+        }
+    end
+
+    local preparedRemoveTempoPositions = {}
+    for index = 1, #removeTempoPositions do
+        preparedRemoveTempoPositions[#preparedRemoveTempoPositions + 1] =
+            requireInteger(removeTempoPositions[index], "removeTempoPositions[" .. index .. "]", 0)
+    end
+
+    local allowedDenominators = {
+        [1] = true,
+        [2] = true,
+        [4] = true,
+        [8] = true,
+        [16] = true,
+        [32] = true,
+        [64] = true
+    }
+    local preparedMeasureMarks = {}
+    for index = 1, #measureMarks do
+        local mark = requireObject(measureMarks[index], "measureMarks[" .. index .. "]")
+        local denominator = requireInteger(mark.denominator, "measureMarks[" .. index .. "].denominator", 1, 64)
+        if not allowedDenominators[denominator] then
+            raiseBridgeError("INVALID_ARGUMENT", "Time-signature denominator must be a power of two from 1 to 64")
+        end
+        preparedMeasureMarks[#preparedMeasureMarks + 1] = {
+            measure = requireInteger(mark.measure, "measureMarks[" .. index .. "].measure", 0),
+            numerator = requireInteger(mark.numerator, "measureMarks[" .. index .. "].numerator", 1, 32),
+            denominator = denominator
+        }
+    end
+
+    local preparedRemoveMeasurePositions = {}
+    for index = 1, #removeMeasurePositions do
+        preparedRemoveMeasurePositions[#preparedRemoveMeasurePositions + 1] =
+            requireInteger(removeMeasurePositions[index], "removeMeasurePositions[" .. index .. "]", 0)
+    end
+
+    local function applyOperations(target)
+        for index = 1, #preparedRemoveTempoPositions do
+            target:removeTempoMark(preparedRemoveTempoPositions[index])
+        end
+        for index = 1, #preparedRemoveMeasurePositions do
+            target:removeMeasureMark(preparedRemoveMeasurePositions[index])
+        end
+        for index = 1, #preparedTempoMarks do
+            local mark = preparedTempoMarks[index]
+            target:addTempoMark(mark.position, mark.bpm)
+        end
+        for index = 1, #preparedMeasureMarks do
+            local mark = preparedMeasureMarks[index]
+            target:addMeasureMark(mark.measure, mark.numerator, mark.denominator)
+        end
+    end
+
+    local candidate = timeAxis:clone()
+    local valid, validationError = pcall(function()
+        applyOperations(candidate)
+    end)
+    if not valid then
+        raiseBridgeError("INVALID_ARGUMENT", "SynthV rejected the requested time-axis edits", {
+            cause = tostring(validationError)
+        })
+    end
+
+    project:newUndoRecord()
+    applyOperations(timeAxis)
+    local result = serializeTimeAxis(timeAxis)
+    result.appliedOperationCount =
+        #preparedTempoMarks + #preparedRemoveTempoPositions +
+        #preparedMeasureMarks + #preparedRemoveMeasurePositions
+    return result
+end
+
 function handlers.list_tracks(_payload)
     local project = getProject()
     local tracks = json.array()
@@ -1287,6 +1624,55 @@ function handlers.get_selection(_payload)
     }
 end
 
+function handlers.get_computed_group_data(payload)
+    payload = requireObject(payload, "payload")
+    local _project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
+    local includeAttributes = optionalBoolean(payload.includeAttributes, "includeAttributes")
+    if includeAttributes == nil then
+        includeAttributes = true
+    end
+
+    local result = {
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        groupUuid = group:getUUID()
+    }
+
+    if includeAttributes then
+        local rawAttributes = SV:getComputedAttributesForGroup(reference)
+        local computedAttributes = json.array()
+        for index = 1, #rawAttributes do
+            computedAttributes[#computedAttributes + 1] = sanitizeForJson(rawAttributes[index])
+        end
+        result.computedAttributes = computedAttributes
+        result.attributesPending = group:getNumNotes() > 0 and #computedAttributes == 0
+    end
+
+    if isProvided(payload.pitchSample) then
+        local sample = requireObject(payload.pitchSample, "pitchSample")
+        local absoluteStart = requireInteger(sample.absoluteStart, "pitchSample.absoluteStart", 0)
+        local interval = requireInteger(sample.interval, "pitchSample.interval", 1)
+        local frames = requireInteger(sample.frames, "pitchSample.frames", 1, 10000)
+        local rawPitch = SV:getComputedPitchForGroup(reference, absoluteStart, interval, frames)
+        local computedPitch = json.array()
+        if #rawPitch > 0 then
+            for index = 1, frames do
+                computedPitch[index] = rawPitch[index] == nil and JSON_NULL or rawPitch[index]
+            end
+        end
+        result.pitchSample = {
+            absoluteStart = absoluteStart,
+            interval = interval,
+            requestedFrames = frames,
+            returnedFrames = #computedPitch,
+            pending = #rawPitch == 0,
+            values = computedPitch
+        }
+    end
+
+    return result
+end
+
 function handlers.add_track(payload)
     payload = requireObject(payload, "payload")
     local project = getProject()
@@ -1307,7 +1693,250 @@ function handlers.add_track(payload)
     if type(trackIndex) ~= "number" then
         trackIndex = project:getNumTracks()
     end
+    local result = serializeTrackSummary(track, trackIndex)
+    result.mainGroup = serializeMainGroupLocator(track, trackIndex)
+    return result
+end
+
+function handlers.update_track(payload)
+    payload = requireObject(payload, "payload")
+    local project, track, trackIndex = resolveTrack(payload)
+    validateTrackFingerprint(
+        track,
+        optionalString(payload.trackFingerprint, "trackFingerprint", false),
+        trackIndex
+    )
+    local name = optionalString(payload.name, "name", false)
+    local displayColor = optionalString(payload.displayColor, "displayColor", false)
+    local bounced = optionalBoolean(payload.bounced, "bounced")
+    if displayColor and not displayColor:match("^#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]$") then
+        raiseBridgeError("INVALID_ARGUMENT", "displayColor must use #RRGGBB format")
+    end
+    if name == nil and displayColor == nil and bounced == nil then
+        raiseBridgeError("INVALID_ARGUMENT", "At least one track field must be supplied")
+    end
+
+    local function applyUpdates(target)
+        if name ~= nil then
+            target:setName(name)
+        end
+        if displayColor ~= nil then
+            target:setDisplayColor(displayColor)
+        end
+        if bounced ~= nil then
+            target:setBounced(bounced)
+        end
+    end
+
+    local candidate = track:clone()
+    local valid, validationError = pcall(function()
+        applyUpdates(candidate)
+    end)
+    if not valid then
+        raiseBridgeError("INVALID_ARGUMENT", "SynthV rejected the requested track changes", {
+            cause = tostring(validationError)
+        })
+    end
+
+    project:newUndoRecord()
+    applyUpdates(track)
     return serializeTrackSummary(track, trackIndex)
+end
+
+function handlers.clone_track(payload)
+    payload = requireObject(payload, "payload")
+    local project, sourceTrack, sourceTrackIndex = resolveTrack(payload)
+    validateTrackFingerprint(
+        sourceTrack,
+        optionalString(payload.trackFingerprint, "trackFingerprint", false),
+        sourceTrackIndex
+    )
+
+    local name = optionalString(payload.name, "name", false)
+    local displayColor = optionalString(payload.displayColor, "displayColor", false)
+    if displayColor and not displayColor:match("^#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]$") then
+        raiseBridgeError("INVALID_ARGUMENT", "displayColor must use #RRGGBB format")
+    end
+    local bounced = optionalBoolean(payload.bounced, "bounced")
+    local clearNotes = optionalBoolean(payload.clearNotes, "clearNotes")
+    if clearNotes == nil then
+        clearNotes = false
+    end
+    local transposeSemitones = optionalInteger(
+        payload.transposeSemitones,
+        "transposeSemitones",
+        -127,
+        127,
+        0
+    )
+
+    local clonedTrack = sourceTrack:clone()
+    if name ~= nil then
+        clonedTrack:setName(name)
+    end
+    if displayColor ~= nil then
+        clonedTrack:setDisplayColor(displayColor)
+    end
+    if bounced ~= nil then
+        clonedTrack:setBounced(bounced)
+    end
+
+    local affectedNoteCount = 0
+    local seenGroups = {}
+    for groupIndex = 1, clonedTrack:getNumGroups() do
+        local clonedReference = clonedTrack:getGroupReference(groupIndex)
+        local sourceReference = sourceTrack:getGroupReference(groupIndex)
+        if clonedReference and not clonedReference:isInstrumental() then
+            local clonedGroup = clonedReference:getTarget()
+            local sourceGroup = sourceReference and not sourceReference:isInstrumental()
+                and sourceReference:getTarget() or nil
+            if clonedGroup and not seenGroups[clonedGroup] then
+                seenGroups[clonedGroup] = true
+                if (clearNotes or transposeSemitones ~= 0) and clonedGroup == sourceGroup then
+                    raiseBridgeError(
+                        "SHARED_GROUP_CLONE",
+                        "SynthV kept a cloned non-main reference linked to the source library group; refusing to mutate the source",
+                        { groupIndex = groupIndex }
+                    )
+                end
+
+                if clearNotes then
+                    affectedNoteCount = affectedNoteCount + clonedGroup:getNumNotes()
+                    for noteIndex = clonedGroup:getNumNotes(), 1, -1 do
+                        clonedGroup:removeNote(noteIndex)
+                    end
+                elseif transposeSemitones ~= 0 then
+                    for noteIndex = 1, clonedGroup:getNumNotes() do
+                        local note = clonedGroup:getNote(noteIndex)
+                        local newPitch = note:getPitch() + transposeSemitones
+                        if newPitch < 0 or newPitch > 127 then
+                            raiseBridgeError("PITCH_OUT_OF_RANGE", "A cloned note would leave MIDI range 0..127", {
+                                groupIndex = groupIndex,
+                                noteIndex = noteIndex,
+                                originalPitch = note:getPitch(),
+                                requestedPitch = newPitch
+                            })
+                        end
+                        note:setPitch(newPitch)
+                        affectedNoteCount = affectedNoteCount + 1
+                    end
+                end
+            end
+        end
+    end
+
+    project:newUndoRecord()
+    local trackIndex = project:addTrack(clonedTrack)
+    if type(trackIndex) ~= "number" then
+        trackIndex = project:getNumTracks()
+    end
+    local result = serializeTrackSummary(clonedTrack, trackIndex)
+    result.mainGroup = serializeMainGroupLocator(clonedTrack, trackIndex)
+    result.sourceTrackIndex = sourceTrackIndex
+    result.clearNotes = clearNotes
+    result.transposeSemitones = transposeSemitones
+    result.affectedNoteCount = affectedNoteCount
+    return result
+end
+
+function handlers.delete_track(payload)
+    payload = requireObject(payload, "payload")
+    local project, track, trackIndex = resolveTrack(payload)
+    validateTrackFingerprint(
+        track,
+        optionalString(payload.trackFingerprint, "trackFingerprint", false),
+        trackIndex
+    )
+    if project:getNumTracks() <= 1 then
+        raiseBridgeError("FINAL_TRACK", "The project's final track cannot be deleted")
+    end
+
+    local deletedTrack = serializeTrackSummary(track, trackIndex)
+    project:newUndoRecord()
+    project:removeTrack(trackIndex)
+    return {
+        deletedTrack = deletedTrack,
+        trackCount = project:getNumTracks()
+    }
+end
+
+function handlers.update_group(payload)
+    payload = requireObject(payload, "payload")
+    local project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
+    local name = optionalString(payload.name, "name", false)
+    local muted = optionalBoolean(payload.muted, "muted")
+    local timeOffset = optionalInteger(payload.timeOffset, "timeOffset", 0)
+    local pitchOffset = optionalInteger(payload.pitchOffset, "pitchOffset", -127, 127)
+    local voice = isProvided(payload.voice) and requireObject(payload.voice, "voice") or nil
+    local timeRange = nil
+    if isProvided(payload.timeRange) then
+        local rawRange = requireObject(payload.timeRange, "timeRange")
+        timeRange = {
+            onset = requireInteger(rawRange.onset, "timeRange.onset", 0),
+            duration = requireInteger(rawRange.duration, "timeRange.duration", 1)
+        }
+    end
+    if name == nil and muted == nil and timeOffset == nil and pitchOffset == nil and voice == nil and timeRange == nil then
+        raiseBridgeError("INVALID_ARGUMENT", "At least one group field must be supplied")
+    end
+
+    local function applyReferenceUpdates(target)
+        if muted ~= nil then
+            target:setMuted(muted)
+        end
+        if timeOffset ~= nil then
+            target:setTimeOffset(timeOffset)
+        end
+        if pitchOffset ~= nil then
+            target:setPitchOffset(pitchOffset)
+        end
+        if timeRange ~= nil then
+            target:setTimeRange(timeRange.onset, timeRange.duration)
+        end
+        if voice ~= nil then
+            target:setVoice(voice)
+        end
+    end
+
+    local referenceCandidate = reference:clone()
+    local groupCandidate = group:clone()
+    local valid, validationError = pcall(function()
+        applyReferenceUpdates(referenceCandidate)
+        if name ~= nil then
+            groupCandidate:setName(name)
+        end
+    end)
+    if not valid then
+        raiseBridgeError("INVALID_ARGUMENT", "SynthV rejected the requested group changes", {
+            cause = tostring(validationError)
+        })
+    end
+
+    project:newUndoRecord()
+    applyReferenceUpdates(reference)
+    if name ~= nil then
+        group:setName(name)
+    end
+    return {
+        trackIndex = trackIndex,
+        group = serializeGroup(reference, groupIndex, 0, 0)
+    }
+end
+
+function handlers.delete_group_reference(payload)
+    payload = requireObject(payload, "payload")
+    local project, track, trackIndex, reference, _group, groupIndex = resolveGroup(payload)
+    if groupIndex == 1 or reference:isMain() then
+        raiseBridgeError("MAIN_GROUP", "A track's main group reference cannot be removed")
+    end
+    local deletedGroup = serializeGroup(reference, groupIndex, 0, 0)
+    project:newUndoRecord()
+    track:removeGroupReference(groupIndex)
+    return {
+        trackIndex = trackIndex,
+        deletedGroup = deletedGroup,
+        track = serializeTrackSummary(track, trackIndex)
+    }
 end
 
 function handlers.add_notes(payload)
@@ -1330,6 +1959,37 @@ function handlers.add_notes(payload)
         end
         if isProvided(input.detune) then
             note:setDetune(requireFiniteNumber(input.detune, "notes[" .. index .. "].detune"))
+        end
+        if isProvided(input.languageOverride) then
+            local languageOverride = requireString(input.languageOverride, "notes[" .. index .. "].languageOverride", true)
+            local allowedLanguages = {
+                [""] = true,
+                mandarin = true,
+                japanese = true,
+                english = true,
+                cantonese = true
+            }
+            if not allowedLanguages[languageOverride] then
+                raiseBridgeError("INVALID_ARGUMENT", "notes[" .. index .. "].languageOverride is unsupported")
+            end
+            note:setLanguageOverride(languageOverride)
+        end
+        if isProvided(input.musicalType) then
+            local musicalType = requireString(input.musicalType, "notes[" .. index .. "].musicalType", false)
+            if musicalType ~= "sing" and musicalType ~= "rap" then
+                raiseBridgeError("INVALID_ARGUMENT", "notes[" .. index .. "].musicalType must be sing or rap")
+            end
+            note:setMusicalType(musicalType)
+        end
+        if isProvided(input.pitchAutoMode) then
+            note:setPitchAutoMode(requireBoolean(input.pitchAutoMode, "notes[" .. index .. "].pitchAutoMode"))
+        end
+        if isProvided(input.rapAccent) then
+            local rapAccent = requireString(input.rapAccent, "notes[" .. index .. "].rapAccent", true)
+            if rapAccent ~= "" and not rapAccent:match("^[1-5]$") then
+                raiseBridgeError("INVALID_ARGUMENT", "notes[" .. index .. "].rapAccent must be empty or 1..5")
+            end
+            note:setRapAccent(rapAccent)
         end
         if isProvided(input.attributes) then
             note:setAttributes(requireObject(input.attributes, "notes[" .. index .. "].attributes"))
@@ -1456,6 +2116,12 @@ function handlers.set_automation_points(payload)
     local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
     local parameterName = requireString(payload.parameter, "parameter", false)
     local automation, serializedBefore = serializeAutomation(group, parameterName)
+    validateExpectedFingerprint(
+        serializedBefore.fingerprint,
+        optionalString(payload.expectedFingerprint, "expectedFingerprint", false),
+        "STALE_AUTOMATION",
+        "The automation curve changed after it was read"
+    )
     local points = requireArray(payload.points, "points", 1, 10000)
     local clearMode = optionalString(payload.clearMode, "clearMode", false) or "none"
     if clearMode ~= "none" and clearMode ~= "all" and clearMode ~= "range" then
@@ -1506,7 +2172,13 @@ function handlers.clear_automation(payload)
     payload = requireObject(payload, "payload")
     local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
     local parameterName = requireString(payload.parameter, "parameter", false)
-    local automation = serializeAutomation(group, parameterName)
+    local automation, serializedBefore = serializeAutomation(group, parameterName)
+    validateExpectedFingerprint(
+        serializedBefore.fingerprint,
+        optionalString(payload.expectedFingerprint, "expectedFingerprint", false),
+        "STALE_AUTOMATION",
+        "The automation curve changed after it was read"
+    )
     local hasBegin = isProvided(payload.rangeBegin)
     local hasEnd = isProvided(payload.rangeEnd)
     if hasBegin ~= hasEnd then
@@ -1547,6 +2219,11 @@ end
 function handlers.set_track_mixer(payload)
     payload = requireObject(payload, "payload")
     local project, track, trackIndex = resolveTrack(payload)
+    validateTrackFingerprint(
+        track,
+        optionalString(payload.trackFingerprint, "trackFingerprint", false),
+        trackIndex
+    )
     local gain = optionalNumber(payload.gainDecibel, "gainDecibel", -24, 24)
     local pan = optionalNumber(payload.pan, "pan", -1, 1)
     local muted = optionalBoolean(payload.muted, "muted")

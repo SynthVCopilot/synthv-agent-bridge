@@ -47,6 +47,17 @@
 - Read responses also include absolute onset, end, and pitch after applying group-reference offsets.
 - Automation point positions are group-local blicks.
 - Playback positions are seconds.
+- Time-axis tempo positions are project-global blicks; time-signature positions are zero-based measure numbers.
+
+## Optimistic-concurrency fields
+
+Protocol v1 keeps concurrency fields optional for backward compatibility. New clients should always echo the latest applicable values:
+
+- `groupUuid` for every Group write.
+- `fingerprint` for note edits/deletes and automation/time-axis writes.
+- `trackFingerprint` for track updates, clones, deletes, and mixer writes.
+
+The bridge reports `STALE_GROUP`, `STALE_NOTE`, `STALE_TRACK`, `STALE_AUTOMATION`, or `STALE_TIME_AXIS` before creating an undo record when a supplied guard no longer matches.
 
 ## Serialization rules
 
@@ -54,4 +65,5 @@
 - Request and response filenames are stable, but writes are published atomically through temporary files.
 - `requestId` correlates a response with its request.
 - A protocol-version mismatch fails closed.
+- New action names and optional payload fields may be added without changing the v1 envelope.
 - Unknown fields may be added to read responses in minor releases; clients should ignore fields they do not recognize.

@@ -1,12 +1,15 @@
 # Roadmap
 
-## v0.1 — reliable control foundation
+## v0.1–v0.1.1 — reliable control foundation
 
 - Project, track, group, note, selection, mixer, automation, and playback reads.
-- Track creation and note add/edit/delete.
+- Track creation/update/clone/delete and note add/edit/delete.
+- Group metadata/reference updates and non-main reference removal.
 - Automation and mixer writes.
+- Full time-axis reads, conversion, and writes.
+- Computed phoneme/rap data and pitch sampling.
 - Request correlation, heartbeat, stale-file recovery, and single-writer locking.
-- Group UUID and note-fingerprint concurrency guards.
+- Group UUID plus note, track, automation, and time-axis concurrency guards.
 - SynthV undo integration.
 
 ## v0.2 — preview and transaction layer
@@ -14,7 +17,7 @@
 - Dry-run change plans and human-readable diffs.
 - Snapshot/commit workflow for multi-tool edits.
 - Explicit rollback records and project-revision checks.
-- Selected-range helpers and time-axis conversion tools.
+- Selected-range helpers and cross-object batch operations.
 
 ## v0.3 — musical semantic tools
 

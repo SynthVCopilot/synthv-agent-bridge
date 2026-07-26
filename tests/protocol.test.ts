@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  BRIDGE_ACTIONS,
   parseBridgeRequest,
   parseBridgeResponse,
   parseBridgeStatus,
@@ -20,6 +21,19 @@ test("parseBridgeRequest accepts a valid request envelope", () => {
   });
   assert.equal(parsed.action, "ping");
   assert.equal(parsed.requestId, requestId);
+});
+
+test("protocol v1 recognizes every registered bridge action", () => {
+  for (const action of BRIDGE_ACTIONS) {
+    const parsed = parseBridgeRequest({
+      protocolVersion: 1,
+      requestId,
+      action,
+      createdAt: "2026-07-26T00:00:00.000Z",
+      payload: {},
+    });
+    assert.equal(parsed.action, action);
+  }
 });
 
 test("protocol parsers reject mismatched versions and request IDs", () => {
