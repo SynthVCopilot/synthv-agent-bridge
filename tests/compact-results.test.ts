@@ -7,6 +7,7 @@ import {
   compactPhraseContextGuards,
   compactTransactionGuards,
   resolveAutomationGuardPayload,
+  resolvePhraseCursorPayload,
   resolvePhonemeGuardPayload,
   resolveTransactionGuardPayload,
 } from "../src/compact-results.js";
@@ -211,6 +212,70 @@ test("P2 compacts one write-ready phrase context below 8 KB", () => {
   );
   assert.equal(payload.groupUuid, GROUP_UUID);
   assert.equal(payload.expectedFingerprint, automationFingerprints[0]);
+});
+
+test("P3 range cursors are opaque, locator-bound, and fingerprint-guarded", () => {
+  const store = new GuardTokenStore();
+  const raw = {
+    trackIndex: 1,
+    groupIndex: 2,
+    groupUuid: GROUP_UUID,
+    responseMode: "compact",
+    hasMore: true,
+    notes: [
+      {
+        noteIndex: 7,
+        fingerprint: noteFingerprint(7),
+        lyrics: "词",
+      },
+    ],
+    automation: [],
+    page: {
+      firstNoteIndex: 7,
+      lastNoteIndex: 7,
+      nextNoteIndex: 8,
+    },
+    pageCursor: {
+      anchorNoteIndex: 7,
+      nextNoteIndex: 8,
+      fingerprint: noteFingerprint(7),
+    },
+  };
+  const compact = compactPhraseContextGuards(raw, store) as {
+    page: Record<string, unknown>;
+  };
+  assert.match(String(compact.page.cursorToken), /^rc_/u);
+  assert.doesNotMatch(JSON.stringify(compact), /fingerprint/u);
+
+  const resolved = resolvePhraseCursorPayload(
+    {
+      cursorToken: compact.page.cursorToken,
+      offset: 0,
+      limit: 16,
+    },
+    store,
+  );
+  assert.equal(resolved.trackIndex, 1);
+  assert.equal(resolved.groupIndex, 2);
+  assert.equal(resolved.groupUuid, GROUP_UUID);
+  assert.equal(resolved.preferSelectedNotes, false);
+  assert.deepEqual(resolved.pageCursor, {
+    anchorNoteIndex: 7,
+    nextNoteIndex: 8,
+    fingerprint: noteFingerprint(7),
+  });
+
+  assert.throws(
+    () =>
+      resolvePhraseCursorPayload(
+        {
+          cursorToken: compact.page.cursorToken,
+          startSeconds: 10,
+        },
+        store,
+      ),
+    /cannot be combined with cursorToken/u,
+  );
 });
 
 test("compact automation Guards round-trip without exposing the curve fingerprint", () => {

@@ -15,6 +15,7 @@ import {
   compactTransactionGuards,
   resolveAutomationGuardPayload,
   resolveGuardedActionPayload,
+  resolvePhraseCursorPayload,
   resolvePhonemeGuardPayload,
   resolveTransactionGuardPayload,
 } from "./compact-results.js";
@@ -367,7 +368,7 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     {
       instructions:
-        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, voice, phoneme, library, automation, Smart Pitch state, or selection immediately before writing. Prefer get_phrase_context for phrase tuning; otherwise use responseMode compact plus note/time filters, and pass returned Guard Tokens directly to supported writes. When the user refers to the current or selected singer, group, or notes, inspect the returned selection context and enable the applicable selection guard. Explicitly located UUID/index/fingerprint operations may target unselected objects. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Guard Tokens, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits. When the user asks to handle a request from the SynthV sidebar, call sidebar_get_request, read the latest applicable SynthV state, and publish exactly one guarded write or apply_transaction through sidebar_publish_preview instead of executing it directly. Include structured changes and risks. The user confirms or dismisses that preview inside SynthV.",
+        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, voice, phoneme, library, automation, Smart Pitch state, or selection immediately before writing. Prefer get_phrase_context for phrase tuning; reuse its cursorToken for the next page, use ranges for several phrase windows, and choose rangeMatch onset only when excluding sustains that began before the range is acceptable. Otherwise use responseMode compact plus note/time filters, and pass returned Guard Tokens directly to supported writes. When the user refers to the current or selected singer, group, or notes, inspect the returned selection context and enable the applicable selection guard. Explicitly located UUID/index/fingerprint operations may target unselected objects. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Guard Tokens, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits. When the user asks to handle a request from the SynthV sidebar, call sidebar_get_request, read the latest applicable SynthV state, and publish exactly one guarded write or apply_transaction through sidebar_publish_preview instead of executing it directly. Include structured changes and risks. The user confirms or dismisses that preview inside SynthV.",
     },
   );
   sidebar.start();
@@ -881,6 +882,12 @@ export function createServer(config: BridgeConfig): McpServer {
           .min(0)
           .optional()
           .describe("Optional absolute range end; supply startSeconds too."),
+        rangeMatch: z
+          .enum(["overlap", "onset"])
+          .default("overlap")
+          .describe(
+            "overlap preserves notes sustained across the range start; onset enables a faster binary seek and returns onset-only coverage.",
+          ),
         includeComputedPhonemes: z
           .boolean()
           .optional()
@@ -925,6 +932,11 @@ export function createServer(config: BridgeConfig): McpServer {
           ),
         groupIndex: indexSchema.optional(),
         groupUuid: groupUuidSchema.optional(),
+        cursorToken: guardTokenSchema
+          .optional()
+          .describe(
+            "Continue a previous page without repeating its Group locator or numeric offset.",
+          ),
         offset: z.number().int().min(0).default(0),
         limit: z.number().int().min(1).max(256).default(128),
         noteIndices: z
@@ -945,6 +957,26 @@ export function createServer(config: BridgeConfig): McpServer {
           .min(0)
           .optional()
           .describe("Optional absolute phrase end; supply startSeconds too."),
+        ranges: z
+          .array(
+            z.object({
+              startSeconds: z.number().finite().min(0),
+              endSeconds: z.number().finite().min(0),
+              label: z.string().min(1).max(200).optional(),
+            }),
+          )
+          .min(1)
+          .max(32)
+          .optional()
+          .describe(
+            "Optional disjoint absolute ranges analyzed with one bounded Group sweep and one shared note array.",
+          ),
+        rangeMatch: z
+          .enum(["overlap", "onset"])
+          .default("overlap")
+          .describe(
+            "overlap gives complete crossing-sustain coverage; onset enables binary-seek coverage.",
+          ),
         preferSelectedNotes: z
           .boolean()
           .default(true)
@@ -988,7 +1020,8 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     async (input) =>
       runTool(async () => {
-        const result = await client.send("get_phrase_context", input);
+        const payload = resolvePhraseCursorPayload(input, guardTokens);
+        const result = await client.send("get_phrase_context", payload);
         return compactPhraseContextGuards(result, guardTokens);
       }),
   );

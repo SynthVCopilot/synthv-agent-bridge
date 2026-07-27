@@ -14,6 +14,14 @@ export type GuardBinding =
       readonly trackIndex: number;
       readonly groupUuid: string;
       readonly parameter: string;
+    }
+  | {
+      readonly kind: "range_cursor";
+      readonly trackIndex: number;
+      readonly groupIndex: number;
+      readonly groupUuid: string;
+      readonly anchorNoteIndex: number;
+      readonly nextNoteIndex: number;
     };
 
 export type GuardExpectation =
@@ -28,6 +36,9 @@ export type GuardExpectation =
       readonly trackIndex: number;
       readonly groupUuid?: string;
       readonly parameter: string;
+    }
+  | {
+      readonly kind: "range_cursor";
     };
 
 export interface GuardTokenResolution {
@@ -49,6 +60,16 @@ function bindingKey(binding: GuardBinding): string {
       binding.noteIndex,
     ].join(":");
   }
+  if (binding.kind === "range_cursor") {
+    return [
+      binding.kind,
+      binding.trackIndex,
+      binding.groupIndex,
+      binding.groupUuid,
+      binding.anchorNoteIndex,
+      binding.nextNoteIndex,
+    ].join(":");
+  }
   return [
     binding.kind,
     binding.trackIndex,
@@ -62,7 +83,18 @@ function expectationMatches(
   expectation: GuardExpectation,
 ): boolean {
   if (
-    binding.kind !== expectation.kind ||
+    binding.kind !== expectation.kind
+  ) {
+    return false;
+  }
+  if (
+    binding.kind === "range_cursor" &&
+    expectation.kind === "range_cursor"
+  ) {
+    return true;
+  }
+  if (
+    expectation.kind === "range_cursor" ||
     binding.trackIndex !== expectation.trackIndex ||
     (expectation.groupUuid !== undefined &&
       binding.groupUuid !== expectation.groupUuid)
@@ -104,7 +136,12 @@ export class GuardTokenStore {
       this.reverse.delete(reverseKey);
     }
 
-    const prefix = binding.kind === "note" ? "ng_" : "ag_";
+    const prefix =
+      binding.kind === "note"
+        ? "ng_"
+        : binding.kind === "automation"
+          ? "ag_"
+          : "rc_";
     let token: string;
     do {
       token = `${prefix}${randomBytes(16).toString("base64url")}`;

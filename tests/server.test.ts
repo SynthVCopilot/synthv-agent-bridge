@@ -81,3 +81,21 @@ test("P2 exposes one bounded write-ready phrase context", async () => {
   assert.match(bridgeSource, /compactPhraseNoteDefaults/);
   assert.match(bridgeSource, /noteDefaultsOmitted = true/);
 });
+
+test("P3 exposes explicit coverage, guarded cursors, and one-sweep multi-range reads", async () => {
+  const [compiledServer, bridgeSource] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(
+      new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  assert.match(compiledServer, /resolvePhraseCursorPayload/);
+  assert.match(compiledServer, /cursorToken/);
+  assert.match(compiledServer, /rangeMatch/);
+  assert.match(compiledServer, /ranges/);
+  assert.match(bridgeSource, /findFirstNoteOnsetAtLeast/);
+  assert.match(bridgeSource, /STALE_RANGE_CURSOR/);
+  assert.match(bridgeSource, /multi_range_overlap_sweep/);
+  assert.match(bridgeSource, /rangeScannedNoteCount/);
+});

@@ -131,6 +131,30 @@ Non-default values are never removed.
 The executor recomputes this context for each request. It intentionally does
 not cache note, selection, voice, or automation state across requests.
 
+P3 adds optional range controls without changing the v1 envelope:
+
+- `rangeMatch` defaults to `overlap`. This scans from the Group front when
+  necessary so notes sustained across a range start are included and reports
+  `coverage: "complete_overlap"`.
+- `rangeMatch: "onset"` binary-seeks to the first onset at or after the range
+  start. Responses report `coverage: "onset_only"` and
+  `mayExcludeEarlierSustains: true`.
+- An ordinary page with more notes contains a raw `pageCursor` in file IPC. The
+  MCP server replaces it with `page.cursorToken`; on continuation it restores
+  the exact Group locator, next index, and boundary fingerprint. A changed
+  boundary fails with `STALE_RANGE_CURSOR`. Tokens do not survive MCP restart or
+  eviction.
+- `ranges` accepts 1–32 `{startSeconds,endSeconds,label?}` objects and cannot be
+  combined with top-level time bounds, exact note indices, a cursor, or a
+  non-zero offset. The result contains one shared unique `notes` array and
+  per-range `noteIndices`, diagnostics, automation summaries, and optional
+  pitch summaries. The union is bounded to 256 notes and pitch sampling is
+  bounded to 256 total requested frames.
+
+These are additive payload and response fields. Existing clients that omit
+them retain complete overlap matching, numeric pagination, and protocol v1
+compatibility.
+
 ### Additive v1 actions
 
 Protocol v1 permits new action names without changing the request/response

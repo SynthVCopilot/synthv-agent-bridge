@@ -12,6 +12,13 @@ All notable changes will be documented in this file.
   diagnostics, and recommendation-only review targets in one IPC round trip.
 - Optional computed-pitch summaries that retain only aggregate contour metrics
   instead of returning every sampled frame.
+- Explicit `overlap` versus binary-seek `onset` range coverage with diagnostics
+  that disclose when earlier crossing sustains may be omitted.
+- Opaque, fingerprint-guarded phrase page cursors that continue without
+  rescanning skipped pages and fail closed when their boundary note changes.
+- Up to 32 phrase ranges in one request, using one Group sweep, one shared
+  unique-note serialization, per-range diagnostics, and automation curves
+  fingerprinted only once.
 
 ### Changed
 
@@ -21,6 +28,8 @@ All notable changes will be documented in this file.
   after an editor change.
 - Phrase notes round seconds to 0.1 ms and omit repeated default-valued phoneme,
   detune, and selection fields while retaining every non-default override.
+- The default overlap behavior remains backward compatible. Faster onset-only
+  seeking and multi-range reads are explicit opt-ins; protocol v1 is unchanged.
 
 ## 0.1.5 - 2026-07-27
 

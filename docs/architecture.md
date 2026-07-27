@@ -89,6 +89,17 @@ This collapses the normal selection, note, voice, automation, and pitch-analysis
 read sequence into one correlated IPC request while ensuring every result
 reflects the current SynthV project state.
 
+P3 keeps the same additive protocol-v1 envelope and adds three bounded read
+paths. `rangeMatch: "overlap"` remains the complete, backward-compatible path;
+`"onset"` uses binary search over SynthV's onset-sorted notes and explicitly
+reports that a sustain beginning before the range may be absent. Page cursors
+live only in the MCP process and bind the next index to the previous boundary
+note fingerprint, so continuation avoids skipped-note traversal without
+caching mutable note data. Multi-range reads convert all boundaries once,
+sweep the Group once, serialize the union of matching notes once, and reference
+that shared array from per-range analyses. Automation is serialized and
+fingerprinted once per parameter, then sampled for every requested range.
+
 ## Transaction layer
 
 `apply_transaction` accepts up to 32 existing project-write actions. Before

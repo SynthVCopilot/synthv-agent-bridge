@@ -88,7 +88,7 @@ export function compactPhraseContextGuards(
   if (!Array.isArray(compactNotes.automation)) {
     throw new BridgeProtocolError("result.automation must be an array");
   }
-  return {
+  const compactResult: JsonRecord = {
     ...compactNotes,
     automation: compactNotes.automation.map((value, index) => {
       const summary = asRecord(
@@ -106,6 +106,93 @@ export function compactPhraseContextGuards(
         parameter,
       });
     }),
+  };
+  if (compactNotes.pageCursor === undefined) {
+    return compactResult;
+  }
+  const rawCursor = asRecord(
+    compactNotes.pageCursor,
+    "result.pageCursor",
+  );
+  const page = asRecord(compactNotes.page, "result.page");
+  const anchorNoteIndex = requireInteger(
+    rawCursor.anchorNoteIndex,
+    "result.pageCursor.anchorNoteIndex",
+  );
+  const nextNoteIndex = requireInteger(
+    rawCursor.nextNoteIndex,
+    "result.pageCursor.nextNoteIndex",
+  );
+  const fingerprint = requireString(
+    rawCursor.fingerprint,
+    "result.pageCursor.fingerprint",
+  );
+  delete compactResult.pageCursor;
+  compactResult.page = {
+    ...page,
+    cursorToken: store.issue(fingerprint, {
+      kind: "range_cursor",
+      trackIndex,
+      groupIndex: requireInteger(
+        compactNotes.groupIndex,
+        "result.groupIndex",
+      ),
+      groupUuid,
+      anchorNoteIndex,
+      nextNoteIndex,
+    }),
+  };
+  return compactResult;
+}
+
+export function resolvePhraseCursorPayload(
+  input: unknown,
+  store: GuardTokenStore,
+): JsonRecord {
+  const root = asRecord(input, "input");
+  if (root.cursorToken === undefined) {
+    return root;
+  }
+  for (const field of [
+    "trackIndex",
+    "groupIndex",
+    "groupUuid",
+    "noteIndices",
+    "startSeconds",
+    "endSeconds",
+    "ranges",
+  ]) {
+    if (root[field] !== undefined) {
+      throw new BridgeProtocolError(
+        `${field} cannot be combined with cursorToken`,
+      );
+    }
+  }
+  if (root.offset !== undefined && root.offset !== 0) {
+    throw new BridgeProtocolError(
+      "A non-zero offset cannot be combined with cursorToken",
+    );
+  }
+  const token = requireString(root.cursorToken, "cursorToken");
+  const resolution = store.resolve(token, { kind: "range_cursor" });
+  if (resolution.binding.kind !== "range_cursor") {
+    throw new BridgeProtocolError(
+      "cursorToken did not resolve to a range cursor",
+    );
+  }
+  const { cursorToken: _cursorToken, ...rest } = root;
+  return {
+    ...rest,
+    trackIndex: resolution.binding.trackIndex,
+    groupIndex: resolution.binding.groupIndex,
+    groupUuid: resolution.binding.groupUuid,
+    offset: 0,
+    preferSelectedNotes: false,
+    pageCursor: {
+      anchorNoteIndex: resolution.binding.anchorNoteIndex,
+      nextNoteIndex: resolution.binding.nextNoteIndex,
+      fingerprint: resolution.fingerprint,
+    },
   };
 }
 

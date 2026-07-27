@@ -3635,6 +3635,39 @@ function handlers.get_group_voice(payload)
     return result
 end
 
+local function requestedRangeMatch(payload)
+    local rangeMatch =
+        optionalString(payload.rangeMatch, "rangeMatch", false) or "overlap"
+    if rangeMatch ~= "overlap" and rangeMatch ~= "onset" then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "rangeMatch must be overlap or onset"
+        )
+    end
+    return rangeMatch
+end
+
+local function findFirstNoteOnsetAtLeast(
+    group,
+    timeOffset,
+    targetPosition
+)
+    local left = 1
+    local right = group:getNumNotes() + 1
+    local inspectedCount = 0
+    while left < right do
+        local middle = math.floor((left + right) / 2)
+        local note = group:getNote(middle)
+        inspectedCount = inspectedCount + 1
+        if note:getOnset() + timeOffset < targetPosition then
+            left = middle + 1
+        else
+            right = middle
+        end
+    end
+    return left, inspectedCount
+end
+
 function handlers.get_note_phoneme_data(payload)
     payload = requireObject(payload, "payload")
     local mode = responseMode(payload)
@@ -3680,6 +3713,7 @@ function handlers.get_note_phoneme_data(payload)
     local startBlick = nil
     local endBlick = nil
     local timeAxis = nil
+    local rangeMatch = requestedRangeMatch(payload)
     if hasStartSeconds then
         startSeconds = requireFiniteNumber(payload.startSeconds, "startSeconds", 0)
         endSeconds = requireFiniteNumber(payload.endSeconds, "endSeconds", startSeconds)
@@ -3691,7 +3725,7 @@ function handlers.get_note_phoneme_data(payload)
     local noteCount = group:getNumNotes()
     local requestedNoteIndices = nil
     if isProvided(payload.noteIndices) then
-        local values = requireArray(payload.noteIndices, "noteIndices", 1, 512)
+        local values = requireArray(payload.noteIndices, "noteIndices", 0, 512)
         local seenNoteIndices = {}
         requestedNoteIndices = json.array()
         for index = 1, #values do
@@ -3728,7 +3762,9 @@ function handlers.get_note_phoneme_data(payload)
     if requestedNoteIndices ~= nil then
         scanMode = hasStartSeconds and "index_time_range" or "index_projection"
     elseif hasStartSeconds then
-        scanMode = "time_range"
+        scanMode = rangeMatch == "onset"
+            and "onset_binary"
+            or "time_range"
     end
 
     local function serializeMatchedNote(
@@ -3833,7 +3869,14 @@ function handlers.get_note_phoneme_data(payload)
         local sourceCount = requestedNoteIndices ~= nil
             and #requestedNoteIndices
             or noteCount
-        for sourceIndex = 1, sourceCount do
+        local firstSourceIndex = 1
+        if rangeMatch == "onset" and requestedNoteIndices == nil then
+            firstSourceIndex, scannedNoteCount =
+                findFirstNoteOnsetAtLeast(group, timeOffset, startBlick)
+        elseif rangeMatch == "onset" then
+            scanMode = "index_onset_range"
+        end
+        for sourceIndex = firstSourceIndex, sourceCount do
             local noteIndex = requestedNoteIndices ~= nil
                 and requestedNoteIndices[sourceIndex]
                 or sourceIndex
@@ -3844,7 +3887,10 @@ function handlers.get_note_phoneme_data(payload)
                 break
             end
             local absoluteEnd = note:getEnd() + timeOffset
-            if absoluteEnd >= startBlick then
+            local matchesRange = rangeMatch == "onset"
+                and absoluteOnset >= startBlick
+                or absoluteEnd >= startBlick
+            if matchesRange then
                 matchedNoteCount = matchedNoteCount + 1
                 if matchedNoteCount > offset and #notes < limit then
                     serializeMatchedNote(
@@ -3877,6 +3923,12 @@ function handlers.get_note_phoneme_data(payload)
             and #computedAttributes == 0,
         scanMode = scanMode,
         scannedNoteCount = scannedNoteCount,
+        rangeMatch = hasStartSeconds and rangeMatch or JSON_NULL,
+        coverage = hasStartSeconds
+            and (rangeMatch == "onset" and "onset_only" or "complete_overlap")
+            or "explicit_notes",
+        mayExcludeEarlierSustains =
+            hasStartSeconds and rangeMatch == "onset" or false,
         responseMode = mode,
         notes = notes
     }
@@ -4103,13 +4155,12 @@ local function serializePhraseVoice(reference, trackIndex, groupIndex)
     }
 end
 
-local function summarizePhraseAutomation(
-    group,
-    parameterName,
+local function summarizePhraseAutomationRange(
+    automation,
+    serialized,
     beginPosition,
     endPosition
 )
-    local automation, serialized = serializeAutomation(group, parameterName)
     local rawPoints = automation:getPoints(beginPosition, endPosition)
     local middlePosition = math.floor((beginPosition + endPosition) / 2)
     local startValue = automation:get(beginPosition)
@@ -4136,6 +4187,21 @@ local function summarizePhraseAutomation(
         maximum = roundedMetric(maximumValue),
         range = roundedMetric(maximumValue - minimumValue)
     }
+end
+
+local function summarizePhraseAutomation(
+    group,
+    parameterName,
+    beginPosition,
+    endPosition
+)
+    local automation, serialized = serializeAutomation(group, parameterName)
+    return summarizePhraseAutomationRange(
+        automation,
+        serialized,
+        beginPosition,
+        endPosition
+    )
 end
 
 local function summarizeComputedPitch(
@@ -4193,6 +4259,216 @@ local function summarizeComputedPitch(
     }
 end
 
+local function applyPhrasePageCursor(payload, group)
+    if not isProvided(payload.pageCursor) then
+        return false
+    end
+    if isProvided(payload.noteIndices)
+        or isProvided(payload.startSeconds)
+        or isProvided(payload.endSeconds)
+        or isProvided(payload.ranges) then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "pageCursor cannot be combined with notes or time ranges"
+        )
+    end
+    local suppliedOffset = optionalInteger(
+        payload.offset,
+        "offset",
+        0,
+        nil,
+        0
+    )
+    if suppliedOffset ~= 0 then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "pageCursor cannot be combined with a non-zero offset"
+        )
+    end
+    local cursor = requireObject(payload.pageCursor, "pageCursor")
+    local noteCount = group:getNumNotes()
+    local anchorNoteIndex = requireInteger(
+        cursor.anchorNoteIndex,
+        "pageCursor.anchorNoteIndex",
+        1,
+        noteCount
+    )
+    local nextNoteIndex = requireInteger(
+        cursor.nextNoteIndex,
+        "pageCursor.nextNoteIndex",
+        1,
+        noteCount
+    )
+    if nextNoteIndex ~= anchorNoteIndex + 1 then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "pageCursor.nextNoteIndex must immediately follow its anchor"
+        )
+    end
+    local expectedFingerprint = requireString(
+        cursor.fingerprint,
+        "pageCursor.fingerprint",
+        false
+    )
+    local anchorNote = group:getNote(anchorNoteIndex)
+    local actualFingerprint = makeNoteFingerprint(
+        group:getUUID(),
+        anchorNoteIndex,
+        anchorNote
+    )
+    if actualFingerprint ~= expectedFingerprint then
+        raiseBridgeError(
+            "STALE_RANGE_CURSOR",
+            "The range cursor boundary changed; read the page again.",
+            {
+                anchorNoteIndex = anchorNoteIndex,
+                nextNoteIndex = nextNoteIndex
+            }
+        )
+    end
+    payload.offset = nextNoteIndex - 1
+    payload.preferSelectedNotes = false
+    return true
+end
+
+local function collectPhraseRanges(
+    payload,
+    project,
+    reference,
+    group
+)
+    if not isProvided(payload.ranges) then
+        return nil
+    end
+    if isProvided(payload.noteIndices)
+        or isProvided(payload.startSeconds)
+        or isProvided(payload.endSeconds)
+        or isProvided(payload.pageCursor) then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "ranges cannot be combined with noteIndices, a top-level time range, or pageCursor"
+        )
+    end
+    local suppliedOffset = optionalInteger(
+        payload.offset,
+        "offset",
+        0,
+        nil,
+        0
+    )
+    if suppliedOffset ~= 0 then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "ranges cannot be combined with a non-zero offset"
+        )
+    end
+
+    local values = requireArray(payload.ranges, "ranges", 1, 32)
+    local timeAxis = project:getTimeAxis()
+    local timeOffset = reference:getTimeOffset()
+    local rangeMatch = requestedRangeMatch(payload)
+    local ranges = json.array()
+    local minimumStart = nil
+    local maximumEnd = nil
+    local minimumStartSeconds = nil
+    local maximumEndSeconds = nil
+    for index = 1, #values do
+        local value = requireObject(values[index], "ranges[" .. index .. "]")
+        local startSeconds = requireFiniteNumber(
+            value.startSeconds,
+            "ranges[" .. index .. "].startSeconds",
+            0
+        )
+        local endSeconds = requireFiniteNumber(
+            value.endSeconds,
+            "ranges[" .. index .. "].endSeconds",
+            startSeconds
+        )
+        local startPosition = timeAxis:getBlickFromSeconds(startSeconds)
+        local endPosition = timeAxis:getBlickFromSeconds(endSeconds)
+        local range = {
+            rangeIndex = index,
+            startSeconds = startSeconds,
+            endSeconds = endSeconds,
+            startPosition = startPosition,
+            endPosition = endPosition,
+            beginGroupPosition = math.max(0, startPosition - timeOffset),
+            endGroupPosition = math.max(0, endPosition - timeOffset),
+            noteIndices = json.array()
+        }
+        if isProvided(value.label) then
+            range.label = requireString(
+                value.label,
+                "ranges[" .. index .. "].label",
+                false
+            )
+        end
+        ranges[#ranges + 1] = range
+        minimumStart = minimumStart == nil
+            and startPosition
+            or math.min(minimumStart, startPosition)
+        maximumEnd = maximumEnd == nil
+            and endPosition
+            or math.max(maximumEnd, endPosition)
+        minimumStartSeconds = minimumStartSeconds == nil
+            and startSeconds
+            or math.min(minimumStartSeconds, startSeconds)
+        maximumEndSeconds = maximumEndSeconds == nil
+            and endSeconds
+            or math.max(maximumEndSeconds, endSeconds)
+    end
+
+    local firstNoteIndex = 1
+    local scannedNoteCount = 0
+    if rangeMatch == "onset" then
+        firstNoteIndex, scannedNoteCount = findFirstNoteOnsetAtLeast(
+            group,
+            timeOffset,
+            minimumStart
+        )
+    end
+    local matched = {}
+    local noteIndices = json.array()
+    for noteIndex = firstNoteIndex, group:getNumNotes() do
+        local note = group:getNote(noteIndex)
+        scannedNoteCount = scannedNoteCount + 1
+        local absoluteOnset = note:getOnset() + timeOffset
+        if absoluteOnset > maximumEnd then
+            break
+        end
+        local absoluteEnd = note:getEnd() + timeOffset
+        for rangeIndex = 1, #ranges do
+            local range = ranges[rangeIndex]
+            local matches = rangeMatch == "onset"
+                and absoluteOnset >= range.startPosition
+                or absoluteEnd >= range.startPosition
+            if matches and absoluteOnset <= range.endPosition then
+                range.noteIndices[#range.noteIndices + 1] = noteIndex
+                if not matched[noteIndex] then
+                    matched[noteIndex] = true
+                    noteIndices[#noteIndices + 1] = noteIndex
+                    if #noteIndices > 256 then
+                        raiseBridgeError(
+                            "RANGE_RESULT_LIMIT_EXCEEDED",
+                            "The combined ranges match more than 256 notes; split the request into smaller batches."
+                        )
+                    end
+                end
+            end
+        end
+    end
+    return {
+        ranges = ranges,
+        noteIndices = noteIndices,
+        rangeMatch = rangeMatch,
+        scannedNoteCount = scannedNoteCount,
+        minimumStart = minimumStart,
+        maximumEnd = maximumEnd,
+        minimumStartSeconds = minimumStartSeconds,
+        maximumEndSeconds = maximumEndSeconds
+    }
+end
+
 function handlers.get_phrase_context(payload)
     payload = requireObject(payload, "payload")
     local phrasePayload = {}
@@ -4225,13 +4501,21 @@ function handlers.get_phrase_context(payload)
         locatorSource = "current_editor"
     end
 
-    local _project, _track, trackIndex, reference, group, groupIndex =
+    local project, _track, trackIndex, reference, group, groupIndex =
         resolveGroup(phrasePayload)
+    local cursorPage = applyPhrasePageCursor(phrasePayload, group)
+    local multiRange = collectPhraseRanges(
+        phrasePayload,
+        project,
+        reference,
+        group
+    )
     local selectionContext, selectedNoteIndices =
         getTargetSelectionContext(reference, group)
     local hasExplicitIndices = isProvided(phrasePayload.noteIndices)
     local hasTimeRange = isProvided(phrasePayload.startSeconds)
         or isProvided(phrasePayload.endSeconds)
+    local hasMultipleRanges = multiRange ~= nil
     local preferSelectedNotes = optionalBoolean(
         phrasePayload.preferSelectedNotes,
         "preferSelectedNotes"
@@ -4239,10 +4523,14 @@ function handlers.get_phrase_context(payload)
     if preferSelectedNotes == nil then
         preferSelectedNotes = true
     end
-    local scopeSource = hasExplicitIndices and "note_indices"
+    local scopeSource = hasMultipleRanges and "multi_range"
+        or (cursorPage and "cursor_page")
+        or (hasExplicitIndices and "note_indices")
         or (hasTimeRange and "seconds_range" or "page")
     if not hasExplicitIndices
         and not hasTimeRange
+        and not hasMultipleRanges
+        and not cursorPage
         and preferSelectedNotes
         and selectionContext.selectedNoteCount > 0 then
         local selected = json.array()
@@ -4274,7 +4562,29 @@ function handlers.get_phrase_context(payload)
         256,
         128
     )
+    if hasMultipleRanges then
+        phrasePayload.noteIndices = multiRange.noteIndices
+        phrasePayload.ranges = nil
+        phrasePayload.offset = 0
+        phrasePayload.limit = 256
+    end
     local noteData = handlers.get_note_phoneme_data(phrasePayload)
+    if hasMultipleRanges then
+        noteData.scanMode = multiRange.rangeMatch == "onset"
+            and "multi_range_onset_sweep"
+            or "multi_range_overlap_sweep"
+        noteData.rangeScannedNoteCount = multiRange.scannedNoteCount
+        noteData.serializationScannedNoteCount = noteData.scannedNoteCount
+        noteData.scannedNoteCount =
+            multiRange.scannedNoteCount + noteData.scannedNoteCount
+        noteData.rangeMatch = multiRange.rangeMatch
+        noteData.coverage = multiRange.rangeMatch == "onset"
+            and "onset_only"
+            or "complete_overlap"
+        noteData.mayExcludeEarlierSustains =
+            multiRange.rangeMatch == "onset"
+        noteData.multiRange = true
+    end
     compactPhraseNoteDefaults(noteData.notes)
     noteData.noteDefaultsOmitted = true
     noteData.secondsPrecision = 0.0001
@@ -4296,10 +4606,55 @@ function handlers.get_phrase_context(payload)
         breathGapSeconds,
         recommendationLimit
     )
+    if hasMultipleRanges then
+        local noteByIndex = {}
+        for index = 1, #noteData.notes do
+            local note = noteData.notes[index]
+            noteByIndex[note.noteIndex] = note
+        end
+        for rangeIndex = 1, #multiRange.ranges do
+            local range = multiRange.ranges[rangeIndex]
+            local rangeNotes = json.array()
+            for noteIndexIndex = 1, #range.noteIndices do
+                local note = noteByIndex[range.noteIndices[noteIndexIndex]]
+                if note ~= nil then
+                    rangeNotes[#rangeNotes + 1] = note
+                end
+            end
+            range.analysis, range.recommendations = analyzePhraseNotes(
+                rangeNotes,
+                breathGapSeconds,
+                recommendationLimit
+            )
+        end
+        analysis = {
+            multiRange = true,
+            rangeCount = #multiRange.ranges,
+            uniqueNoteCount = #noteData.notes,
+            startPosition = multiRange.minimumStart,
+            endPosition = multiRange.maximumEnd,
+            startSeconds = roundedMetric(multiRange.minimumStartSeconds),
+            endSeconds = roundedMetric(multiRange.maximumEndSeconds),
+            spanSeconds = roundedMetric(
+                multiRange.maximumEndSeconds - multiRange.minimumStartSeconds
+            ),
+            crossRangeTransitionsExcluded = true
+        }
+        recommendations = json.array()
+    end
 
     local beginPosition = 0
     local endPosition = 0
-    if analysis.startPosition ~= JSON_NULL then
+    if hasMultipleRanges then
+        beginPosition = math.max(
+            0,
+            multiRange.minimumStart - reference:getTimeOffset()
+        )
+        endPosition = math.max(
+            beginPosition,
+            multiRange.maximumEnd - reference:getTimeOffset()
+        )
+    elseif analysis.startPosition ~= JSON_NULL then
         beginPosition =
             math.max(0, analysis.startPosition - reference:getTimeOffset())
         endPosition =
@@ -4343,12 +4698,39 @@ function handlers.get_phrase_context(payload)
             )
         end
         seenParameters[parameter] = true
-        automation[#automation + 1] = summarizePhraseAutomation(
-            group,
-            parameter,
-            beginPosition,
-            endPosition
-        )
+        if hasMultipleRanges then
+            local curve, serialized = serializeAutomation(group, parameter)
+            local rangeSummaries = json.array()
+            for rangeIndex = 1, #multiRange.ranges do
+                local range = multiRange.ranges[rangeIndex]
+                local summary = summarizePhraseAutomationRange(
+                    curve,
+                    serialized,
+                    range.beginGroupPosition,
+                    range.endGroupPosition
+                )
+                summary.rangeIndex = rangeIndex
+                summary.parameter = nil
+                summary.interpolation = nil
+                summary.fingerprint = nil
+                summary.totalPointCount = nil
+                rangeSummaries[#rangeSummaries + 1] = summary
+            end
+            automation[#automation + 1] = {
+                parameter = serialized.parameter,
+                interpolation = serialized.interpolation,
+                fingerprint = serialized.fingerprint,
+                totalPointCount = serialized.pointCount,
+                ranges = rangeSummaries
+            }
+        else
+            automation[#automation + 1] = summarizePhraseAutomation(
+                group,
+                parameter,
+                beginPosition,
+                endPosition
+            )
+        end
     end
 
     local pitchAnalysisFrames = optionalInteger(
@@ -4358,6 +4740,13 @@ function handlers.get_phrase_context(payload)
         256,
         0
     )
+    if hasMultipleRanges
+        and pitchAnalysisFrames * #multiRange.ranges > 256 then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "pitchAnalysisFrames times the number of ranges must not exceed 256"
+        )
+    end
     noteData.scope = {
         locatorSource = locatorSource,
         source = scopeSource,
@@ -4368,12 +4757,57 @@ function handlers.get_phrase_context(payload)
     noteData.analysis = analysis
     noteData.recommendations = recommendations
     noteData.automation = automation
-    noteData.pitchAnalysis = summarizeComputedPitch(
-        reference,
-        analysis.startPosition,
-        analysis.endPosition,
-        pitchAnalysisFrames
-    )
+    if hasMultipleRanges then
+        noteData.ranges = multiRange.ranges
+        local pitchRanges = json.array()
+        for rangeIndex = 1, #multiRange.ranges do
+            local range = multiRange.ranges[rangeIndex]
+            local pitchSummary = summarizeComputedPitch(
+                reference,
+                range.startPosition,
+                range.endPosition,
+                pitchAnalysisFrames
+            )
+            pitchSummary.rangeIndex = rangeIndex
+            pitchRanges[#pitchRanges + 1] = pitchSummary
+            range.beginGroupPosition = nil
+            range.endGroupPosition = nil
+        end
+        noteData.pitchAnalysis = {
+            included = pitchAnalysisFrames > 0,
+            framesPerRange = pitchAnalysisFrames,
+            ranges = pitchRanges
+        }
+    else
+        noteData.pitchAnalysis = summarizeComputedPitch(
+            reference,
+            analysis.startPosition,
+            analysis.endPosition,
+            pitchAnalysisFrames
+        )
+    end
+    if scopeSource == "page" or scopeSource == "cursor_page" then
+        local firstNote = noteData.notes[1]
+        local lastNote = noteData.notes[#noteData.notes]
+        noteData.page = {
+            firstNoteIndex = firstNote ~= nil
+                and firstNote.noteIndex
+                or JSON_NULL,
+            lastNoteIndex = lastNote ~= nil
+                and lastNote.noteIndex
+                or JSON_NULL,
+            nextNoteIndex = noteData.hasMore and lastNote ~= nil
+                and lastNote.noteIndex + 1
+                or JSON_NULL
+        }
+        if noteData.hasMore and lastNote ~= nil then
+            noteData.pageCursor = {
+                anchorNoteIndex = lastNote.noteIndex,
+                nextNoteIndex = lastNote.noteIndex + 1,
+                fingerprint = lastNote.fingerprint
+            }
+        end
+    end
     return noteData
 end
 

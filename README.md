@@ -253,6 +253,18 @@ All track, group, and note indices are **1-based**, matching the SynthV Lua API.
 - Phrase-note seconds are rounded to 0.1 ms. Empty/default phoneme overrides,
   zero detune, and false selection flags are omitted; non-default values remain,
   and the response reports `noteDefaultsOmitted` plus `secondsPrecision`.
+- Absolute ranges default to `rangeMatch: "overlap"`, which preserves a long
+  note crossing the range start. Use `rangeMatch: "onset"` only when onset-only
+  coverage is acceptable; it binary-seeks into the sorted Group and reports
+  `coverage: "onset_only"` plus `mayExcludeEarlierSustains: true`.
+- Unscoped phrase pages return an opaque `page.cursorToken` when more notes
+  remain. Pass it back as `cursorToken` instead of repeating the Group locator
+  and numeric offset. The server rejects an expired token, and SynthV rejects it
+  with `STALE_RANGE_CURSOR` if the boundary note changed.
+- `get_phrase_context.ranges` accepts up to 32 absolute ranges. The executor
+  sweeps the Group once, serializes each unique matched note once, and returns
+  one shared `notes` array; each range references it through `noteIndices` and
+  has its own diagnostics, automation summaries, and optional pitch summary.
 - Phoneme reads can filter by exact `noteIndices` and/or an overlapping absolute
   `startSeconds`/`endSeconds` range. Compact notes include timing, lyrics,
   computed phonemes, user overrides, and a short `guardToken`; large raw and

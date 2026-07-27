@@ -897,6 +897,69 @@ assert(groupGetNoteCalls==getNoteCallsBeforeRange+2,"time-range fast path fetche
 assert(blickFromSecondsCalls==blickCallsBeforeRange+2,"time-range fast path did not convert boundaries once")
 assert(secondsFromBlickCalls==secondsCallsBeforeRange+2,"time-range fast path converted timing for non-returned notes")
 
+local overlappingSustain=call(
+    "get_note_phoneme_data",
+    '{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..
+        '","responseMode":"compact","startSeconds":0.5,"endSeconds":0.55,'..
+        '"rangeMatch":"overlap","includeComputedPhonemes":false}'
+)
+assert(overlappingSustain:find('"matchedNoteCount":1',1,true),"overlap coverage lost a crossing sustain")
+assert(overlappingSustain:find('"coverage":"complete_overlap"',1,true),"overlap coverage was not reported")
+local onsetOnlyRange=call(
+    "get_note_phoneme_data",
+    '{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..
+        '","responseMode":"compact","startSeconds":0.5,"endSeconds":0.55,'..
+        '"rangeMatch":"onset","includeComputedPhonemes":false}'
+)
+assert(onsetOnlyRange:find('"scanMode":"onset_binary"',1,true),"onset range did not use binary seek")
+assert(onsetOnlyRange:find('"matchedNoteCount":0',1,true),"onset-only coverage included an earlier sustain")
+assert(onsetOnlyRange:find('"mayExcludeEarlierSustains":true',1,true),"onset-only coverage risk was not reported")
+
+local multiRangeCallsBefore=groupGetNoteCalls
+local multiRangeContext=call(
+    "get_phrase_context",
+    '{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..
+        '","preferSelectedNotes":false,"includeComputedPhonemes":false,'..
+        '"automationParameters":[],"ranges":['..
+        '{"startSeconds":0,"endSeconds":0.1,"label":"first"},'..
+        '{"startSeconds":0.7,"endSeconds":1.0,"label":"second"}]}'
+)
+assert(multiRangeContext:find('"multiRange":true',1,true),"multi-range context was not reported")
+assert(multiRangeContext:find('"scanMode":"multi_range_overlap_sweep"',1,true),"multi-range context did not use one overlap sweep")
+assert(multiRangeContext:find('"rangeCount":2',1,true),"multi-range analysis omitted a range")
+assert(multiRangeContext:find('"uniqueNoteCount":2',1,true),"multi-range context did not share its matched notes")
+assert(groupGetNoteCalls==multiRangeCallsBefore+4,"multi-range context rescanned a Group per requested range")
+
+local firstPhrasePage=call(
+    "get_phrase_context",
+    '{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..
+        '","preferSelectedNotes":false,"includeComputedPhonemes":false,'..
+        '"automationParameters":[],"limit":1}'
+)
+assert(firstPhrasePage:find('"hasMore":true',1,true),"first phrase page did not expose a continuation")
+local rawCursor=assert(firstPhrasePage:match('"pageCursor":(%b{})'),"first phrase page omitted its raw cursor")
+local cursorFingerprint=extractJsonString(rawCursor,"fingerprint")
+local cursorAnchor=assert(rawCursor:match('"anchorNoteIndex":(%d+)'))
+local cursorNext=assert(rawCursor:match('"nextNoteIndex":(%d+)'))
+local secondPhrasePage=call(
+    "get_phrase_context",
+    '{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..
+        '","includeComputedPhonemes":false,"automationParameters":[],"limit":1,'..
+        '"pageCursor":{"anchorNoteIndex":'..cursorAnchor..
+        ',"nextNoteIndex":'..cursorNext..',"fingerprint":"'..
+        escape(cursorFingerprint)..'"}}'
+)
+assert(secondPhrasePage:find('"source":"cursor_page"',1,true),"cursor continuation source was not reported")
+assert(secondPhrasePage:find('"noteIndex":2',1,true),"cursor continuation returned the wrong note")
+callExpectError(
+    "get_phrase_context",
+    '{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..
+        '","includeComputedPhonemes":false,"automationParameters":[],"limit":1,'..
+        '"pageCursor":{"anchorNoteIndex":'..cursorAnchor..
+        ',"nextNoteIndex":'..cursorNext..',"fingerprint":"stale"}}',
+    "STALE_RANGE_CURSOR"
+)
+
 local track2Fingerprint="main-group:"..track2GroupUuid
 callWrite("update_track",'{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Lead Source","bounced":true}')
 local groupVoice=call("get_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'"}')

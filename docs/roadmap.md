@@ -47,6 +47,8 @@
 - One-request selected/ranged phrase context with write-ready note/automation
   Guards, compact voice/Vocal Modes, aggregate pitch/rhythm diagnostics, and
   recommendation-only review targets.
+- Explicit complete-overlap or binary onset-only range scans, guarded phrase
+  page cursors, and one-sweep multi-range phrase analysis with shared notes.
 
 ## Next — transaction depth and advanced music analysis
 
