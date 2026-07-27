@@ -40,6 +40,8 @@ const groupUuidSchema = z.string().min(1);
 const responseModeSchema = z.enum(["full", "compact"]).default("full");
 export const TRACK_DISPLAY_COLOR_PATTERN =
   /^(?:#[0-9A-Fa-f]{6}|#?[0-9A-Fa-f]{8})$/;
+export const FIRST_USE_NOTICE =
+  "On the first project-changing use in a conversation, briefly tell the user once: save important work; do not edit the same target while a write is running; after undo or a manual edit to that target, compactly reread only that target. Explain that SynthV does not expose singer identity or default-only Vocal Mode names. If Vocal Modes may be edited, ask the user either to list every exact Vocal Mode name shown for the current singer (preserving spelling and capitalization) or attach a screenshot of that panel; reuse the identified list for the same singer, and ask once again only after the singer changes. Do not repeat this notice otherwise.";
 const displayColorSchema = z
   .string()
   .regex(TRACK_DISPLAY_COLOR_PATTERN)
@@ -141,6 +143,24 @@ const groupLocatorShape = {
   groupUuid: groupUuidSchema
     .optional()
     .describe("Optional group UUID. When present, the bridge verifies that it matches groupIndex."),
+};
+
+const currentOrGroupLocatorShape = {
+  trackIndex: indexSchema
+    .optional()
+    .describe(
+      "1-based track storage index. Omit all locators to use the current piano-roll Group.",
+    ),
+  groupIndex: indexSchema
+    .optional()
+    .describe(
+      "1-based group index. Requires trackIndex; omit both to use the current piano-roll Group.",
+    ),
+  groupUuid: groupUuidSchema
+    .optional()
+    .describe(
+      "Optional group UUID guard. Requires trackIndex and verifies groupIndex.",
+    ),
 };
 
 const trackGuardShape = {
@@ -372,8 +392,8 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       instructions:
         useV2Surface
-          ? "Use sv_describe for unfamiliar actions. Read fresh state before writes and reuse contextId. Indices are 1-based. Writes stay fingerprint-guarded and create one SynthV undo record. Sidebar requests must be published as previews."
-          : "Control Synthesizer V Studio through the local bridge. Read fresh state before writes, prefer compact phrase workflows, reuse current guards, and keep protocol-boundary indices 1-based.",
+          ? `Use sv_describe for unfamiliar actions. Read only the intended target before writes and batch changes with its contextId. Indices are 1-based. Writes stay fingerprint-guarded and create one SynthV undo record. Sidebar requests must be published as previews. ${FIRST_USE_NOTICE}`
+          : `Control Synthesizer V Studio through the local bridge. Read only the intended target before writes, prefer compact workflows, reuse current guards, and keep protocol-boundary indices 1-based. ${FIRST_USE_NOTICE}`,
     },
   );
   const capturedTools = new Map<string, RegisteredTool>();
@@ -868,8 +888,8 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Get SynthV Group Voice",
       description:
-        "Read one vocal group's documented voice parameters, Vocal Modes, raw host properties, experimental Unison fields, and current/selected editor context. This does not expose or select the singer database.",
-      inputSchema: groupLocatorShape,
+        "Read one vocal group's documented voice parameters, Vocal Modes, raw host properties, experimental Unison fields, and current/selected editor context. Omit all locators to use the current piano-roll Group. This does not expose or select the singer database.",
+      inputSchema: currentOrGroupLocatorShape,
       annotations: {
         readOnlyHint: true,
         openWorldHint: false,
@@ -1286,7 +1306,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Set SynthV Group Voice",
       description:
-        "Safely update documented group voice defaults and non-negative Vocal Mode axes. An empty vocalModes read means no non-default values are stored, not unsupported modes: submit all desired mode names in one call and the Bridge clone-probes and verifies them atomically without per-mode discovery. If VOCAL_MODE_NOT_FOUND is returned, stop guessing and ask the user for the exact Vocal Mode names shown for the current singer, preserving spelling and capitalization. Experimental Unison fields are accepted only when the host returns and retains them.",
+        "Safely update documented group voice defaults and non-negative Vocal Mode axes. An empty vocalModes read means no non-default values are stored, not unsupported modes. Use exact names supplied by the user or identified from their panel screenshot, batch them in one call, and do not probe guesses. If VOCAL_MODE_NOT_FOUND is returned, ask once for the current singer's exact names. Experimental Unison fields are accepted only when the host returns and retains them.",
       inputSchema: {
         ...groupLocatorShape,
         referenceFingerprint: fingerprintSchema.describe(

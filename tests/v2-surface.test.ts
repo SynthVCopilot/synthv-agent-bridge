@@ -88,6 +88,39 @@ test("v2 note insertion ensures an editable non-main group by default", () => {
   assert.equal(explicitTarget.grouping, "target");
 });
 
+test("v2 Group Voice refresh defaults to a compact write-ready projection", () => {
+  assert.deepEqual(v2Testing.defaultReadFields("get_group_voice"), [
+    "trackIndex",
+    "groupIndex",
+    "parameters",
+    "vocalModes",
+  ]);
+  assert.equal(v2Testing.defaultReadFields("get_project_info"), undefined);
+
+  const projected = v2Testing.projectFields(
+    {
+      trackIndex: 1,
+      groupIndex: 2,
+      parameters: { tension: 0 },
+      vocalModes: { Soft: { pitch: 10 } },
+      rawVoice: { duplicated: true },
+      experimentalUnison: { singers: 1 },
+      phonemeCapabilities: { strengthRetained: true },
+      contextId: "ctx_voice",
+    },
+    v2Testing.defaultReadFields("get_group_voice") ?? [],
+  );
+
+  assert.deepEqual(projected, {
+    trackIndex: 1,
+    groupIndex: 2,
+    parameters: { tension: 0 },
+    vocalModes: { Soft: { pitch: 10 } },
+    contextId: "ctx_voice",
+  });
+  assert.ok(JSON.stringify(projected).length < 220);
+});
+
 test("v2 context store evicts by total guard weight", () => {
   const contexts = new V2ContextStore(10, 3);
   const first = contexts.issue({

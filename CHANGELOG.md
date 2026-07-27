@@ -6,6 +6,9 @@ All notable changes will be documented in this file.
 
 ### Added
 
+- A one-time MCP first-use notice that tells the Agent to ask for the current
+  singer's exact Vocal Mode names or a panel screenshot before Vocal Mode work,
+  reuse the result for that singer, and ask again only after a singer change.
 - V2 `add_notes` now defaults to `grouping=ensureNonMain`. Notes aimed at a
   track main group are inserted into a newly created reusable non-main group
   and reference, with the main Voice/Vocal Modes copied so the new notes remain
@@ -27,6 +30,13 @@ All notable changes will be documented in this file.
 
 ### Changed
 
+- `get_group_voice` can resolve the current piano-roll Group from an empty
+  payload. MCP v2 now projects only target indices, documented parameters,
+  Vocal Modes, and `contextId` by default, avoiding a full selection read and
+  duplicate raw/diagnostic fields when only refreshing a Voice write guard.
+- First-use instructions distinguish relevant manual edits from unrelated UI
+  work and require only a compact target reread after undo or overlapping
+  manual edits.
 - The native side panel is explicitly optional, starts in a compact layout,
   surfaces pending confirmations automatically, and can be omitted at install
   time with `--without-sidebar`. Core Bridge/MCP operation remains complete.

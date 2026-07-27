@@ -3691,9 +3691,37 @@ function handlers.get_track_notes(payload)
     }
 end
 
+local function resolveCurrentOrExplicitVoiceGroup(payload)
+    if isProvided(payload.trackIndex) then
+        return resolveGroup(payload)
+    end
+    if isProvided(payload.groupIndex) or isProvided(payload.groupUuid) then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "groupIndex/groupUuid require trackIndex, or omit all locators to use the current piano-roll Group"
+        )
+    end
+    local currentReference = safeCall(function()
+        return SV:getMainEditor():getCurrentGroup()
+    end, nil)
+    local current = locateReference(currentReference)
+    if not current or current.instrumental then
+        raiseBridgeError(
+            "GROUP_NOT_FOUND",
+            "The piano roll does not have a current vocal Group"
+        )
+    end
+    return resolveGroup({
+        trackIndex = current.trackIndex,
+        groupIndex = current.groupIndex,
+        groupUuid = current.groupUuid
+    })
+end
+
 function handlers.get_group_voice(payload)
     payload = requireObject(payload, "payload")
-    local _project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
+    local _project, _track, trackIndex, reference, group, groupIndex =
+        resolveCurrentOrExplicitVoiceGroup(payload)
     local result = serializeGroupVoice(reference, trackIndex, groupIndex)
     result.selectionContext = getTargetSelectionContext(reference, group)
     return result

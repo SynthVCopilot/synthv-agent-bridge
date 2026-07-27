@@ -152,6 +152,19 @@ const DIAGNOSTIC_FIELDS = new Set([
   "serializationScannedNoteCount",
 ]);
 
+const DEFAULT_READ_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  get_group_voice: [
+    "trackIndex",
+    "groupIndex",
+    "parameters",
+    "vocalModes",
+  ],
+};
+
+function defaultReadFields(action: string): readonly string[] | undefined {
+  return DEFAULT_READ_FIELDS[action];
+}
+
 function asRecord(value: unknown, path: string): JsonRecord {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new BridgeProtocolError(`${path} must be an object`);
@@ -780,8 +793,10 @@ function expandContext(
 
 export const v2Testing = {
   compactPhraseNotes,
+  defaultReadFields,
   denseNotes,
   expandContext,
+  projectFields,
   projectIncludes,
   stripDiagnostics,
 };
@@ -1035,7 +1050,7 @@ export function registerV2Surface(
     {
       title: "Read SynthV",
       description:
-        "Run one read action. Reuse contextId for scoped reads/writes; phrase reads default to compact projected data.",
+        "Run one read action. Reuse contextId for scoped reads/writes; phrase and Group Voice reads default to compact projected data.",
       inputSchema: {
         action: actionSchema,
         args: argsSchema,
@@ -1099,8 +1114,10 @@ export function registerV2Surface(
           stripDiagnostics(root);
         }
         denseNotes(root, input.dense);
+        const fields =
+          input.fields ?? defaultReadFields(input.action);
         return jsonResult(
-          input.fields === undefined ? root : projectFields(root, input.fields),
+          fields === undefined ? root : projectFields(root, fields),
         );
       } catch (error) {
         return errorResult(error);

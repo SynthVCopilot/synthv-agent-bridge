@@ -15,7 +15,7 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 - Create, clone, reuse, update, or delete library note groups and vocal/instrumental Group references.
 - Clone an existing track to inherit its singer/database, optionally clearing or transposing cloned notes.
 - Add notes and edit per-note language, sing/rap type, pitch-auto mode, rap accent, timing, pitch, lyrics, phonemes, detune, and attributes. V2 automatically places notes inserted through a track's main group into a reusable non-main group so Group Voice and Vocal Modes remain editable.
-- Read and safely update typed group voice defaults, Vocal Mode pitch/timbre/pronunciation axes, and host-returned experimental Unison fields. Empty Vocal Mode maps can be initialized in one clone-validated batch without per-mode discovery calls.
+- Read and safely update typed group voice defaults, Vocal Mode pitch/timbre/pronunciation axes, and host-returned experimental Unison fields. Empty Vocal Mode maps can be initialized from the user's exact names in one clone-validated batch without per-mode discovery calls.
 - Read computed and user phonemes together, and safely edit phoneset overrides, syllable timing, and per-phoneme timing/strength attributes.
 - Add, edit, and delete point or curve Smart Pitch controls with stale-write protection.
 - Generate, activate, and delete Bridge-tracked AI Retakes.
@@ -32,6 +32,34 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 - Optionally use a native SynthV side panel to inspect connection/current-selection context,
   queue an instruction, review a structured guarded write or transaction,
   apply/dismiss/cancel it, inspect diagnostics, and see recent activity.
+
+## First MCP connection: user notice
+
+On the first project-changing use in a conversation, the Agent must briefly
+tell the user:
+
+- Save important work before AI editing and avoid changing the same target
+  while a Bridge write is running.
+- After undoing or manually editing the notes, Group, Voice, or Vocal Modes
+  that the Agent is about to change, the Agent will compactly reread only that
+  target. Unrelated edits do not require a reread.
+- SynthV's scripting API does not expose the current singer identity or
+  enumerate default-only Vocal Mode names. Before Vocal Mode editing, the user
+  should either list every exact name shown for the current singer, preserving
+  spelling and capitalization, or attach a screenshot of the Vocal Mode panel.
+- The identified names are reused for the same singer. The user only needs to
+  tell the Agent again after changing singers.
+
+The Agent must give this notice once, not before every edit. A concise prompt
+from the user is sufficient:
+
+```text
+Current singer Vocal Modes: Airy, Bright, Cool, Dark, Emotional, Power, Solid,
+Sweet.
+```
+
+Alternatively, attach a screenshot that clearly shows the complete Vocal Mode
+panel.
 
 ## Architecture
 
@@ -386,14 +414,21 @@ false success.
 The server instructions tell an agent to follow this sequence:
 
 1. For phrase tuning, call `get_phrase_context` immediately before editing.
-   For other work, read the project, time axis, track, group, automation, or
-   current selection that owns the intended change.
+   For Group Voice or Vocal Modes, call `get_group_voice` with no locator to
+   target the current piano-roll Group. V2 returns only the parameters, Vocal
+   Modes, target indices, and `contextId` by default; request full fields only
+   for diagnostics. For other work, read only the object that owns the intended
+   change.
 2. Present or internally construct a small, reviewable change.
 3. Copy the latest applicable group/reference UUIDs and fingerprints, track fingerprint, automation/time-axis fingerprint, and note or Smart Pitch fingerprints.
 4. Call the smallest write tool that completes the intended change. Use
    `apply_transaction` only for a complete independent multi-object batch that
    benefits from one undo record.
 5. If SynthV reports any `STALE_*` error, read again rather than guessing.
+
+One compact read should feed one complete batch of related changes. Do not
+refresh `contextId` by reading the whole selection or song when only Group
+Voice changed.
 
 A note fingerprint includes the group UUID, note index, onset, duration, pitch, detune, lyrics, phonemes, language, musical type, pitch mode, rap accent, retake count, and note attributes. This prevents an agent from applying an old plan to a note that the user has already changed.
 

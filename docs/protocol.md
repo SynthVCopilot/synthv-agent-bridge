@@ -287,6 +287,21 @@ before adding its replacement. The bridge validates the complete operation on a
 cloned `TimeAxis`, applies one undo record, and verifies the project-owned
 `TimeAxis` afterward. Successful responses include `verified: true`.
 
+### Token-efficient Group Voice refresh
+
+`get_group_voice` accepts either an explicit Group locator or an empty payload.
+An empty payload resolves the current piano-roll vocal Group, avoiding a
+potentially large `get_selection` response merely to discover the target. On
+the MCP v2 surface, the default projection contains only `trackIndex`,
+`groupIndex`, documented `parameters`, `vocalModes`, and a guarded `contextId`.
+Callers can request additional fields explicitly for diagnostics.
+
+The MCP server instructions require one first-use notice per conversation,
+not one notice per edit. Before Vocal Mode work, the Agent asks the user either
+for the exact current singer mode names or for a screenshot of that panel.
+The Agent reuses that list until the user reports changing singer. Undo or a
+manual edit only requires a compact reread when it touched the same target.
+
 ### Optional host capabilities
 
 When the current SynthV Lua host cannot execute `Note:setPitchAutoMode()`, a
@@ -307,17 +322,18 @@ above the older documented range. SynthV may omit every default Vocal Mode from
 `vocalModeParams` map is not treated as a capability catalog. The caller may
 submit all desired mode names in one `set_group_voice` request. The Bridge
 tries the complete batch on a cloned reference and reads it back; no
-interactive per-mode discovery request is required. Unsupported names fail
-before an undo record, while successful non-default values become visible in
-later reads.
+interactive per-mode discovery request is required. Names rejected by the
+current host fail before an undo record, while successful non-default values
+become visible in later reads.
 
 If clone validation returns `VOCAL_MODE_NOT_FOUND`, its details contain
 `requiredUserInput.kind=vocal_mode_names`, the attempted names, any names
 already visible in the Group, and an instruction to stop guessing. The Agent
 must tell the user that the scripting API cannot enumerate the current
 singer's default-only modes and ask for the exact names displayed in SynthV's
-Vocal Mode panel, preserving spelling and capitalization. It should then retry
-all user-provided names in one batch.
+Vocal Mode panel, preserving spelling and capitalization. The user may instead
+attach a screenshot that clearly shows the complete panel. The Agent should
+then retry all identified names in one batch and reuse them for that singer.
 
 The Bridge first tries a sparse nested update and verifies every previously
 visible Vocal Mode value, so an unrequested legacy value is never silently
