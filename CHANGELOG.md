@@ -6,6 +6,11 @@ All notable changes will be documented in this file.
 
 ### Added
 
+- V2 `add_notes` now defaults to `grouping=ensureNonMain`. Notes aimed at a
+  track main group are inserted into a newly created reusable non-main group
+  and reference, with the main Voice/Vocal Modes copied so the new notes remain
+  directly tunable. Explicit non-main groups are reused, and
+  `grouping=target` preserves exact-target insertion.
 - A compact `get_phrase_context` read that resolves the current piano-roll
   Group or an explicit note/time scope and returns write-ready note and
   automation Guard Tokens, Group voice/Vocal Modes, bounded rhythm/pitch
@@ -35,6 +40,13 @@ All notable changes will be documented in this file.
   detune, and selection fields while retaining every non-default override.
 - The default overlap behavior remains backward compatible. Faster onset-only
   seeking and multi-range reads are explicit opt-ins; protocol v1 is unchanged.
+
+### Fixed
+
+- The installer now distinguishes a successful in-session hot reload from
+  SynthV's cached menu-script source. When the Bridge runtime changed, it asks
+  for one script rescan before the next project/app restart and manual launch,
+  preventing a cached older handler from reclaiming the session.
 
 ## 0.1.5 - 2026-07-27
 

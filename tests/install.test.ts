@@ -43,6 +43,8 @@ test("core-only installation omits the optional sidebar without deleting one", a
     { code: "ENOENT" },
   );
   assert.match(first.stdout, /Skipped the optional side-panel script/u);
+  assert.match(first.stdout, /The Bridge runtime changed/u);
+  assert.match(first.stdout, /Scripts → Rescan/u);
 
   const sidebarPath = path.join(
     installedDirectory,
@@ -55,4 +57,5 @@ test("core-only installation omits the optional sidebar without deleting one", a
     await readFile(sidebarPath, "utf8"),
     "existing optional sidebar\n",
   );
+  assert.doesNotMatch(second.stdout, /The Bridge runtime changed/u);
 });

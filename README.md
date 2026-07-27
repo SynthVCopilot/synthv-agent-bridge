@@ -14,7 +14,7 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 - Read project metadata, the complete tempo/time-signature map, playback state, tracks, library groups, notes, complete selection state, computed phonemes/pitch, Smart Pitch objects, automation curves, editor viewports, and mixer state.
 - Create, clone, reuse, update, or delete library note groups and vocal/instrumental Group references.
 - Clone an existing track to inherit its singer/database, optionally clearing or transposing cloned notes.
-- Add notes and edit per-note language, sing/rap type, pitch-auto mode, rap accent, timing, pitch, lyrics, phonemes, detune, and attributes.
+- Add notes and edit per-note language, sing/rap type, pitch-auto mode, rap accent, timing, pitch, lyrics, phonemes, detune, and attributes. V2 automatically places notes inserted through a track's main group into a reusable non-main group so Group Voice and Vocal Modes remain editable.
 - Read and safely update typed group voice defaults, Vocal Mode pitch/timbre/pronunciation axes, and host-returned experimental Unison fields.
 - Read computed and user phonemes together, and safely edit phoneset overrides, syllable timing, and per-phoneme timing/strength attributes.
 - Add, edit, and delete point or curve Smart Pitch controls with stale-write protection.
@@ -90,9 +90,7 @@ Alternatively, set `SYNTHV_SCRIPTS_DIR` to the scripts directory before running
 `npm run install:synthv`. The installer creates a `SynthV Agent Bridge`
 subfolder. When the side-panel file changed, choose **Scripts → Rescan**.
 SynthV then loads **SynthV Agent** as a custom side-panel section. Rescan stops
-persistent scripts, so afterward run **Start SynthV Agent Bridge** once. When
-the side-panel file is unchanged, the installer explicitly says that no rescan
-is required.
+persistent scripts, so afterward run **Start SynthV Agent Bridge** once.
 
 The Bridge and every ordinary MCP read/write tool work without the side panel.
 For a core-only installation, add `--without-sidebar`; this skips the optional
@@ -108,7 +106,10 @@ the Bridge's file IPC and Lua `loadfile()`—not UI automation or hooks. Use
 `--no-reload` to copy without requesting a reload. The first installation of a
 hot-reload-capable version must still be started manually once. A required
 side-panel rescan also stops the current Bridge and therefore needs one manual
-start afterward.
+start afterward. SynthV may reuse cached menu-script code after a project or
+app restart, so when the Bridge runtime itself changed, the installer also
+asks for one **Scripts → Rescan** before the next manual start. Hot reload keeps
+the current session usable until then.
 
 ### 3. Start the in-editor bridge
 
@@ -264,7 +265,7 @@ the default tool-schema budget.
 | `update_group` | Write | Change vocal/instrumental reference state and supported vocal properties. |
 | `set_group_voice` | Write | Fingerprint-verified typed voice, Vocal Mode, and host-validated experimental Unison updates, with an optional current-Group guard. |
 | `delete_group_reference` | Destructive | Remove a non-main vocal or instrumental reference. |
-| `add_notes` | Write | Add notes to a specific group. |
+| `add_notes` | Write | Add notes to a target group. V2 defaults to `grouping=ensureNonMain`, creating a reusable non-main group/reference when the target is the track main group; use `grouping=target` to write to the exact group. |
 | `edit_notes` | Write | Edit fingerprint-verified notes. |
 | `set_note_phoneme_properties` | Write | Edit fingerprint/Guard-verified phoneme, phoneset, syllable, timing, and strength properties, with optional compact acknowledgement and current-Group/selected-note guards. |
 | `delete_notes` | Destructive | Delete fingerprint-verified notes. |

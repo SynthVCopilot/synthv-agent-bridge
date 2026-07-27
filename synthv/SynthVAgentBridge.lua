@@ -5691,17 +5691,62 @@ end
 
 function handlers.add_notes(payload)
     payload = requireObject(payload, "payload")
-    local project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
+    local project, track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
     local noteInputs = requireArray(payload.notes, "notes", 1, 512)
+    local grouping = optionalString(payload.grouping, "grouping", false) or "target"
+    if grouping ~= "target" and grouping ~= "ensureNonMain" then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "grouping must be target or ensureNonMain",
+            { grouping = grouping }
+        )
+    end
+    local groupName = optionalString(payload.groupName, "groupName", false)
+    if groupName ~= nil and (grouping ~= "ensureNonMain" or not reference:isMain()) then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "groupName is only valid when ensureNonMain creates a group from a main-group target"
+        )
+    end
     local prepared = {}
 
     for index = 1, #noteInputs do
         prepared[#prepared + 1] = createNoteFromInput(noteInputs[index], "notes[" .. index .. "]")
     end
 
-    createUndoRecord(project)
-    for index = 1, #prepared do
-        group:addNote(prepared[index])
+    local createdGroup = false
+    local libraryIndex = nil
+    if grouping == "ensureNonMain" and reference:isMain() then
+        local detachedGroup = SV:create("NoteGroup")
+        detachedGroup:setName(groupName or "Inserted Notes")
+        for index = 1, #prepared do
+            detachedGroup:addNote(prepared[index])
+        end
+
+        local detachedReference = SV:create("NoteGroupReference")
+        detachedReference:setTarget(detachedGroup)
+        detachedReference:setTimeOffset(reference:getTimeOffset())
+        detachedReference:setPitchOffset(reference:getPitchOffset())
+        detachedReference:setMuted(reference:isMuted())
+        detachedReference:setVoice(reference:getVoice())
+
+        createUndoRecord(project)
+        libraryIndex = project:addNoteGroup(detachedGroup)
+        if type(libraryIndex) ~= "number" then
+            libraryIndex = detachedGroup:getIndexInParent()
+        end
+        groupIndex = track:addGroupReference(detachedReference)
+        if type(groupIndex) ~= "number" then
+            groupIndex = detachedReference:getIndexInParent()
+        end
+        group = detachedGroup
+        reference = detachedReference
+        createdGroup = true
+    else
+        createUndoRecord(project)
+        for index = 1, #prepared do
+            group:addNote(prepared[index])
+        end
     end
 
     local notes = json.array()
@@ -5713,6 +5758,10 @@ function handlers.add_notes(payload)
         trackIndex = trackIndex,
         groupIndex = groupIndex,
         groupUuid = group:getUUID(),
+        referenceFingerprint = makeReferenceFingerprint(reference),
+        grouping = createdGroup and "createdNonMain" or "target",
+        createdGroup = createdGroup,
+        libraryIndex = libraryIndex or JSON_NULL,
         addedCount = #notes,
         notes = notes
     }

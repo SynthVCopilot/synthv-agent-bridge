@@ -1126,6 +1126,28 @@ callWrite("script_data",'{"operation":"remove","objectType":"project","key":"syn
 callWrite("delete_note_group",'{"groupUuid":"'..libraryUuid..'"}')
 assert(project.tracks[1]:getNumGroups()==1 and project.tracks[2]:getNumGroups()==1,"deleting a library group must remove linked references")
 
+local autoGroupUndoBefore=project.undo
+local autoGrouped=callWrite(
+    "add_notes",
+    '{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'",'..
+        '"grouping":"ensureNonMain","groupName":"Auto Group",'..
+        '"notes":[{"onset":1411200000,"duration":705600000,"pitch":67,"lyrics":"grouped"}]}'
+)
+assert(project.undo==autoGroupUndoBefore+1,"automatic note grouping must create one undo record")
+assert(autoGrouped:find('"createdGroup":true',1,true),"automatic note grouping did not report a created group")
+assert(autoGrouped:find('"groupIndex":2',1,true),"automatic note grouping did not return the new reference")
+assert(project.tracks[2]:getNumGroups()==2,"automatic note grouping did not add a track reference")
+local autoReference=project.tracks[2].refs[2]
+assert(autoReference.main==false,"automatic note grouping created another main reference")
+assert(autoReference.group.name=="Auto Group","automatic note grouping did not retain groupName")
+assert(#autoReference.group.notes==1,"automatic note grouping did not retain all inserted notes")
+assert(project.groups[#project.groups]==autoReference.group,"automatic note grouping did not add the group to the library")
+assert(
+    autoReference.voice.vocalModeParams.Soft.pitch==
+        project.tracks[2].refs[1].voice.vocalModeParams.Soft.pitch,
+    "automatic note grouping did not copy Vocal Modes"
+)
+
 local transactionUndoBefore=project.undo
 local transactionResponse=call(
     "apply_transaction",
@@ -1232,5 +1254,5 @@ callWrite(
 local finalNotes=call("get_track_notes",'{"trackIndex":1,"offset":0,"limit":100}')
 local finalFingerprint=extractJsonString(finalNotes,"fingerprint")
 callWrite("delete_notes",'{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(finalFingerprint)..'"}]}')
-assert(project.undo==45,"expected 45 undo records, got "..project.undo)
+assert(project.undo==46,"expected 46 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

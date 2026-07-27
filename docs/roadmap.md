@@ -52,6 +52,9 @@
 - P4 default MCP v2 surface with eight domain tools, just-in-time action
   schemas, range-scoped `contextId` guards, phrase field projection, minimal
   write acknowledgements, and Dense rows for large note sets.
+- V2 note insertion automatically creates a reusable non-main group when the
+  requested target is a track main group, preserving Voice/Vocal Mode editing
+  for newly inserted notes.
 - The complete default MCP tool catalog is kept below 12 KB; the current build
   is below 6 KB while all file-protocol actions remain available.
 

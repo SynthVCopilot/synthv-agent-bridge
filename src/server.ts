@@ -1339,10 +1339,22 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Add SynthV Notes",
       description:
-        "Add notes to a specific note group. Onset and pitch are group-local. The operation is one undo record.",
+        "Add notes to a target group. With grouping=ensureNonMain, a main-group target is replaced by a new reusable non-main group/reference so its Voice and Vocal Modes can be edited. Onset and pitch remain target-group-local. The operation is one undo record.",
       inputSchema: {
         ...groupLocatorShape,
         notes: z.array(noteCreateSchema).min(1).max(512),
+        grouping: z
+          .enum(["target", "ensureNonMain"])
+          .optional()
+          .describe(
+            "target writes to the exact target group. ensureNonMain creates a reusable non-main group/reference when the target is the track main group.",
+          ),
+        groupName: z
+          .string()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe("Optional name for an automatically created note group."),
       },
       annotations: {
         readOnlyHint: false,

@@ -129,7 +129,12 @@ if (!suppliedTarget) {
 } else {
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const sourceDirectory = path.join(repositoryRoot, "synthv");
+  const sourceBridgeFile = path.join(sourceDirectory, "SynthVAgentBridge.lua");
   const destinationDirectory = path.resolve(suppliedTarget, "SynthV Agent Bridge");
+  const destinationBridgeFile = path.join(
+    destinationDirectory,
+    "SynthVAgentBridge.lua",
+  );
   const sourceSidebarFile = path.join(
     sourceDirectory,
     "SynthVAgentSidebar.lua",
@@ -138,13 +143,19 @@ if (!suppliedTarget) {
     destinationDirectory,
     "SynthVAgentSidebar.lua",
   );
-  let rescanRequired = false;
+  const [sourceBridge, installedBridgeBefore] = await Promise.all([
+    readOptionalText(sourceBridgeFile),
+    readOptionalText(destinationBridgeFile),
+  ]);
+  const bridgeChanged =
+    sourceBridge === null || installedBridgeBefore !== sourceBridge;
+  let sidebarChanged = false;
   if (installSidebar) {
     const [sourceSidebar, installedSidebarBefore] = await Promise.all([
       readOptionalText(sourceSidebarFile),
       readOptionalText(destinationSidebarFile),
     ]);
-    rescanRequired =
+    sidebarChanged =
       sourceSidebar === null || installedSidebarBefore !== sourceSidebar;
   }
 
@@ -167,17 +178,24 @@ if (!suppliedTarget) {
   if (reloadEnabled) {
     await requestHotReload();
   }
+  if (bridgeChanged) {
+    console.log(
+      reloadEnabled
+        ? "The Bridge runtime changed. Hot reload updated the current session, but SynthV may reuse cached menu-script code after a project or app restart. Before the next manual start, choose Scripts → Rescan, then start SynthV Agent Bridge once."
+        : "The Bridge runtime changed. Choose Scripts → Rescan, then start SynthV Agent Bridge once so SynthV does not reuse cached menu-script code.",
+    );
+  }
   if (!installSidebar) {
     console.log(
       "Skipped the optional side-panel script. An existing installed sidebar, if any, was left unchanged.",
     );
-  } else if (rescanRequired) {
+  } else if (sidebarChanged) {
     console.log(
       "The side-panel script changed. Choose Scripts → Rescan in SynthV; Rescan stops persistent scripts, so then run Scripts → SynthV Agent Bridge → Start SynthV Agent Bridge once.",
     );
   } else {
     console.log(
-      "The installed side-panel script is unchanged; no SynthV script rescan is required.",
+      "The installed side-panel script is unchanged.",
     );
   }
 }

@@ -64,6 +64,30 @@ test("v2 context refuses a note missing from the original read", () => {
   );
 });
 
+test("v2 note insertion ensures an editable non-main group by default", () => {
+  const contexts = new V2ContextStore();
+  const automatic = v2Testing.expandContext(
+    "add_notes",
+    { trackIndex: 1, groupIndex: 1, notes: [] },
+    undefined,
+    contexts,
+  );
+  const explicitTarget = v2Testing.expandContext(
+    "add_notes",
+    {
+      trackIndex: 1,
+      groupIndex: 1,
+      notes: [],
+      grouping: "target",
+    },
+    undefined,
+    contexts,
+  );
+
+  assert.equal(automatic.grouping, "ensureNonMain");
+  assert.equal(explicitTarget.grouping, "target");
+});
+
 test("v2 context store evicts by total guard weight", () => {
   const contexts = new V2ContextStore(10, 3);
   const first = contexts.issue({

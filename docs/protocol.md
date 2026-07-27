@@ -86,6 +86,19 @@ requests; the underlying actions remain available to v1 clients. See
 - Smart Pitch anchor positions and curve-point offsets are group-local blicks.
 - Editor view time coordinates are blicks and screen coordinates are pixels.
 - Playback positions are seconds.
+
+### Automatic note grouping
+
+`add_notes` accepts `grouping=target|ensureNonMain`. The MCP v2 surface injects
+`ensureNonMain` by default. When the requested target is a track main group, the
+Bridge validates and constructs all notes first, then creates one reusable
+library `NoteGroup`, places one non-main reference on the same track, copies the
+main reference's Voice/Vocal Modes, and inserts all notes into that group in one
+undo record. Existing non-main targets are reused.
+
+Set `grouping=target` to write directly to the requested group. Protocol-v1
+requests that omit `grouping` retain this legacy behavior. `groupName` may be
+provided only when `ensureNonMain` actually creates a group.
 - Time-axis tempo positions are project-global blicks; time-signature positions are zero-based measure numbers.
 
 ## Optimistic-concurrency fields

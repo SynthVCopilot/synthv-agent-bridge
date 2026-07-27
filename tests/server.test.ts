@@ -111,6 +111,21 @@ test("P4 keeps the complete legacy tool surface isolated behind configuration", 
   }
 });
 
+test("v2 add_notes can create an editable non-main note group", async () => {
+  const [compiledServer, bridgeSource] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(
+      new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  assert.match(compiledServer, /ensureNonMain/);
+  assert.match(bridgeSource, /grouping == "ensureNonMain" and reference:isMain\(\)/);
+  assert.match(bridgeSource, /project:addNoteGroup\(detachedGroup\)/);
+  assert.match(bridgeSource, /track:addGroupReference\(detachedReference\)/);
+  assert.match(bridgeSource, /detachedReference:setVoice\(reference:getVoice\(\)\)/);
+});
+
 test("P1 uses low-latency host polling and exposes selective phoneme computation", async () => {
   const [compiledServer, bridgeSource] = await Promise.all([
     readFile(new URL("../src/server.js", import.meta.url), "utf8"),

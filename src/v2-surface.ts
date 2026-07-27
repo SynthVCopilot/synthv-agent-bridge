@@ -666,11 +666,14 @@ function expandContext(
   contextId: string | undefined,
   contexts: V2ContextStore,
 ): JsonRecord {
+  const result = { ...args };
+  if (action === "add_notes") {
+    result.grouping ??= "ensureNonMain";
+  }
   if (contextId === undefined) {
-    return args;
+    return result;
   }
   const context = contexts.resolve(contextId);
-  const result = { ...args };
 
   if (GROUP_LOCATOR_ACTIONS.has(action)) {
     result.trackIndex ??= context.trackIndex;
