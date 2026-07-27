@@ -50,6 +50,10 @@
 - Explicit complete-overlap or binary onset-only range scans, guarded phrase
   page cursors, and one-sweep multi-range phrase analysis with shared notes.
 
+The native side panel remains an optional compact review console. Future work
+is limited to stability, compatibility, and interaction fixes; it is not a
+performance roadmap or a second SynthV editing interface.
+
 ## Next — transaction depth and advanced music analysis
 
 - Dependency-aware transactions that can safely pass newly created object

@@ -14,7 +14,7 @@ MCP client (Codex / compatible local stdio host)
                  ▼
        Current SynthV project and UI
 
-  SynthVAgentSidebar.lua (native panel)
+  SynthVAgentSidebar.lua (optional native panel)
                  │ instruction/preview/command text sideband
                  └──────── TypeScript sidebar coordinator
 ```
@@ -49,6 +49,8 @@ The optional v0.1.4 side panel uses a separate local sideband:
 The panel never writes the project. An Apply click creates a sideband command;
 the TypeScript coordinator claims it and submits the stored action through the
 same serialized `FileIpcClient` and v1 request channel as a normal MCP call.
+None of these sideband files or the panel script is required for the core
+stdio server, file IPC executor, reads, writes, transactions, or Guard checks.
 
 The Node side serializes calls and owns the lock. It writes requests using a temporary file plus rename. The Lua side claims a request by renaming it to the processing filename, executes it on SynthV's script thread, and publishes one correlated response.
 

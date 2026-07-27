@@ -123,6 +123,7 @@ function arrangement:getSelection() return arrangementSelection end
 local scheduledCallback = nil
 local clipboard = nil
 local lastMessage = nil
+local sidePanelRefreshCount = 0
 SV = {}
 function SV:getHostInfo()
     return {
@@ -140,6 +141,7 @@ function SV:blick2Quarter(value) return value / 1411200000 end
 function SV:setHostClipboard(value) clipboard = value end
 function SV:showMessageBoxAsync(_title, message) lastMessage = message end
 function SV:setTimeout(_milliseconds, callback) scheduledCallback = callback end
+function SV:refreshSidePanel() sidePanelRefreshCount = sidePanelRefreshCount + 1 end
 
 assert(loadfile(sidebarScript))()
 
@@ -149,23 +151,30 @@ assert(clientInfo.versionNumber == 5, "side panel version number was not updated
 
 local state = getSidePanelSectionState()
 assert(state.title:find("0.1.5", 1, true), "side panel title has no version")
-assert(#state.rows == 14, "unexpected side panel row count")
+assert(#state.rows == 4, "side panel did not start in compact mode")
 
 local bridgeStatusWidget = state.rows[2].columns[1].value
 local clientStatusWidget = state.rows[2].columns[2].value
 local taskStateWidget = state.rows[3].columns[1].value
 local diagnosticsWidget = state.rows[3].columns[2].value
-local selectionWidget = state.rows[5].columns[1].value
 assert(bridgeStatusWidget.value:find("B 0.1.5", 1, true), "Bridge heartbeat was not displayed")
 assert(clientStatusWidget.value:find("M 0.1.5", 1, true), "MCP heartbeat was not displayed")
 assert(taskStateWidget.value:find("Idle", 1, true), "task state was not displayed")
 diagnosticsWidget.callback()
 assert(lastMessage and lastMessage:find("IPC:", 1, true), "diagnostics did not show the IPC path")
+
+local layoutWidget = state.rows[4].columns[1].value
+assert(layoutWidget.callback, "compact layout toggle was not registered")
+layoutWidget.callback()
+assert(sidePanelRefreshCount == 1, "expanding the side panel did not refresh its layout")
+state = getSidePanelSectionState()
+assert(#state.rows == 15, "expanded side panel omitted detailed rows")
+local selectionWidget = state.rows[6].columns[1].value
 assert(selectionWidget.value:find("2 notes", 1, true), "selected notes were not summarized")
 assert(selectionWidget.value:find("C4", 1, true), "selected pitch range was not summarized")
 
-local instructionWidget = state.rows[7].columns[1].value
-local submitWidget = state.rows[8].columns[1].value
+local instructionWidget = state.rows[8].columns[1].value
+local submitWidget = state.rows[9].columns[1].value
 instructionWidget:emit("Transpose the selected notes down three semitones.")
 assert(submitWidget.enabled, "submit button did not enable for a non-empty instruction")
 assert(submitWidget.callback, "submit callback was not registered")
@@ -175,6 +184,12 @@ assert(
     "sidebar instruction was not queued"
 )
 assert(clipboard and clipboard:find("sidebar_get_request", 1, true), "Codex handoff was not copied")
+
+layoutWidget = state.rows[4].columns[1].value
+layoutWidget.callback()
+assert(sidePanelRefreshCount == 2, "collapsing the side panel did not refresh its layout")
+state = getSidePanelSectionState()
+assert(#state.rows == 4, "collapsed side panel retained detailed rows")
 
 local planId = "550e8400-e29b-41d4-a716-446655440000"
 writeFile(
@@ -190,9 +205,12 @@ writeFile(
 )
 assert(scheduledCallback, "side panel poll was not scheduled")
 scheduledCallback()
+assert(sidePanelRefreshCount == 3, "pending preview did not surface in compact mode")
+state = getSidePanelSectionState()
+assert(#state.rows == 7, "compact side panel did not expose pending preview actions")
 
-local previewWidget = state.rows[10].columns[1].value
-local applyWidget = state.rows[11].columns[1].value
+local previewWidget = state.rows[6].columns[1].value
+local applyWidget = state.rows[7].columns[1].value
 assert(previewWidget.value:find("Transpose two", 1, true), "preview was not displayed")
 assert(applyWidget.enabled, "Apply was not enabled for a connected pending preview")
 assert(applyWidget.callback, "Apply callback was not registered")

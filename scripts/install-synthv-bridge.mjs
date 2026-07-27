@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 function usage() {
   console.error(
-    "Usage: npm run install:synthv -- --target <SynthV scripts directory> [--no-reload]\n" +
+    "Usage: npm run install:synthv -- --target <SynthV scripts directory> [--no-reload] [--without-sidebar]\n" +
       "Alternatively set SYNTHV_SCRIPTS_DIR. Use SynthV's Scripts → Open Scripts Folder command to find the correct directory.",
   );
 }
@@ -112,6 +112,7 @@ async function writeInstallManifest(scriptFile) {
 const argumentsList = process.argv.slice(2);
 const targetFlagIndex = argumentsList.indexOf("--target");
 const reloadEnabled = !argumentsList.includes("--no-reload");
+const installSidebar = !argumentsList.includes("--without-sidebar");
 if (targetFlagIndex >= 0 && !argumentsList[targetFlagIndex + 1]) {
   usage();
   process.exit(2);
@@ -137,19 +138,23 @@ if (!suppliedTarget) {
     destinationDirectory,
     "SynthVAgentSidebar.lua",
   );
-  const [sourceSidebar, installedSidebarBefore] = await Promise.all([
-    readOptionalText(sourceSidebarFile),
-    readOptionalText(destinationSidebarFile),
-  ]);
-  const rescanRequired =
-    sourceSidebar === null || installedSidebarBefore !== sourceSidebar;
+  let rescanRequired = false;
+  if (installSidebar) {
+    const [sourceSidebar, installedSidebarBefore] = await Promise.all([
+      readOptionalText(sourceSidebarFile),
+      readOptionalText(destinationSidebarFile),
+    ]);
+    rescanRequired =
+      sourceSidebar === null || installedSidebarBefore !== sourceSidebar;
+  }
 
   await mkdir(destinationDirectory, { recursive: true });
-  for (const fileName of [
+  const installedFiles = [
     "SynthVAgentBridge.lua",
     "StopSynthVAgentBridge.lua",
-    "SynthVAgentSidebar.lua",
-  ]) {
+    ...(installSidebar ? ["SynthVAgentSidebar.lua"] : []),
+  ];
+  for (const fileName of installedFiles) {
     await cp(
       path.join(sourceDirectory, fileName),
       path.join(destinationDirectory, fileName),
@@ -162,7 +167,11 @@ if (!suppliedTarget) {
   if (reloadEnabled) {
     await requestHotReload();
   }
-  if (rescanRequired) {
+  if (!installSidebar) {
+    console.log(
+      "Skipped the optional side-panel script. An existing installed sidebar, if any, was left unchanged.",
+    );
+  } else if (rescanRequired) {
     console.log(
       "The side-panel script changed. Choose Scripts → Rescan in SynthV; Rescan stops persistent scripts, so then run Scripts → SynthV Agent Bridge → Start SynthV Agent Bridge once.",
     );

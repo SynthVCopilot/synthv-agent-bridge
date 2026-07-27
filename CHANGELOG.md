@@ -22,6 +22,11 @@ All notable changes will be documented in this file.
 
 ### Changed
 
+- The native side panel is explicitly optional, starts in a compact layout,
+  surfaces pending confirmations automatically, and can be omitted at install
+  time with `--without-sidebar`. Core Bridge/MCP operation remains complete.
+- Side-panel scope is limited to stability and interaction maintenance rather
+  than performance work or duplicating SynthV editing controls.
 - Phrase context automatically prefers selected notes, includes the pitch and
   timing fields needed for tuning, caps notes/recommendations/automation
   parameters, and never uses a cross-request cache that could become stale

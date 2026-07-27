@@ -193,22 +193,33 @@ if (suppliedTarget) {
     sourceSidebar !== null &&
     installedSidebar !== null &&
     sha256(installedSidebar) === sha256(sourceSidebar);
-  const installedScriptsMatch =
+  const installedCoreMatches =
     installedBridgeVersion === expectedVersion &&
-    installedSidebarVersion === expectedVersion &&
-    bridgeContentMatches &&
-    sidebarContentMatches;
+    bridgeContentMatches;
   record(
     "installed-scripts",
-    installedScriptsMatch ? "ok" : "error",
-    installedScriptsMatch
-      ? `Installed Bridge and sidebar match the ${expectedVersion} source files.`
-      : `Installed versions: Bridge ${installedBridgeVersion ?? "missing"}, sidebar ${
-          installedSidebarVersion ?? "missing"
-        }; content match: Bridge ${bridgeContentMatches}, sidebar ${sidebarContentMatches}.`,
+    installedCoreMatches ? "ok" : "error",
+    installedCoreMatches
+      ? `Installed Bridge matches the ${expectedVersion} source file; the sidebar is optional.`
+      : `Installed Bridge ${installedBridgeVersion ?? "missing"} does not match the ${expectedVersion} source file.`,
     {
       installedDirectory,
       bridgeContentMatches,
+    },
+  );
+  const optionalSidebarMatches =
+    installedSidebar === null ||
+    (installedSidebarVersion === expectedVersion && sidebarContentMatches);
+  record(
+    "optional-sidebar",
+    optionalSidebarMatches ? "ok" : "warning",
+    installedSidebar === null
+      ? "The optional SynthV side panel is not installed; core Bridge and MCP operation is unaffected."
+      : optionalSidebarMatches
+        ? `Optional sidebar matches the ${expectedVersion} source file.`
+        : `Optional sidebar ${installedSidebarVersion ?? "unknown"} differs from source; reinstall it only if the panel is used.`,
+    {
+      installed: installedSidebar !== null,
       sidebarContentMatches,
     },
   );

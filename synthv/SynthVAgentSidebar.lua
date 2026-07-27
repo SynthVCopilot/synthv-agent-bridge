@@ -171,6 +171,7 @@ local previewValue = SV:create("WidgetValue")
 local activityValue = SV:create("WidgetValue")
 local refreshButtonValue = SV:create("WidgetValue")
 local diagnosticsButtonValue = SV:create("WidgetValue")
+local layoutButtonValue = SV:create("WidgetValue")
 local submitButtonValue = SV:create("WidgetValue")
 local clearButtonValue = SV:create("WidgetValue")
 local cancelRequestButtonValue = SV:create("WidgetValue")
@@ -193,11 +194,18 @@ local currentPlanId = nil
 local currentPlanStatus = nil
 local currentRequestId = nil
 local currentTaskStatus = "idle"
+local detailedMode = false
 local lastStatusText = nil
 local lastTaskStateText = nil
 local lastSelectionText = nil
 local lastPreviewRaw = nil
 local lastActivityRaw = nil
+
+local function refreshLayout()
+    safeCall(function()
+        SV:refreshSidePanel()
+    end)
+end
 
 local function pitchName(pitch)
     local names = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" }
@@ -399,6 +407,7 @@ local function updatePreview()
         )
         return
     end
+    local hadVisiblePreview = currentPlanId ~= nil
     lastPreviewRaw = raw
     if not raw or not raw:match("^synthv%-agent%-bridge%-sidebar%-preview%-v1\r?\n") then
         currentPlanId = nil
@@ -406,6 +415,9 @@ local function updatePreview()
         previewValue:setValue(text("暂无待确认的变更。", "No change is awaiting confirmation."))
         applyButtonValue:setEnabled(false)
         dismissButtonValue:setEnabled(false)
+        if hadVisiblePreview and not detailedMode then
+            refreshLayout()
+        end
         return
     end
     currentPlanId = lineValue(raw, "planId")
@@ -418,6 +430,9 @@ local function updatePreview()
             and clientConnected
     )
     dismissButtonValue:setEnabled(currentPlanId ~= nil and currentPlanStatus ~= "applying")
+    if not hadVisiblePreview and not detailedMode then
+        refreshLayout()
+    end
 end
 
 local function updateActivity()
@@ -593,6 +608,10 @@ end
 
 refreshButtonValue:setValueChangeCallback(refreshAll)
 diagnosticsButtonValue:setValueChangeCallback(showDiagnostics)
+layoutButtonValue:setValueChangeCallback(function()
+    detailedMode = not detailedMode
+    refreshLayout()
+end)
 instructionValue:setValueChangeCallback(function(value)
     submitButtonValue:setEnabled(trim(tostring(value or "")) ~= "")
 end)
@@ -669,168 +688,192 @@ function getTranslations(_languageCode)
 end
 
 function getSidePanelSectionState()
-    return {
-        title = SCRIPT_NAME .. " v" .. SIDEBAR_VERSION,
-        rows = {
-            {
-                type = "Label",
-                text = text("连接状态", "Connection")
-            },
-            {
-                type = "Container",
-                columns = {
-                    {
-                        type = "TextBox",
-                        value = bridgeStatusValue,
-                        width = 0.36
-                    },
-                    {
-                        type = "TextBox",
-                        value = clientStatusValue,
-                        width = 0.36
-                    },
-                    {
-                        type = "Button",
-                        text = text("刷新", "Refresh"),
-                        value = refreshButtonValue,
-                        width = 0.28
-                    }
+    local rows = {
+        {
+            type = "Label",
+            text = text("连接状态", "Connection")
+        },
+        {
+            type = "Container",
+            columns = {
+                {
+                    type = "TextBox",
+                    value = bridgeStatusValue,
+                    width = 0.36
+                },
+                {
+                    type = "TextBox",
+                    value = clientStatusValue,
+                    width = 0.36
+                },
+                {
+                    type = "Button",
+                    text = text("刷新", "Refresh"),
+                    value = refreshButtonValue,
+                    width = 0.28
                 }
-            },
-            {
-                type = "Container",
-                columns = {
-                    {
-                        type = "TextBox",
-                        value = taskStateValue,
-                        width = 0.68
-                    },
-                    {
-                        type = "Button",
-                        text = text("诊断", "Details"),
-                        value = diagnosticsButtonValue,
-                        width = 0.32
-                    }
+            }
+        },
+        {
+            type = "Container",
+            columns = {
+                {
+                    type = "TextBox",
+                    value = taskStateValue,
+                    width = 0.68
+                },
+                {
+                    type = "Button",
+                    text = text("诊断", "Details"),
+                    value = diagnosticsButtonValue,
+                    width = 0.32
                 }
-            },
-            {
-                type = "Label",
-                text = text("当前上下文", "Current context")
-            },
-            {
-                type = "Container",
-                columns = {
-                    {
-                        type = "TextArea",
-                        value = selectionValue,
-                        height = 86,
-                        width = 1.0
-                    }
-                }
-            },
-            {
-                type = "Label",
-                text = text("给 Codex 的指令", "Instruction for Codex")
-            },
-            {
-                type = "Container",
-                columns = {
-                    {
-                        type = "TextArea",
-                        value = instructionValue,
-                        height = 82,
-                        width = 1.0
-                    }
-                }
-            },
-            {
-                type = "Container",
-                columns = {
-                    {
-                        type = "Button",
-                        text = text("复制并排队", "Copy & queue"),
-                        value = submitButtonValue,
-                        width = 0.52
-                    },
-                    {
-                        type = "Button",
-                        text = text("取消任务", "Cancel"),
-                        value = cancelRequestButtonValue,
-                        width = 0.28
-                    },
-                    {
-                        type = "Button",
-                        text = text("清空", "Clear"),
-                        value = clearButtonValue,
-                        width = 0.20
-                    }
-                }
-            },
-            {
-                type = "Label",
-                text = text("变更预览", "Change preview")
-            },
-            {
-                type = "Container",
-                columns = {
-                    {
-                        type = "TextArea",
-                        value = previewValue,
-                        height = 152,
-                        width = 1.0
-                    }
-                }
-            },
-            {
-                type = "Container",
-                columns = {
-                    {
-                        type = "Button",
-                        text = text("应用", "Apply"),
-                        value = applyButtonValue,
-                        width = 0.5
-                    },
-                    {
-                        type = "Button",
-                        text = text("放弃", "Dismiss"),
-                        value = dismissButtonValue,
-                        width = 0.5
-                    }
-                }
-            },
-            {
-                type = "Label",
-                text = text("最近操作", "Latest activity")
-            },
-            {
-                type = "Container",
-                columns = {
-                    {
-                        type = "TextArea",
-                        value = activityValue,
-                        height = 132,
-                        width = 1.0
-                    }
-                }
-            },
-            {
-                type = "Container",
-                columns = {
-                    {
-                        type = "Button",
-                        text = text("撤销说明", "Undo help"),
-                        value = undoHelpButtonValue,
-                        width = 0.5
-                    },
-                    {
-                        type = "Button",
-                        text = text("清空记录", "Clear history"),
-                        value = clearHistoryButtonValue,
-                        width = 0.5
-                    }
+            }
+        },
+        {
+            type = "Container",
+            columns = {
+                {
+                    type = "Button",
+                    text = detailedMode
+                        and text("收起详细界面", "Hide details")
+                        or text("展开详细界面", "Show details"),
+                    value = layoutButtonValue,
+                    width = 1.0
                 }
             }
         }
+    }
+
+    if detailedMode then
+        rows[#rows + 1] = {
+            type = "Label",
+            text = text("当前上下文", "Current context")
+        }
+        rows[#rows + 1] = {
+            type = "Container",
+            columns = {
+                {
+                    type = "TextArea",
+                    value = selectionValue,
+                    height = 86,
+                    width = 1.0
+                }
+            }
+        }
+        rows[#rows + 1] = {
+            type = "Label",
+            text = text("给 Codex 的指令", "Instruction for Codex")
+        }
+        rows[#rows + 1] = {
+            type = "Container",
+            columns = {
+                {
+                    type = "TextArea",
+                    value = instructionValue,
+                    height = 82,
+                    width = 1.0
+                }
+            }
+        }
+        rows[#rows + 1] = {
+            type = "Container",
+            columns = {
+                {
+                    type = "Button",
+                    text = text("复制并排队", "Copy & queue"),
+                    value = submitButtonValue,
+                    width = 0.52
+                },
+                {
+                    type = "Button",
+                    text = text("取消任务", "Cancel"),
+                    value = cancelRequestButtonValue,
+                    width = 0.28
+                },
+                {
+                    type = "Button",
+                    text = text("清空", "Clear"),
+                    value = clearButtonValue,
+                    width = 0.20
+                }
+            }
+        }
+    end
+
+    if detailedMode or currentPlanId ~= nil then
+        rows[#rows + 1] = {
+            type = "Label",
+            text = text("变更预览", "Change preview")
+        }
+        rows[#rows + 1] = {
+            type = "Container",
+            columns = {
+                {
+                    type = "TextArea",
+                    value = previewValue,
+                    height = detailedMode and 152 or 96,
+                    width = 1.0
+                }
+            }
+        }
+        rows[#rows + 1] = {
+            type = "Container",
+            columns = {
+                {
+                    type = "Button",
+                    text = text("应用", "Apply"),
+                    value = applyButtonValue,
+                    width = 0.5
+                },
+                {
+                    type = "Button",
+                    text = text("放弃", "Dismiss"),
+                    value = dismissButtonValue,
+                    width = 0.5
+                }
+            }
+        }
+    end
+
+    if detailedMode then
+        rows[#rows + 1] = {
+            type = "Label",
+            text = text("最近操作", "Latest activity")
+        }
+        rows[#rows + 1] = {
+            type = "Container",
+            columns = {
+                {
+                    type = "TextArea",
+                    value = activityValue,
+                    height = 132,
+                    width = 1.0
+                }
+            }
+        }
+        rows[#rows + 1] = {
+            type = "Container",
+            columns = {
+                {
+                    type = "Button",
+                    text = text("撤销说明", "Undo help"),
+                    value = undoHelpButtonValue,
+                    width = 0.5
+                },
+                {
+                    type = "Button",
+                    text = text("清空记录", "Clear history"),
+                    value = clearHistoryButtonValue,
+                    width = 0.5
+                }
+            }
+        }
+    end
+
+    return {
+        title = SCRIPT_NAME .. " v" .. SIDEBAR_VERSION,
+        rows = rows
     }
 end
 

@@ -1,8 +1,14 @@
 # Native side panel
 
-Version 0.1.4 adds `SynthVAgentSidebar.lua`, a Synthesizer V Studio 2 Pro
-`SidePanelSection`. It is a local review surface, not an AI client and not a
-second project executor.
+Version 0.1.4 adds the optional `SynthVAgentSidebar.lua`, a Synthesizer V Studio
+2 Pro `SidePanelSection`. It is a local review surface, not an AI client, not a
+second project executor, and not a dependency of the Bridge or ordinary MCP
+tools. A core-only installation may omit it with `--without-sidebar`.
+
+The panel starts in compact mode with Bridge/MCP status, task state,
+diagnostics, and a **Show details** control. Detailed context, request entry,
+and history stay hidden until requested. Pending confirmation is always
+surfaced with Apply/Dismiss controls, including while compact.
 
 ## Responsibilities
 
@@ -24,6 +30,10 @@ The panel:
 
 The panel does not call an AI API, open a socket, parse `.svp` files, or mutate
 SynthV project objects.
+
+The panel is maintained as a small stability and interaction surface. It is
+not a performance-optimization target and will not duplicate SynthV's piano
+roll, waveform, note editor, or voice-parameter controls.
 
 ## Request and preview flow
 

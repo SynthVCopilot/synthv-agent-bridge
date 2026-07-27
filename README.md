@@ -5,7 +5,7 @@ A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server 
 The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse or rewrite `.svp` files, open a network port, or call an AI API by itself.
 
 > Status: **v0.1.5 pre-release**. The protocol, safety guards, broad official
-> scripting-API coverage, native side-panel workflow, guarded transactions,
+> scripting-API coverage, an optional native side-panel workflow, guarded transactions,
 > and first musical semantic tools are implemented. Test on copies of important
 > projects.
 
@@ -29,7 +29,7 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 - Create range-constrained harmony tracks, humanize note timing, fit lyrics to
   notes, and apply scoop, falloff, vibrato, crescendo, or breathiness presets.
 - Put each successful write call or transaction into one SynthV undo record.
-- Use a native SynthV side panel to inspect connection/current-selection context,
+- Optionally use a native SynthV side panel to inspect connection/current-selection context,
   queue an instruction, review a structured guarded write or transaction,
   apply/dismiss/cancel it, inspect diagnostics, and see recent activity.
 
@@ -84,7 +84,7 @@ The installer copies these files into a `SynthV Agent Bridge` subfolder of the d
 
 - `SynthVAgentBridge.lua`
 - `StopSynthVAgentBridge.lua`
-- `SynthVAgentSidebar.lua`
+- `SynthVAgentSidebar.lua` (optional)
 
 Alternatively, set `SYNTHV_SCRIPTS_DIR` to the scripts directory before running
 `npm run install:synthv`. The installer creates a `SynthV Agent Bridge`
@@ -93,6 +93,14 @@ SynthV then loads **SynthV Agent** as a custom side-panel section. Rescan stops
 persistent scripts, so afterward run **Start SynthV Agent Bridge** once. When
 the side-panel file is unchanged, the installer explicitly says that no rescan
 is required.
+
+The Bridge and every ordinary MCP read/write tool work without the side panel.
+For a core-only installation, add `--without-sidebar`; this skips the optional
+panel without deleting an existing installation:
+
+```bash
+npm run install:synthv -- --target "/path/to/scripts" --without-sidebar
+```
 
 If a hot-reload-capable Bridge session is already running, the installer asks
 it to load the copied Lua file and waits for a new session heartbeat. This uses
@@ -130,10 +138,13 @@ codex mcp list
 
 A complete TOML example is available at [examples/codex-config.toml](examples/codex-config.toml). Other local MCP hosts can use the same `node .../dist/src/cli.js` command when they support **STDIO** servers.
 
-### Native side-panel workflow
+### Optional native side-panel workflow
 
-The v0.1.4 panel deliberately keeps the Bridge network-free and does not call
-an AI API itself:
+The v0.1.4 panel is an optional local review console. It deliberately keeps the
+Bridge network-free and does not call an AI API itself. It starts in a compact
+layout showing connection/task state; **Show details** exposes context,
+instruction, activity, and history controls. A pending preview is surfaced
+automatically even while compact:
 
 1. Select notes or a Group in SynthV and enter an instruction in
    **SynthV Agent**.
