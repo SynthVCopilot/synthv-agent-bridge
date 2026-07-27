@@ -126,6 +126,29 @@ test("v2 add_notes can create an editable non-main note group", async () => {
   assert.match(bridgeSource, /detachedReference:setVoice\(reference:getVoice\(\)\)/);
 });
 
+test("empty Vocal Mode maps are initialized by clone validation", async () => {
+  const [compiledServer, bridgeSource] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(
+      new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  assert.match(compiledServer, /without per-mode discovery/);
+  assert.match(bridgeSource, /currentModes = {}/);
+  assert.match(bridgeSource, /allowAdditionalVocalModes = true/);
+  assert.match(
+    bridgeSource,
+    /ask the user for the exact names shown for the current singer/,
+  );
+  assert.match(bridgeSource, /kind = "vocal_mode_names"/);
+  assert.match(bridgeSource, /doNotRetryGuesses = true/);
+  assert.doesNotMatch(
+    bridgeSource,
+    /The current voice does not expose this Vocal Mode/,
+  );
+});
+
 test("P1 uses low-latency host polling and exposes selective phoneme computation", async () => {
   const [compiledServer, bridgeSource] = await Promise.all([
     readFile(new URL("../src/server.js", import.meta.url), "utf8"),

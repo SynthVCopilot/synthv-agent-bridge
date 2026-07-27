@@ -302,9 +302,26 @@ undo record.
 
 Vocal Mode axes accept non-negative finite values. The bridge deliberately
 does not impose a fixed upper bound because current projects can return values
-above the older documented range. It first tries a sparse nested update and
-verifies the complete Vocal Mode map, so an unrequested legacy value is never
-silently clamped. A directly requested value must still survive
+above the older documented range. SynthV may omit every default Vocal Mode from
+`getVoice()` until a non-default value is written, so an empty
+`vocalModeParams` map is not treated as a capability catalog. The caller may
+submit all desired mode names in one `set_group_voice` request. The Bridge
+tries the complete batch on a cloned reference and reads it back; no
+interactive per-mode discovery request is required. Unsupported names fail
+before an undo record, while successful non-default values become visible in
+later reads.
+
+If clone validation returns `VOCAL_MODE_NOT_FOUND`, its details contain
+`requiredUserInput.kind=vocal_mode_names`, the attempted names, any names
+already visible in the Group, and an instruction to stop guessing. The Agent
+must tell the user that the scripting API cannot enumerate the current
+singer's default-only modes and ask for the exact names displayed in SynthV's
+Vocal Mode panel, preserving spelling and capitalization. It should then retry
+all user-provided names in one batch.
+
+The Bridge first tries a sparse nested update and verifies every previously
+visible Vocal Mode value, so an unrequested legacy value is never silently
+clamped. A directly requested value must still survive
 `NoteGroupReference:setVoice()` on a cloned reference; SynthV 2.2.1 clamps some
 host-returned values such as 220 to 150 when they are written, and the bridge
 therefore rejects that write before an undo record is created.

@@ -1514,7 +1514,7 @@ local function numbersMatch(left, right)
         and math.abs(left - right) <= 0.000001
 end
 
-local function jsonValuesMatch(expected, actual, path)
+local function jsonValuesMatch(expected, actual, path, allowAdditional)
     local expectedType = type(expected)
     local actualType = type(actual)
     if expectedType == "number" or actualType == "number" then
@@ -1538,20 +1538,22 @@ local function jsonValuesMatch(expected, actual, path)
             return false, childPath, expectedChild, nil
         end
         local matches, mismatchPath, expectedValue, actualValue =
-            jsonValuesMatch(expectedChild, actual[key], childPath)
+            jsonValuesMatch(expectedChild, actual[key], childPath, allowAdditional)
         if not matches then
             return false, mismatchPath, expectedValue, actualValue
         end
     end
-    for key, actualChild in pairs(actual) do
-        if expected[key] == nil then
-            return false, path .. "." .. tostring(key), nil, actualChild
+    if not allowAdditional then
+        for key, actualChild in pairs(actual) do
+            if expected[key] == nil then
+                return false, path .. "." .. tostring(key), nil, actualChild
+            end
         end
     end
     return true
 end
 
-local function verifyVocalModeSnapshot(rawVoice, expectedModes, errorCode)
+local function verifyVocalModeSnapshot(rawVoice, expectedModes, errorCode, allowAdditional)
     if expectedModes == nil then
         return
     end
@@ -1559,7 +1561,12 @@ local function verifyVocalModeSnapshot(rawVoice, expectedModes, errorCode)
         and sanitizeForJson(rawVoice.vocalModeParams)
         or nil
     local matches, field, expectedValue, actualValue =
-        jsonValuesMatch(expectedModes, actualModes, "vocalModes")
+        jsonValuesMatch(
+            expectedModes,
+            actualModes,
+            "vocalModes",
+            allowAdditional == true
+        )
     if not matches then
         raiseBridgeError(
             errorCode,
@@ -1614,6 +1621,9 @@ local function prepareGroupVoiceUpdate(reference, payload)
     local checks = {}
     local expectedVocalModes = nil
     local completeVocalModeUpdate = nil
+    local allowAdditionalVocalModes = false
+    local missingVocalModeNames = json.array()
+    local visibleVocalModeNames = json.array()
 
     if isProvided(payload.parameters) then
         local parameters = requireObject(payload.parameters, "parameters")
@@ -1647,11 +1657,12 @@ local function prepareGroupVoiceUpdate(reference, payload)
         local updates = requireArray(payload.vocalModes, "vocalModes", 1, 64)
         local currentModes = currentVoice.vocalModeParams
         if type(currentModes) ~= "table" then
-            raiseBridgeError(
-                "UNSUPPORTED_HOST_CAPABILITY",
-                "The current voice does not expose Vocal Mode properties"
-            )
+            currentModes = {}
         end
+        for modeName, _mode in pairs(currentModes) do
+            visibleVocalModeNames[#visibleVocalModeNames + 1] = modeName
+        end
+        table.sort(visibleVocalModeNames)
         local mergedModes = sanitizeForJson(currentModes)
         local sparseModes = {}
         local seenModes = {}
@@ -1674,9 +1685,9 @@ local function prepareGroupVoiceUpdate(reference, payload)
             seenModes[modeName] = true
             local currentMode = currentModes[modeName]
             if type(currentMode) ~= "table" then
-                raiseBridgeError("VOCAL_MODE_NOT_FOUND", "The current voice does not expose this Vocal Mode", {
-                    name = modeName
-                })
+                currentMode = {}
+                allowAdditionalVocalModes = true
+                missingVocalModeNames[#missingVocalModeNames + 1] = modeName
             end
             local mergedMode = sanitizeForJson(currentMode)
             local sparseMode = {}
@@ -1778,7 +1789,8 @@ local function prepareGroupVoiceUpdate(reference, payload)
             verifyVocalModeSnapshot(
                 candidateVoice,
                 expectedVocalModes,
-                "HOST_POSTCONDITION_FAILED"
+                "HOST_POSTCONDITION_FAILED",
+                allowAdditionalVocalModes
             )
         end)
         if not verified then
@@ -1796,15 +1808,38 @@ local function prepareGroupVoiceUpdate(reference, payload)
         completeUpdate.vocalModeParams = completeVocalModeUpdate
         local completeValid, completeError = validateCandidate(completeUpdate)
         if completeValid then
-            return completeUpdate, checks, expectedVocalModes
+            return completeUpdate, checks, expectedVocalModes, allowAdditionalVocalModes
         end
         validationError = completeError or validationError
     end
     if not valid then
+        if #missingVocalModeNames > 0
+            and type(validationError) == "table"
+            and validationError.code == "INVALID_ARGUMENT" then
+            raiseBridgeError(
+                "VOCAL_MODE_NOT_FOUND",
+                "SynthV rejected one or more Vocal Mode names; ask the user for the exact names shown for the current singer",
+                {
+                    requestedNames = missingVocalModeNames,
+                    currentlyVisibleNames = visibleVocalModeNames,
+                    cause = validationError.details
+                        and validationError.details.cause
+                        or validationError.message,
+                    requiredUserInput = {
+                        kind = "vocal_mode_names",
+                        instruction =
+                            "Ask the user for the exact Vocal Mode names shown in SynthV for the currently selected singer, preserving spelling and capitalization.",
+                        retry =
+                            "Retry one batched set_group_voice request with the user-provided names.",
+                        doNotRetryGuesses = true
+                    }
+                }
+            )
+        end
         error(validationError, 0)
     end
 
-    return voiceUpdate, checks, expectedVocalModes
+    return voiceUpdate, checks, expectedVocalModes, allowAdditionalVocalModes
 end
 
 local function serializeAutomation(group, parameterName)
@@ -5641,7 +5676,7 @@ function handlers.set_group_voice(payload)
     )
     validateReferenceFingerprint(reference, expectedFingerprint, trackIndex, groupIndex)
     validateCurrentEditorGroupGuard(payload, reference, reference:getTarget())
-    local voiceUpdate, checks, expectedVocalModes =
+    local voiceUpdate, checks, expectedVocalModes, allowAdditionalVocalModes =
         prepareGroupVoiceUpdate(reference, payload)
 
     createUndoRecord(project)
@@ -5660,7 +5695,8 @@ function handlers.set_group_voice(payload)
     verifyVocalModeSnapshot(
         updatedVoice,
         expectedVocalModes,
-        "HOST_POSTCONDITION_FAILED"
+        "HOST_POSTCONDITION_FAILED",
+        allowAdditionalVocalModes
     )
     local result = serializeGroupVoice(reference, trackIndex, groupIndex)
     result.selectionContext = getTargetSelectionContext(reference, reference:getTarget())

@@ -15,7 +15,7 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 - Create, clone, reuse, update, or delete library note groups and vocal/instrumental Group references.
 - Clone an existing track to inherit its singer/database, optionally clearing or transposing cloned notes.
 - Add notes and edit per-note language, sing/rap type, pitch-auto mode, rap accent, timing, pitch, lyrics, phonemes, detune, and attributes. V2 automatically places notes inserted through a track's main group into a reusable non-main group so Group Voice and Vocal Modes remain editable.
-- Read and safely update typed group voice defaults, Vocal Mode pitch/timbre/pronunciation axes, and host-returned experimental Unison fields.
+- Read and safely update typed group voice defaults, Vocal Mode pitch/timbre/pronunciation axes, and host-returned experimental Unison fields. Empty Vocal Mode maps can be initialized in one clone-validated batch without per-mode discovery calls.
 - Read computed and user phonemes together, and safely edit phoneset overrides, syllable timing, and per-phoneme timing/strength attributes.
 - Add, edit, and delete point or curve Smart Pitch controls with stale-write protection.
 - Generate, activate, and delete Bridge-tracked AI Retakes.

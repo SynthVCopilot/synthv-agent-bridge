@@ -1286,7 +1286,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Set SynthV Group Voice",
       description:
-        "Safely update documented group voice defaults and non-negative Vocal Mode axes, with requested Vocal Mode values validated on a cloned reference by the current SynthV host. Experimental Unison fields are accepted only when the host returns and retains them.",
+        "Safely update documented group voice defaults and non-negative Vocal Mode axes. An empty vocalModes read means no non-default values are stored, not unsupported modes: submit all desired mode names in one call and the Bridge clone-probes and verifies them atomically without per-mode discovery. If VOCAL_MODE_NOT_FOUND is returned, stop guessing and ask the user for the exact Vocal Mode names shown for the current singer, preserving spelling and capitalization. Experimental Unison fields are accepted only when the host returns and retains them.",
       inputSchema: {
         ...groupLocatorShape,
         referenceFingerprint: fingerprintSchema.describe(

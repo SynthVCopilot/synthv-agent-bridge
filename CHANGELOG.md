@@ -43,6 +43,13 @@ All notable changes will be documented in this file.
 
 ### Fixed
 
+- Empty `vocalModeParams` maps are no longer mistaken for an unsupported
+  singer. `set_group_voice` can initialize multiple previously omitted modes
+  in one request, clone-probes the complete batch, retains all requested values,
+  and still rejects genuinely unsupported names before creating an undo
+  record. Agents no longer need per-mode discovery interactions. A genuine
+  name failure now returns structured instructions to stop guessing and ask
+  the user for the exact Vocal Mode names displayed for the current singer.
 - The installer now distinguishes a successful in-session hot reload from
   SynthV's cached menu-script source. When the Bridge runtime changed, it asks
   for one script rescan before the next project/app restart and manual launch,

@@ -312,6 +312,18 @@ local function makeReference(group, main)
         timeOffset=0,
         pitchOffset=0,
         muted=false,
+        supportedVocalModes={
+            Airy=true,
+            Bright=true,
+            Cool=true,
+            Dark=true,
+            Emotional=true,
+            Power=true,
+            Powerful=true,
+            Soft=true,
+            Solid=true,
+            Sweet=true
+        },
         voice={
             paramLoudness=0,
             paramTension=0,
@@ -354,7 +366,7 @@ local function makeReference(group, main)
                 assert(type(value)=="number" and value>=0 and value<=1,"invalid spacing")
             elseif key=="vocalModeParams" then
                 for name,mode in pairs(value) do
-                    assert(self.voice.vocalModeParams[name],"unknown vocal mode")
+                    assert(self.supportedVocalModes[name],"unknown vocal mode")
                     for axis,axisValue in pairs(mode) do
                         assert(
                             axis=="pitch" or axis=="timbre" or axis=="pronunciation",
@@ -373,6 +385,9 @@ local function makeReference(group, main)
                     end
                 end
                 for name,mode in pairs(value) do
+                    self.voice.vocalModeParams[name]=
+                        self.voice.vocalModeParams[name] or
+                        {pitch=0,timbre=0,pronunciation=0}
                     for axis,axisValue in pairs(mode) do
                         self.voice.vocalModeParams[name][axis]=math.min(axisValue,150)
                     end
@@ -395,6 +410,7 @@ local function makeReference(group, main)
         copy.muted=self.muted
         copy.rangeDuration=self.rangeDuration
         copy.instrumental=self.instrumental
+        copy.supportedVocalModes=deepCopy(self.supportedVocalModes)
         copy.voice=deepCopy(self.voice)
         return copy
     end
@@ -966,7 +982,47 @@ local groupVoice=call("get_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUu
 assert(groupVoice:find('"singers":1',1,true),"experimental Unison singers were not returned")
 assert(groupVoice:find('"Soft"',1,true),"Vocal Modes were not returned")
 assert(groupVoice:find('"currentEditorGroup":false',1,true),"non-current Group selection context was not returned")
-local groupVoiceFingerprint=extractJsonString(groupVoice,"referenceFingerprint")
+project.tracks[2].refs[1].voice.vocalModeParams={}
+local uninitializedVoice=call("get_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'"}')
+assert(uninitializedVoice:find('"vocalModes":{}',1,true),"empty Vocal Modes were not reproduced")
+local uninitializedVoiceFingerprint=extractJsonString(uninitializedVoice,"referenceFingerprint")
+local initializeUndoBefore=project.undo
+local initializedVoice=callWrite(
+    "set_group_voice",
+    '{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'",'..
+        '"referenceFingerprint":"'..escape(uninitializedVoiceFingerprint)..'",'..
+        '"vocalModes":['..
+            '{"name":"Airy","pitch":10},'..
+            '{"name":"Bright","pitch":12},'..
+            '{"name":"Cool","pitch":1},'..
+            '{"name":"Dark","pitch":1},'..
+            '{"name":"Emotional","pitch":5},'..
+            '{"name":"Power","pitch":2},'..
+            '{"name":"Solid","pitch":6},'..
+            '{"name":"Sweet","pitch":15}'..
+        ']}'
+)
+assert(project.undo==initializeUndoBefore+1,"Vocal Mode initialization must create one undo record")
+assert(initializedVoice:find('"Airy"',1,true),"an uninitialized supported Vocal Mode was not retained")
+assert(project.tracks[2].refs[1].voice.vocalModeParams.Sweet.pitch==15,"batched Vocal Modes were not initialized")
+local groupVoiceFingerprint=extractJsonString(initializedVoice,"referenceFingerprint")
+local unsupportedModeUndoBefore=project.undo
+local unsupportedModeResponse=callExpectError(
+    "set_group_voice",
+    '{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'",'..
+        '"referenceFingerprint":"'..escape(groupVoiceFingerprint)..'",'..
+        '"vocalModes":[{"name":"Not A Mode","pitch":10}]}',
+    "VOCAL_MODE_NOT_FOUND"
+)
+assert(project.undo==unsupportedModeUndoBefore,"unsupported Vocal Mode probe created an undo record")
+assert(
+    unsupportedModeResponse:find('"kind":"vocal_mode_names"',1,true),
+    "unsupported Vocal Mode did not request exact names from the user"
+)
+assert(
+    unsupportedModeResponse:find('"doNotRetryGuesses":true',1,true),
+    "unsupported Vocal Mode did not stop Agent guessing"
+)
 local undoBeforeUnselectedVoice=project.undo
 callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(groupVoiceFingerprint)..'","requireCurrentEditorGroup":true,"vocalModes":[{"name":"Soft","pitch":25}]}',"SELECTION_MISMATCH")
 assert(project.undo==undoBeforeUnselectedVoice,"selection-guarded Group voice edit must not create an undo record")
@@ -1254,5 +1310,5 @@ callWrite(
 local finalNotes=call("get_track_notes",'{"trackIndex":1,"offset":0,"limit":100}')
 local finalFingerprint=extractJsonString(finalNotes,"fingerprint")
 callWrite("delete_notes",'{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(finalFingerprint)..'"}]}')
-assert(project.undo==46,"expected 46 undo records, got "..project.undo)
+assert(project.undo==47,"expected 47 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")
