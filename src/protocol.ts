@@ -1,4 +1,7 @@
-import { PROTOCOL_VERSION } from "./config.js";
+import {
+  CURRENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "./config.js";
 
 export const BRIDGE_ACTIONS = [
   "ping",
@@ -68,10 +71,12 @@ export const BRIDGE_ACTIONS = [
 export type BridgeAction = (typeof BRIDGE_ACTIONS)[number];
 
 export interface BridgeRequest {
-  readonly protocolVersion: typeof PROTOCOL_VERSION;
+  readonly protocolVersion:
+    | typeof PROTOCOL_VERSION
+    | typeof CURRENT_PROTOCOL_VERSION;
   readonly requestId: string;
   readonly action: BridgeAction;
-  readonly createdAt: string;
+  readonly createdAt?: string;
   readonly payload: Record<string, unknown>;
 }
 
@@ -83,16 +88,20 @@ export interface BridgeRemoteErrorPayload {
 
 export type BridgeResponse =
   | {
-      readonly protocolVersion: typeof PROTOCOL_VERSION;
+      readonly protocolVersion:
+        | typeof PROTOCOL_VERSION
+        | typeof CURRENT_PROTOCOL_VERSION;
       readonly requestId: string;
-      readonly completedAt: string;
+      readonly completedAt?: string;
       readonly ok: true;
       readonly result: unknown;
     }
   | {
-      readonly protocolVersion: typeof PROTOCOL_VERSION;
+      readonly protocolVersion:
+        | typeof PROTOCOL_VERSION
+        | typeof CURRENT_PROTOCOL_VERSION;
       readonly requestId: string;
-      readonly completedAt: string;
+      readonly completedAt?: string;
       readonly ok: false;
       readonly error: BridgeRemoteErrorPayload;
     };
@@ -156,6 +165,14 @@ function asUuid(value: unknown, path: string): string {
   return result;
 }
 
+function asV2RequestId(value: unknown, path: string): string {
+  const result = asString(value, path);
+  if (!/^[A-Za-z0-9_-]{8,64}$/u.test(result)) {
+    fail(path, "must be an 8-64 character base64url identifier");
+  }
+  return result;
+}
+
 function asFiniteNumber(value: unknown, path: string): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     fail(path, "must be a finite number");
@@ -179,6 +196,18 @@ function assertProtocolVersion(value: unknown): asserts value is typeof PROTOCOL
 
 export function parseBridgeRequest(value: unknown): BridgeRequest {
   const record = asRecord(value, "request");
+  if (record.v === CURRENT_PROTOCOL_VERSION) {
+    const action = asString(record.a, "a");
+    if (!ACTION_SET.has(action)) {
+      fail("a", "is not supported");
+    }
+    return {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      requestId: asV2RequestId(record.id, "id"),
+      action: action as BridgeAction,
+      payload: asRecord(record.p, "p"),
+    };
+  }
   assertProtocolVersion(record.protocolVersion);
   const action = asString(record.action, "action");
   if (!ACTION_SET.has(action)) {
@@ -206,6 +235,31 @@ export function safeParseBridgeRequest(
 
 export function parseBridgeResponse(value: unknown): BridgeResponse {
   const record = asRecord(value, "response");
+  if (record.v === CURRENT_PROTOCOL_VERSION) {
+    const base = {
+      protocolVersion: CURRENT_PROTOCOL_VERSION,
+      requestId: asV2RequestId(record.id, "id"),
+    } as const;
+    if (Object.prototype.hasOwnProperty.call(record, "r")) {
+      if (Object.prototype.hasOwnProperty.call(record, "e")) {
+        fail("response", "must not contain both r and e");
+      }
+      return { ...base, ok: true, result: record.r };
+    }
+    const error = asRecord(record.e, "e");
+    const details = Object.prototype.hasOwnProperty.call(error, "details")
+      ? { details: error.details }
+      : {};
+    return {
+      ...base,
+      ok: false,
+      error: {
+        code: asString(error.code, "e.code"),
+        message: asString(error.message, "e.message"),
+        ...details,
+      },
+    };
+  }
   assertProtocolVersion(record.protocolVersion);
   const base = {
     protocolVersion: PROTOCOL_VERSION,

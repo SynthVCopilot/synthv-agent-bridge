@@ -69,6 +69,27 @@ test("GuardTokenStore reuses bindings and rejects a different scope", () => {
   );
 });
 
+test("GuardTokenStore can transfer a guard into a v2 context exactly once", () => {
+  const store = new GuardTokenStore();
+  const binding = {
+    kind: "note" as const,
+    trackIndex: 1,
+    groupUuid: GROUP_UUID,
+    noteIndex: 4,
+  };
+  const token = store.issue(noteFingerprint(4), binding);
+  assert.equal(
+    store.consume(token, binding).fingerprint,
+    noteFingerprint(4),
+  );
+  assert.throws(
+    () => store.resolve(token, binding),
+    (error: unknown) =>
+      error instanceof BridgeError &&
+      error.code === "UNKNOWN_GUARD_TOKEN",
+  );
+});
+
 test("compact phoneme Guards keep a 21-note tuning context below 4 KB", () => {
   const store = new GuardTokenStore();
   const raw = {

@@ -2,8 +2,15 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+
+import { loadConfig } from "../src/config.js";
 import { BRIDGE_ACTIONS } from "../src/protocol.js";
-import { TRACK_DISPLAY_COLOR_PATTERN } from "../src/server.js";
+import {
+  createServer,
+  TRACK_DISPLAY_COLOR_PATTERN,
+} from "../src/server.js";
 
 test("track color schema accepts public RGB and native ARGB forms", () => {
   for (const value of ["#D6BC43", "ffd6bc43", "#FFD6BC43"]) {
@@ -48,6 +55,60 @@ test("MCP tool text results use compact JSON", async () => {
     compiledServer,
     /JSON\.stringify\(value,\s*null,\s*2\)/,
   );
+});
+
+test("P4 exposes eight v2 tools under a 6 KB metadata budget", async () => {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createServer(loadConfig({}, "/tmp"));
+  const client = new Client({ name: "p4-test", version: "1.0.0" });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  try {
+    const tools = await client.listTools();
+    assert.deepEqual(
+      tools.tools.map((tool) => tool.name),
+      [
+        "sv_status",
+        "sv_describe",
+        "sv_read",
+        "sv_edit",
+        "sv_delete",
+        "sv_transaction",
+        "sv_ui",
+        "sv_sidebar",
+      ],
+    );
+    assert.ok(JSON.stringify(tools.tools).length < 6_000);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test("P4 keeps the complete legacy tool surface isolated behind configuration", async () => {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createServer(
+    loadConfig(
+      { SYNTHV_AGENT_BRIDGE_MCP_SURFACE: "legacy" },
+      "/tmp",
+    ),
+  );
+  const client = new Client({ name: "legacy-test", version: "1.0.0" });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  try {
+    const tools = await client.listTools();
+    assert.equal(tools.tools.length, BRIDGE_ACTIONS.length + 4);
+    assert.equal(tools.tools.some((tool) => tool.name === "edit_notes"), true);
+    assert.equal(tools.tools.some((tool) => tool.name === "sv_edit"), false);
+  } finally {
+    await client.close();
+    await server.close();
+  }
 });
 
 test("P1 uses low-latency host polling and exposes selective phoneme computation", async () => {

@@ -48,7 +48,8 @@ The optional v0.1.4 side panel uses a separate local sideband:
 
 The panel never writes the project. An Apply click creates a sideband command;
 the TypeScript coordinator claims it and submits the stored action through the
-same serialized `FileIpcClient` and v1 request channel as a normal MCP call.
+same serialized `FileIpcClient` and preferred v2 request channel as a normal
+MCP call.
 None of these sideband files or the panel script is required for the core
 stdio server, file IPC executor, reads, writes, transactions, or Guard checks.
 
@@ -56,7 +57,27 @@ The Node side serializes calls and owns the lock. It writes requests using a tem
 
 ## Compact MCP boundary
 
-Full protocol-v1 fingerprints deliberately contain all guarded state, which can
+P4 makes the compact surface the default. Sixty-two file-protocol actions are
+kept behind eight MCP tools and a just-in-time schema catalog. This keeps action
+validation and the Lua executor unchanged while reducing the default serialized
+tool metadata from roughly 72 KB to under 6 KB.
+
+`sv_read` can issue one opaque `contextId` for the returned scope. The bounded
+Node entry contains only locators and complete note, Smart Pitch, automation,
+track, reference, library, or time-axis guards. A later v2 call expands that
+handle back into the ordinary action payload before file IPC. Manual edits are
+therefore detected by the existing Lua fingerprint checks; contexts do not
+cache or claim that musical state is current.
+
+Phrase projections are also applied inside the Lua executor. Voice,
+automation, analysis, recommendations, selection diagnostics, and computed
+pitch summaries are skipped when they were not requested. The Node boundary
+then removes redundant note end coordinates, bundles guards into `contextId`,
+and optionally returns large note arrays as a single column header plus rows.
+Write acknowledgements default to counts, durable identifiers, and a
+replacement context rather than complete mutated objects.
+
+Full Bridge fingerprints deliberately contain all guarded state, which can
 be large for automation curves and attribute-heavy notes. Compact MCP reads
 replace those values with random, scope-bound Guard Tokens held in a bounded
 Node memory cache. A compact write resolves the token back to the original

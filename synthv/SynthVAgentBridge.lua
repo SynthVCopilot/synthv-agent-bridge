@@ -14,6 +14,7 @@ end
 local SCRIPT_NAME = "Start SynthV Agent Bridge"
 local BRIDGE_VERSION = "0.1.5"
 local PROTOCOL_VERSION = 1
+local CURRENT_PROTOCOL_VERSION = 2
 local MIN_EDITOR_VERSION = 131330 -- Synthesizer V Studio 2.1.2
 local POLL_INTERVAL_MS = 25
 local HEARTBEAT_EVERY_POLLS = 40
@@ -729,6 +730,11 @@ end
 local function writeStatus(state, message)
     local status = {
         protocolVersion = PROTOCOL_VERSION,
+        protocolVersions = json.array({
+            PROTOCOL_VERSION,
+            CURRENT_PROTOCOL_VERSION
+        }),
+        preferredProtocolVersion = CURRENT_PROTOCOL_VERSION,
         state = state,
         updatedAtEpochMs = os.time() * 1000,
         bridgeVersion = BRIDGE_VERSION,
@@ -816,7 +822,30 @@ local function normalizeError(errorValue)
     }
 end
 
-local function writeResponse(requestId, ok, value)
+local function writeResponse(requestId, ok, value, wireVersion)
+    if wireVersion == CURRENT_PROTOCOL_VERSION then
+        local response = {
+            v = CURRENT_PROTOCOL_VERSION,
+            id = requestId
+        }
+        if ok then
+            response.r = value == nil and JSON_NULL or value
+        else
+            response.e = {
+                code = value.code or "INTERNAL_ERROR",
+                message = value.message or "Unknown bridge error"
+            }
+            if value.details ~= nil then
+                response.e.details = value.details
+            end
+        end
+        local wrote, writeError = writeJsonAtomically(RESPONSE_FILE, response)
+        if not wrote then
+            writeStatus("error", "Unable to write response: " .. tostring(writeError))
+        end
+        return
+    end
+
     local response = {
         protocolVersion = PROTOCOL_VERSION,
         requestId = requestId,
@@ -4469,12 +4498,93 @@ local function collectPhraseRanges(
     }
 end
 
+local PHRASE_INCLUDE_KEYS = {
+    notes = true,
+    voice = true,
+    automation = true,
+    analysis = true,
+    recommendations = true,
+    pitchAnalysis = true,
+    selection = true,
+    diagnostics = true
+}
+
+local function phraseIncludes(payload)
+    if not isProvided(payload.include) then
+        return {
+            notes = true,
+            voice = true,
+            automation = true,
+            analysis = true,
+            recommendations = true,
+            pitchAnalysis = true,
+            selection = true,
+            diagnostics = true
+        }
+    end
+    local requested = requireArray(payload.include, "include", 0, 8)
+    local result = {}
+    for index = 1, #requested do
+        local name = requireString(
+            requested[index],
+            "include[" .. index .. "]",
+            false
+        )
+        if not PHRASE_INCLUDE_KEYS[name] then
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "Unsupported get_phrase_context include field",
+                { include = name }
+            )
+        end
+        if result[name] then
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "get_phrase_context include contains a duplicate",
+                { include = name }
+            )
+        end
+        result[name] = true
+    end
+    return result
+end
+
+local function phraseBounds(notes)
+    local result = {
+        startPosition = JSON_NULL,
+        endPosition = JSON_NULL,
+        startSeconds = JSON_NULL,
+        endSeconds = JSON_NULL
+    }
+    for index = 1, #notes do
+        local note = notes[index]
+        local onset = note.absoluteOnset
+        local ending = note.absoluteEnd or (onset + note.duration)
+        local onsetSeconds = note.absoluteOnsetSeconds
+        local endSeconds = note.absoluteEndSeconds
+        result.startPosition = result.startPosition == JSON_NULL
+            and onset
+            or math.min(result.startPosition, onset)
+        result.endPosition = result.endPosition == JSON_NULL
+            and ending
+            or math.max(result.endPosition, ending)
+        result.startSeconds = result.startSeconds == JSON_NULL
+            and onsetSeconds
+            or math.min(result.startSeconds, onsetSeconds)
+        result.endSeconds = result.endSeconds == JSON_NULL
+            and endSeconds
+            or math.max(result.endSeconds, endSeconds)
+    end
+    return result
+end
+
 function handlers.get_phrase_context(payload)
     payload = requireObject(payload, "payload")
     local phrasePayload = {}
     for key, value in pairs(payload) do
         phrasePayload[key] = value
     end
+    local includes = phraseIncludes(phrasePayload)
 
     local locatorSource = "explicit"
     if not isProvided(phrasePayload.trackIndex) then
@@ -4601,11 +4711,15 @@ function handlers.get_phrase_context(payload)
         32,
         12
     )
-    local analysis, recommendations = analyzePhraseNotes(
-        noteData.notes,
-        breathGapSeconds,
-        recommendationLimit
-    )
+    local analysis = phraseBounds(noteData.notes)
+    local recommendations = json.array()
+    if includes.analysis or includes.recommendations then
+        analysis, recommendations = analyzePhraseNotes(
+            noteData.notes,
+            breathGapSeconds,
+            recommendationLimit
+        )
+    end
     if hasMultipleRanges then
         local noteByIndex = {}
         for index = 1, #noteData.notes do
@@ -4621,11 +4735,19 @@ function handlers.get_phrase_context(payload)
                     rangeNotes[#rangeNotes + 1] = note
                 end
             end
-            range.analysis, range.recommendations = analyzePhraseNotes(
-                rangeNotes,
-                breathGapSeconds,
-                recommendationLimit
-            )
+            if includes.analysis or includes.recommendations then
+                range.analysis, range.recommendations = analyzePhraseNotes(
+                    rangeNotes,
+                    breathGapSeconds,
+                    recommendationLimit
+                )
+                if not includes.analysis then
+                    range.analysis = nil
+                end
+                if not includes.recommendations then
+                    range.recommendations = nil
+                end
+            end
         end
         analysis = {
             multiRange = true,
@@ -4674,14 +4796,17 @@ function handlers.get_phrase_context(payload)
         )
     end
 
-    local requestedAutomation = isProvided(phrasePayload.automationParameters)
+    local requestedAutomation = includes.automation
+        and isProvided(phrasePayload.automationParameters)
         and requireArray(
             phrasePayload.automationParameters,
             "automationParameters",
             0,
             8
         )
-        or json.array({ "loudness", "tension", "breathiness" })
+        or (includes.automation
+            and json.array({ "loudness", "tension", "breathiness" })
+            or json.array())
     local automation = json.array()
     local seenParameters = {}
     for index = 1, #requestedAutomation do
@@ -4733,13 +4858,15 @@ function handlers.get_phrase_context(payload)
         end
     end
 
-    local pitchAnalysisFrames = optionalInteger(
-        phrasePayload.pitchAnalysisFrames,
-        "pitchAnalysisFrames",
-        0,
-        256,
-        0
-    )
+    local pitchAnalysisFrames = includes.pitchAnalysis
+        and optionalInteger(
+            phrasePayload.pitchAnalysisFrames,
+            "pitchAnalysisFrames",
+            0,
+            256,
+            0
+        )
+        or 0
     if hasMultipleRanges
         and pitchAnalysisFrames * #multiRange.ranges > 256 then
         raiseBridgeError(
@@ -4753,9 +4880,15 @@ function handlers.get_phrase_context(payload)
         beginPosition = beginPosition,
         endPosition = endPosition
     }
-    noteData.voice = serializePhraseVoice(reference, trackIndex, groupIndex)
-    noteData.analysis = analysis
-    noteData.recommendations = recommendations
+    if includes.voice then
+        noteData.voice = serializePhraseVoice(reference, trackIndex, groupIndex)
+    end
+    if includes.analysis then
+        noteData.analysis = analysis
+    end
+    if includes.recommendations then
+        noteData.recommendations = recommendations
+    end
     noteData.automation = automation
     if hasMultipleRanges then
         noteData.ranges = multiRange.ranges
@@ -4773,18 +4906,22 @@ function handlers.get_phrase_context(payload)
             range.beginGroupPosition = nil
             range.endGroupPosition = nil
         end
-        noteData.pitchAnalysis = {
-            included = pitchAnalysisFrames > 0,
-            framesPerRange = pitchAnalysisFrames,
-            ranges = pitchRanges
-        }
+        if includes.pitchAnalysis then
+            noteData.pitchAnalysis = {
+                included = pitchAnalysisFrames > 0,
+                framesPerRange = pitchAnalysisFrames,
+                ranges = pitchRanges
+            }
+        end
     else
-        noteData.pitchAnalysis = summarizeComputedPitch(
-            reference,
-            analysis.startPosition,
-            analysis.endPosition,
-            pitchAnalysisFrames
-        )
+        if includes.pitchAnalysis then
+            noteData.pitchAnalysis = summarizeComputedPitch(
+                reference,
+                analysis.startPosition,
+                analysis.endPosition,
+                pitchAnalysisFrames
+            )
+        end
     end
     if scopeSource == "page" or scopeSource == "cursor_page" then
         local firstNote = noteData.notes[1]
@@ -4807,6 +4944,23 @@ function handlers.get_phrase_context(payload)
                 fingerprint = lastNote.fingerprint
             }
         end
+    end
+    if not includes.selection then
+        noteData.selectionContext = nil
+    end
+    if not includes.diagnostics then
+        noteData.attributesPending = nil
+        noteData.computedPhonemesIncluded = nil
+        noteData.matchedNoteCount = nil
+        noteData.noteDefaultsOmitted = nil
+        noteData.phonemesPending = nil
+        noteData.rangeScannedNoteCount = nil
+        noteData.responseMode = nil
+        noteData.returnedNoteCount = nil
+        noteData.returnedNoteOffset = nil
+        noteData.scannedNoteCount = nil
+        noteData.secondsPrecision = nil
+        noteData.serializationScannedNoteCount = nil
     end
     return noteData
 end
@@ -7065,6 +7219,28 @@ end
 
 local function validateRequest(request)
     request = requireObject(request, "request")
+    if request.v == CURRENT_PROTOCOL_VERSION then
+        local requestId = requireString(request.id, "id", false)
+        if not requestId:match("^[A-Za-z0-9_-]+$")
+            or #requestId < 8
+            or #requestId > 64 then
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "id must be an 8-64 character base64url identifier"
+            )
+        end
+        local action = requireString(request.a, "a", false)
+        local payload = requireObject(request.p, "p")
+        local handler = handlers[action]
+        if not handler then
+            raiseBridgeError(
+                "UNKNOWN_ACTION",
+                "Unsupported bridge action",
+                { action = action }
+            )
+        end
+        return requestId, handler, payload, action, CURRENT_PROTOCOL_VERSION
+    end
     if request.protocolVersion ~= PROTOCOL_VERSION then
         raiseBridgeError("PROTOCOL_MISMATCH", "Unsupported bridge protocol version", {
             expected = PROTOCOL_VERSION,
@@ -7078,7 +7254,7 @@ local function validateRequest(request)
     if not handler then
         raiseBridgeError("UNKNOWN_ACTION", "Unsupported bridge action", { action = action })
     end
-    return requestId, handler, payload, action
+    return requestId, handler, payload, action, PROTOCOL_VERSION
 end
 
 PROJECT_WRITE_ACTIONS = {
@@ -7134,6 +7310,7 @@ local function processRequestFile()
     end
 
     local requestId = "invalid-request"
+    local requestWireVersion = PROTOCOL_VERSION
     local processedAction = nil
     local processedPayload = nil
     local ok, resultOrError = xpcall(function()
@@ -7145,11 +7322,19 @@ local function processRequestFile()
         if not decodedOk then
             raiseBridgeError("INVALID_JSON", "Request is not valid JSON", { cause = tostring(requestOrError) })
         end
-        if isObject(requestOrError) and type(requestOrError.requestId) == "string" then
-            requestId = requestOrError.requestId
+        if isObject(requestOrError) then
+            if requestOrError.v == CURRENT_PROTOCOL_VERSION
+                and type(requestOrError.id) == "string" then
+                requestId = requestOrError.id
+                requestWireVersion = CURRENT_PROTOCOL_VERSION
+            elseif type(requestOrError.requestId) == "string" then
+                requestId = requestOrError.requestId
+            end
         end
-        local validatedRequestId, handler, payload, action = validateRequest(requestOrError)
+        local validatedRequestId, handler, payload, action, wireVersion =
+            validateRequest(requestOrError)
         requestId = validatedRequestId
+        requestWireVersion = wireVersion
         processedAction = action
         processedPayload = payload
         return handler(payload)
@@ -7164,9 +7349,9 @@ local function processRequestFile()
         then
             writeSidebarActivity(processedAction)
         end
-        writeResponse(requestId, true, resultOrError)
+        writeResponse(requestId, true, resultOrError, requestWireVersion)
     else
-        writeResponse(requestId, false, resultOrError)
+        writeResponse(requestId, false, resultOrError, requestWireVersion)
     end
     removeFile(PROCESSING_FILE)
     return true

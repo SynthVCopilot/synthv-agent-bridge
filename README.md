@@ -165,7 +165,8 @@ See [docs/sidebar.md](docs/sidebar.md).
 
 ### 5. Verify the connection
 
-Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by `get_project_info`. A healthy status contains:
+Open an MCP-enabled conversation and ask it to call `sv_status`, followed by
+`sv_read` with `action: "get_project_info"`. A healthy status contains:
 
 ```json
 {
@@ -174,7 +175,57 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 }
 ```
 
-## Available MCP tools
+## Default MCP v2 tools
+
+The default MCP surface exposes eight stable tools. Individual SynthV actions
+and their full schemas are returned just in time by `sv_describe`, rather than
+placing every action schema in the model context.
+
+| Tool | Purpose |
+|---|---|
+| `sv_status` | Read Bridge/host status, ping, or hot-reload the Lua executor. |
+| `sv_describe` | List actions or return schemas for up to 16 requested actions. |
+| `sv_read` | Run a read action with optional projection, Dense rows, and `contextId` reuse. |
+| `sv_edit` | Run a validated project write with a minimal acknowledgement by default. |
+| `sv_delete` | Run an explicitly destructive delete/clear action. |
+| `sv_transaction` | Apply or roll back a transaction; step payloads may carry `contextId`. |
+| `sv_ui` | Control selection, viewport, clipboard, dialogs, snapping, coordinates, or playback. |
+| `sv_sidebar` | Read the optional panel task/status or publish a guarded preview. |
+
+The normal tuning sequence is:
+
+1. Call `sv_describe` for unfamiliar actions.
+2. Read fresh state with `sv_read`.
+3. Reuse the returned `contextId` in `sv_edit`, `sv_delete`, another scoped
+   read, or a transaction step.
+4. Read again after `UNKNOWN_CONTEXT` or any `STALE_*` result.
+
+`contextId` stores only locators and concurrency guards in bounded Node memory.
+It does not cache mutable note, voice, selection, or automation content.
+SynthV still checks every complete fingerprint before creating an undo record.
+
+Phrase reads accept an `include` projection over `notes`, `voice`,
+`automation`, `analysis`, `recommendations`, `pitchAnalysis`, `selection`, and
+`diagnostics`. The v2 default is `notes`, `voice`, and `analysis`. Results with
+at least 24 notes use a column/row representation when `dense: "auto"`; use
+`dense: "never"` for ordinary objects. V2 note rows omit derivable absolute
+end positions and report `noteDefaults.absolutePitch: "pitch"` when equal
+absolute/local pitches were omitted.
+
+### Isolated legacy MCP surface
+
+The file IPC executor accepts legacy v1 and uses the compact v2 envelope by
+default. To expose the original one-tool-per-action MCP catalog for diagnostics
+or older clients, set:
+
+```text
+SYNTHV_AGENT_BRIDGE_MCP_SURFACE=legacy
+```
+
+The legacy catalog is not exposed by default and therefore does not consume
+the default tool-schema budget.
+
+### Legacy action catalog
 
 | Tool | Access | Purpose |
 |---|---:|---|
@@ -247,7 +298,7 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 
 All track, group, and note indices are **1-based**, matching the SynthV Lua API. Note and automation coordinates are group-local blicks unless the returned field explicitly says `absolute`. Playback positions are seconds.
 
-### Compact tuning responses
+### Legacy compact tuning responses
 
 `get_note_phoneme_data`, `get_automation`, and `sample_automation` accept
 `responseMode: "compact"`. Full mode remains the default.
@@ -296,7 +347,7 @@ All track, group, and note indices are **1-based**, matching the SynthV Lua API.
 
 Guard Tokens are opaque and live only in the current MCP server process. After a
 restart, eviction, or `UNKNOWN_GUARD_TOKEN` error, read the target again. The
-server resolves the token to the original protocol-v1 fingerprint before the
+server resolves the token to the original complete fingerprint before the
 request reaches SynthV, so existing stale-write protection is unchanged.
 
 Phoneme writes are verified on a detached clone before an undo record is
@@ -381,6 +432,7 @@ The Node server and SynthV script must resolve the **same physical IPC directory
 | `SYNTHV_AGENT_BRIDGE_POLL_MS` | `10` | Node response polling interval. |
 | `SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS` | `30000` | Age at which abandoned request files and locks can be recovered. Must be greater than the response timeout. |
 | `SYNTHV_AGENT_BRIDGE_STATUS_STALE_MS` | `5000` | Maximum heartbeat age considered connected. |
+| `SYNTHV_AGENT_BRIDGE_MCP_SURFACE` | `v2` | `v2` exposes the eight-tool compact surface; `legacy` exposes the original one-tool-per-action catalog. |
 
 When a custom IPC directory is used, create it before starting the SynthV script. The Node process also creates the directory, but the documented startup order starts SynthV first.
 

@@ -1,8 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 
 import type { BridgeConfig } from "../config.js";
-import { PROTOCOL_VERSION } from "../config.js";
+import { CURRENT_PROTOCOL_VERSION } from "../config.js";
 import {
   BridgeBusyError,
   BridgeProtocolError,
@@ -124,21 +124,21 @@ export class FileIpcClient {
   ): Promise<T> {
     await fs.mkdir(this.config.paths.directory, { recursive: true });
 
-    const requestId = randomUUID();
+    const requestId = randomBytes(12).toString("base64url");
     await this.acquireLock(requestId);
 
     try {
       await this.prepareChannel();
 
-      const request = parseBridgeRequest({
-        protocolVersion: PROTOCOL_VERSION,
-        requestId,
-        action,
-        createdAt: new Date().toISOString(),
-        payload,
-      }) satisfies BridgeRequest;
+      const envelope = {
+        v: CURRENT_PROTOCOL_VERSION,
+        id: requestId,
+        a: action,
+        p: payload,
+      } as const;
+      const request = parseBridgeRequest(envelope) satisfies BridgeRequest;
 
-      await this.writeJsonAtomically(this.config.paths.requestFile, request);
+      await this.writeJsonAtomically(this.config.paths.requestFile, envelope);
       return await this.waitForResponse<T>(request);
     } finally {
       await this.removeOwnRequest(requestId).catch(() => undefined);

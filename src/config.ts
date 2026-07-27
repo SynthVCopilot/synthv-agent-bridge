@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 
 export const PROTOCOL_VERSION = 1 as const;
+export const CURRENT_PROTOCOL_VERSION = 2 as const;
 export const SERVER_NAME = "synthv-agent-bridge";
 export const SERVER_VERSION = "0.1.5";
 
@@ -33,6 +34,7 @@ export interface BridgeConfig {
   readonly pollIntervalMs: number;
   readonly staleRequestMs: number;
   readonly statusStaleMs: number;
+  readonly mcpSurface?: "v2" | "legacy";
 }
 
 function positiveInteger(
@@ -51,6 +53,17 @@ function positiveInteger(
     );
   }
   return parsed;
+}
+
+function mcpSurface(value: string | undefined): "v2" | "legacy" {
+  const normalized = value?.trim().toLowerCase() || "v2";
+  if (normalized !== "v2" && normalized !== "legacy") {
+    throw new Error(
+      "SYNTHV_AGENT_BRIDGE_MCP_SURFACE must be v2 or legacy; received " +
+        JSON.stringify(value),
+    );
+  }
+  return normalized;
 }
 
 export function loadConfig(
@@ -116,5 +129,6 @@ export function loadConfig(
     pollIntervalMs,
     staleRequestMs,
     statusStaleMs,
+    mcpSurface: mcpSurface(env.SYNTHV_AGENT_BRIDGE_MCP_SURFACE),
   };
 }

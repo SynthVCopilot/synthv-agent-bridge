@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import * as z from "zod/v4";
@@ -27,6 +28,7 @@ import {
   SidebarCoordinator,
   TRANSACTION_STEP_ACTIONS,
 } from "./sidebar-coordinator.js";
+import { registerV2Surface } from "./v2-surface.js";
 
 const indexSchema = z.number().int().min(1);
 const blickSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
@@ -360,6 +362,7 @@ export function createServer(config: BridgeConfig): McpServer {
   const client = new FileIpcClient(config);
   const guardTokens = new GuardTokenStore();
   const sidebar = new SidebarCoordinator(config, client);
+  const useV2Surface = (config.mcpSurface ?? "v2") === "v2";
   const server = new McpServer(
     {
       name: SERVER_NAME,
@@ -368,9 +371,31 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     {
       instructions:
-        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, voice, phoneme, library, automation, Smart Pitch state, or selection immediately before writing. Prefer get_phrase_context for phrase tuning; reuse its cursorToken for the next page, use ranges for several phrase windows, and choose rangeMatch onset only when excluding sustains that began before the range is acceptable. Otherwise use responseMode compact plus note/time filters, and pass returned Guard Tokens directly to supported writes. When the user refers to the current or selected singer, group, or notes, inspect the returned selection context and enable the applicable selection guard. Explicitly located UUID/index/fingerprint operations may target unselected objects. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Guard Tokens, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits. When the user asks to handle a request from the SynthV sidebar, call sidebar_get_request, read the latest applicable SynthV state, and publish exactly one guarded write or apply_transaction through sidebar_publish_preview instead of executing it directly. Include structured changes and risks. The user confirms or dismisses that preview inside SynthV.",
+        useV2Surface
+          ? "Use sv_describe for unfamiliar actions. Read fresh state before writes and reuse contextId. Indices are 1-based. Writes stay fingerprint-guarded and create one SynthV undo record. Sidebar requests must be published as previews."
+          : "Control Synthesizer V Studio through the local bridge. Read fresh state before writes, prefer compact phrase workflows, reuse current guards, and keep protocol-boundary indices 1-based.",
     },
   );
+  const capturedTools = new Map<string, RegisteredTool>();
+  const registerLegacyTool = server.registerTool.bind(server);
+  if (useV2Surface) {
+    server.registerTool = ((
+      name: string,
+      toolConfig: unknown,
+      handler: unknown,
+    ) => {
+      const registered = (
+        registerLegacyTool as unknown as (
+          toolName: string,
+          configValue: unknown,
+          callback: unknown,
+        ) => RegisteredTool
+      )(name, toolConfig, handler);
+      capturedTools.set(name, registered);
+      registered.disable();
+      return registered;
+    }) as McpServer["registerTool"];
+  }
   sidebar.start();
   server.server.onclose = () => sidebar.stop();
 
@@ -1012,6 +1037,24 @@ export function createServer(config: BridgeConfig): McpServer {
           .max(2)
           .default(0.18),
         recommendationLimit: z.number().int().min(0).max(32).default(12),
+        include: z
+          .array(
+            z.enum([
+              "notes",
+              "voice",
+              "automation",
+              "analysis",
+              "recommendations",
+              "pitchAnalysis",
+              "selection",
+              "diagnostics",
+            ]),
+          )
+          .max(8)
+          .optional()
+          .describe(
+            "Optional v2 projection. Omit for the complete legacy phrase response.",
+          ),
       },
       annotations: {
         readOnlyHint: true,
@@ -2086,6 +2129,10 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     async (input) => runTool(async () => client.send("playback", input)),
   );
+
+  if (useV2Surface) {
+    registerV2Surface(registerLegacyTool, capturedTools, guardTokens);
+  }
 
   return server;
 }

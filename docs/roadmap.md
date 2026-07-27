@@ -49,6 +49,11 @@
   recommendation-only review targets.
 - Explicit complete-overlap or binary onset-only range scans, guarded phrase
   page cursors, and one-sweep multi-range phrase analysis with shared notes.
+- P4 default MCP v2 surface with eight domain tools, just-in-time action
+  schemas, range-scoped `contextId` guards, phrase field projection, minimal
+  write acknowledgements, and Dense rows for large note sets.
+- The complete default MCP tool catalog is kept below 12 KB; the current build
+  is below 6 KB while all file-protocol actions remain available.
 
 The native side panel remains an optional compact review console. Future work
 is limited to stability, compatibility, and interaction fixes; it is not a

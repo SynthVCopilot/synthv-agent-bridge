@@ -1,11 +1,43 @@
-# File IPC protocol v1
+# File IPC protocols
+
+The Node client uses the compact protocol-v2 envelope by default. The Lua
+executor continues to accept protocol v1 for recovery tools and isolated legacy
+clients.
+
+## Compact protocol v2
+
+Request:
+
+```json
+{"v":2,"id":"AbCdEfGh12345678","a":"get_project_info","p":{}}
+```
+
+Success:
+
+```json
+{"v":2,"id":"AbCdEfGh12345678","r":{}}
+```
+
+Error:
+
+```json
+{"v":2,"id":"AbCdEfGh12345678","e":{"code":"STALE_NOTE","message":"The note changed"}}
+```
+
+The single-writer channel still requires `id` correlation. V2 removes
+per-request timestamps, the repeated long field names, and the explicit `ok`
+flag. Heartbeat and session files carry timing and supported-version
+diagnostics.
+
+## Legacy protocol v1
 
 The v0.1.4 side-panel handoff is not a new Bridge protocol version. It is a
 local, display-oriented sideband owned by the Node coordinator. Confirmed panel
-changes still enter SynthV through an ordinary protocol v1 request, so protocol
-v1 clients remain backward compatible. See [sidebar.md](sidebar.md).
+changes enter SynthV through the same preferred v2 channel as normal Node
+requests; the underlying actions remain available to v1 clients. See
+[sidebar.md](sidebar.md).
 
-## Request
+### Request
 
 ```json
 {
@@ -17,7 +49,7 @@ v1 clients remain backward compatible. See [sidebar.md](sidebar.md).
 }
 ```
 
-## Success response
+### Success response
 
 ```json
 {
@@ -29,7 +61,7 @@ v1 clients remain backward compatible. See [sidebar.md](sidebar.md).
 }
 ```
 
-## Error response
+### Error response
 
 ```json
 {
@@ -68,8 +100,8 @@ Protocol v1 keeps concurrency fields optional for backward compatibility. New cl
 
 The MCP layer additionally supports short `guardToken` and
 `expectedGuardToken` values in compact tuning workflows. These tokens are
-resolved in memory to the original fingerprint before a protocol-v1 request is
-written, including guarded steps nested in `apply_transaction` and payloads
+resolved in memory to the original fingerprint before a file-protocol request
+is written, including guarded steps nested in `apply_transaction` and payloads
 staged through `sidebar_publish_preview`, so the Lua executor continues to
 compare the complete current fingerprint. Guard Tokens are intentionally
 invalid after the MCP server restarts or evicts an old entry.
@@ -78,6 +110,29 @@ The bridge reports `STALE_GROUP`, `STALE_GROUP_REFERENCE`,
 `STALE_LIBRARY_GROUP`, `STALE_NOTE`, `STALE_PITCH_CONTROL`, `STALE_TRACK`,
 `STALE_AUTOMATION`, or `STALE_TIME_AXIS` before creating an undo record when a
 supplied guard no longer matches.
+
+### Default MCP v2 surface
+
+The model-facing MCP surface is versioned independently from this file
+envelope. By default it exposes `sv_status`, `sv_describe`, `sv_read`,
+`sv_edit`, `sv_delete`, `sv_transaction`, `sv_ui`, and `sv_sidebar`.
+`sv_describe` returns the existing action schemas only when requested.
+
+V2 reads may return an opaque `contextId`. The MCP server binds it to the
+complete locators and fingerprints already returned by the underlying action,
+then removes those verbose values from the model-facing result. V2 writes
+expand the handle before submitting an ordinary file-protocol request. A context
+does not bypass any Lua validation, does not survive MCP restart/eviction, and
+does not cache mutable musical state.
+
+`get_phrase_context.include` is an additive file-protocol projection used by
+the v2 surface. Omitted `include` retains the complete legacy response. When it
+is present, excluded voice, automation, analysis, recommendations, selection
+diagnostics, and computed-pitch summaries are not serialized and, where
+possible, are not computed.
+
+Set `SYNTHV_AGENT_BRIDGE_MCP_SURFACE=legacy` to expose the original
+one-tool-per-action MCP surface. This does not change the file protocol.
 
 ## Serialization rules
 
@@ -103,9 +158,8 @@ false, the executor skips `SV:getPhonemesForGroup` and omits each note's
 `scanMode`, and `scannedNoteCount`; these additive diagnostics let clients
 confirm whether an index, page, or time-range fast path was used.
 
-The file envelope and protocol version do not change. Response mode is an
-optional v1 payload field, and the Node-only Guard Token substitution is not
-part of the file IPC contract.
+Response mode remains an optional action payload field in both envelopes, and
+the Node-only Guard Token substitution is not part of the file IPC contract.
 
 ### Phrase context
 

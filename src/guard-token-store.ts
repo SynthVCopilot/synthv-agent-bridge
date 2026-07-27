@@ -178,6 +178,19 @@ export class GuardTokenStore {
     return { fingerprint: entry.fingerprint, binding: entry.binding };
   }
 
+  public consume(
+    token: string,
+    expectation: GuardExpectation,
+  ): GuardTokenResolution {
+    const resolution = this.resolve(token, expectation);
+    const entry = this.entries.get(token);
+    this.entries.delete(token);
+    if (entry !== undefined) {
+      this.reverse.delete(entry.reverseKey);
+    }
+    return resolution;
+  }
+
   private evictIfNeeded(): void {
     while (this.entries.size > this.maximumEntries) {
       const oldestToken = this.entries.keys().next().value as string | undefined;

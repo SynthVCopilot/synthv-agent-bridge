@@ -72,17 +72,47 @@ async function serveRequests(
   }
 }
 
+function successResponse(
+  request: ReturnType<typeof parseBridgeRequest>,
+  result: unknown,
+): unknown {
+  return request.protocolVersion === 2
+    ? { v: 2, id: request.requestId, r: result }
+    : {
+        protocolVersion: 1,
+        requestId: request.requestId,
+        completedAt: new Date().toISOString(),
+        ok: true,
+        result,
+      };
+}
+
+function errorResponse(
+  request: ReturnType<typeof parseBridgeRequest>,
+  code: string,
+  message: string,
+): unknown {
+  return request.protocolVersion === 2
+    ? { v: 2, id: request.requestId, e: { code, message } }
+    : {
+        protocolVersion: 1,
+        requestId: request.requestId,
+        completedAt: new Date().toISOString(),
+        ok: false,
+        error: { code, message },
+      };
+}
+
 test("FileIpcClient performs a correlated request/response round trip", async (context) => {
   const fixture = await createFixture();
   context.after(async () => fs.rm(fixture.directory, { recursive: true, force: true }));
 
-  const bridge = serveRequests(fixture.config, 1, (request) => ({
-    protocolVersion: 1,
-    requestId: request.requestId,
-    completedAt: new Date().toISOString(),
-    ok: true,
-    result: { echoedAction: request.action, payload: request.payload },
-  }));
+  const bridge = serveRequests(fixture.config, 1, (request) =>
+    successResponse(request, {
+      echoedAction: request.action,
+      payload: request.payload,
+    }),
+  );
 
   const result = await fixture.client.send<{ echoedAction: string; payload: unknown }>(
     "get_project_info",
@@ -102,13 +132,7 @@ test("FileIpcClient serializes concurrent calls on one client", async (context) 
   const observed: string[] = [];
   const bridge = serveRequests(fixture.config, 2, (request, index) => {
     observed.push(request.action);
-    return {
-      protocolVersion: 1,
-      requestId: request.requestId,
-      completedAt: new Date().toISOString(),
-      ok: true,
-      result: index,
-    };
+    return successResponse(request, index);
   });
 
   const results = await Promise.all([
@@ -125,13 +149,9 @@ test("FileIpcClient maps bridge errors to BridgeRemoteError", async (context) =>
   const fixture = await createFixture();
   context.after(async () => fs.rm(fixture.directory, { recursive: true, force: true }));
 
-  const bridge = serveRequests(fixture.config, 1, (request) => ({
-    protocolVersion: 1,
-    requestId: request.requestId,
-    completedAt: new Date().toISOString(),
-    ok: false,
-    error: { code: "STALE_NOTE", message: "The note changed" },
-  }));
+  const bridge = serveRequests(fixture.config, 1, (request) =>
+    errorResponse(request, "STALE_NOTE", "The note changed"),
+  );
 
   await assert.rejects(
     fixture.client.send("edit_notes", {}),
