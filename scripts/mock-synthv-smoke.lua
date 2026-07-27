@@ -674,6 +674,7 @@ scheduled=nil
 SV={QUARTER=705600000}
 local clipboard=""
 local computedPhonemeCalls=0
+local computedPitchCalls=0
 function SV:getHostInfo() return {osType="Linux",hostName="Mock SynthV",hostVersion="2.2.0",hostVersionNumber=131584,languageCode="en-us"} end
 function SV:getProject() return project end
 function SV:getPlayback() return playback end
@@ -695,6 +696,7 @@ function SV:getComputedAttributesForGroup(reference)
     return result
 end
 function SV:getComputedPitchForGroup(reference,start,interval,frames)
+    computedPitchCalls=computedPitchCalls+1
     local result={}
     for index=1,frames do result[index]=reference.group.notes[1] and reference.group.notes[1].pitch or 60 end
     return result
@@ -1032,6 +1034,24 @@ assert(#arrangementSelection.selectedGroups==1,"non-main group selection failed"
 callExpectError("set_selection",'{"scope":"arrangement","operation":"replace","kind":"groups","groups":[{"trackIndex":1,"groupIndex":1}]}',"INVALID_ARGUMENT")
 assert(#arrangementSelection.selectedGroups==1,"invalid selection must not clear the previous selection")
 call("get_selection",'{"automationParameters":["loudness"]}')
+local pitchCallsBeforePhraseContext=computedPitchCalls
+local phraseContext=call(
+    "get_phrase_context",
+    '{"automationParameters":["loudness"],"pitchAnalysisFrames":8}'
+)
+assert(phraseContext:find('"source":"selected_notes"',1,true),"phrase context did not prefer selected notes")
+assert(phraseContext:find('"returnedNoteCount":1',1,true),"phrase context returned notes outside the selection")
+assert(phraseContext:find('"absolutePitch":',1,true),"phrase context omitted compact pitch data")
+assert(phraseContext:find('"noteDefaultsOmitted":true',1,true),"phrase context did not report default-field omission")
+assert(phraseContext:find('"secondsPrecision":0.0001',1,true),"phrase context did not report timing precision")
+assert(not phraseContext:find('"detune":0',1,true),"phrase context repeated zero detune values")
+assert(phraseContext:find('"analysis":',1,true),"phrase context omitted phrase analysis")
+assert(phraseContext:find('"recommendations":',1,true),"phrase context omitted recommendation-only targets")
+assert(phraseContext:find('"automation":',1,true),"phrase context omitted automation summaries")
+assert(phraseContext:find('"fingerprint":',1,true),"phrase context omitted write guards")
+assert(phraseContext:find('"referenceFingerprint":',1,true),"phrase context omitted the Group voice guard")
+assert(phraseContext:find('"pitchAnalysis":{"included":true',1,true),"phrase context omitted computed-pitch summary")
+assert(computedPitchCalls==pitchCallsBeforePhraseContext+1,"phrase context sampled computed pitch more than once")
 call("get_editor_view",'{"view":"mainEditor"}')
 call("set_editor_view",'{"view":"mainEditor","timeLeft":100,"timeRight":1000,"valueCenter":64}')
 call("snap_position",'{"view":"mainEditor","position":400000000}')

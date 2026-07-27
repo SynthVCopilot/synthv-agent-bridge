@@ -107,6 +107,30 @@ The file envelope and protocol version do not change. Response mode is an
 optional v1 payload field, and the Node-only Guard Token substitution is not
 part of the file IPC contract.
 
+### Phrase context
+
+`get_phrase_context` is an additive read-only v1 action. It accepts an explicit
+Group locator or uses the current piano-roll Group when `trackIndex` is absent.
+An explicit `noteIndices` list or `startSeconds`/`endSeconds` range wins over
+selection; otherwise `preferSelectedNotes` defaults to true. The returned notes
+always use compact timing/pitch/phoneme serialization.
+
+The response also contains compact Group voice/Vocal Modes, aggregate phrase
+metrics, bounded recommendation-only targets, and summaries for up to eight
+requested automation parameters. Optional `pitchAnalysisFrames` samples at most
+256 computed-pitch frames but returns only aggregate statistics. At the MCP
+boundary, note fingerprints and each nested automation fingerprint become
+short Guard Tokens suitable for the existing guarded write tools.
+
+Phrase-note seconds are rounded to the reported `secondsPrecision` of `0.0001`.
+When `noteDefaultsOmitted` is true, absent empty phoneme/language/phoneset
+overrides, zero detune, true/default even-syllable duration, empty phoneme
+attributes, and false selection flags represent their ordinary defaults.
+Non-default values are never removed.
+
+The executor recomputes this context for each request. It intentionally does
+not cache note, selection, voice, or automation state across requests.
+
 ### Additive v1 actions
 
 Protocol v1 permits new action names without changing the request/response
@@ -119,7 +143,8 @@ Mode settings, host-validated experimental Unison fields, and dedicated
 per-note phoneme properties without changing the v1 envelope. Version 0.1.4
 also adds `apply_transaction`, `rollback_transaction`,
 `create_harmony_track`, `humanize_notes`, `apply_expression_preset`, and
-`fit_lyrics` as additive v1 actions.
+`fit_lyrics` as additive v1 actions. `get_phrase_context` later adds compact
+selected/ranged phrase analysis without changing the v1 envelope.
 
 `script_data` only exposes keys beginning with `synthv-agent-bridge.`. It never
 lists, clears, or overwrites another script's namespace.

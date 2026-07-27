@@ -63,3 +63,21 @@ test("P1 uses low-latency host polling and exposes selective phoneme computation
   assert.match(bridgeSource, /local HEARTBEAT_EVERY_POLLS = 40/);
   assert.match(bridgeSource, /local SESSION_CHECK_EVERY_POLLS = 10/);
 });
+
+test("P2 exposes one bounded write-ready phrase context", async () => {
+  const [compiledServer, bridgeSource] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(
+      new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  assert.match(compiledServer, /get_phrase_context/);
+  assert.match(compiledServer, /compactPhraseContextGuards/);
+  assert.match(compiledServer, /pitchAnalysisFrames/);
+  assert.match(bridgeSource, /function handlers\.get_phrase_context/);
+  assert.match(bridgeSource, /recommendationLimit/);
+  assert.match(bridgeSource, /summarizePhraseAutomation/);
+  assert.match(bridgeSource, /compactPhraseNoteDefaults/);
+  assert.match(bridgeSource, /noteDefaultsOmitted = true/);
+});

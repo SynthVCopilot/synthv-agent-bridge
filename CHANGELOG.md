@@ -2,6 +2,26 @@
 
 All notable changes will be documented in this file.
 
+## Unreleased
+
+### Added
+
+- A compact `get_phrase_context` read that resolves the current piano-roll
+  Group or an explicit note/time scope and returns write-ready note and
+  automation Guard Tokens, Group voice/Vocal Modes, bounded rhythm/pitch
+  diagnostics, and recommendation-only review targets in one IPC round trip.
+- Optional computed-pitch summaries that retain only aggregate contour metrics
+  instead of returning every sampled frame.
+
+### Changed
+
+- Phrase context automatically prefers selected notes, includes the pitch and
+  timing fields needed for tuning, caps notes/recommendations/automation
+  parameters, and never uses a cross-request cache that could become stale
+  after an editor change.
+- Phrase notes round seconds to 0.1 ms and omit repeated default-valued phoneme,
+  detune, and selection fields while retaining every non-default override.
+
 ## 0.1.5 - 2026-07-27
 
 ### Added

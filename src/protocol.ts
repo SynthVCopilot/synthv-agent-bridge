@@ -21,6 +21,7 @@ export const BRIDGE_ACTIONS = [
   "get_track_notes",
   "get_group_voice",
   "get_note_phoneme_data",
+  "get_phrase_context",
   "get_selection",
   "set_selection",
   "get_computed_group_data",

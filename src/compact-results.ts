@@ -69,6 +69,46 @@ export function compactPhonemeGuards(
   };
 }
 
+export function compactPhraseContextGuards(
+  result: unknown,
+  store: GuardTokenStore,
+): unknown {
+  const compactNotes = asRecord(
+    compactPhonemeGuards(result, store),
+    "result",
+  );
+  const trackIndex = requireInteger(
+    compactNotes.trackIndex,
+    "result.trackIndex",
+  );
+  const groupUuid = requireString(
+    compactNotes.groupUuid,
+    "result.groupUuid",
+  );
+  if (!Array.isArray(compactNotes.automation)) {
+    throw new BridgeProtocolError("result.automation must be an array");
+  }
+  return {
+    ...compactNotes,
+    automation: compactNotes.automation.map((value, index) => {
+      const summary = asRecord(
+        value,
+        `result.automation[${index}]`,
+      );
+      const parameter = requireString(
+        summary.parameter,
+        `result.automation[${index}].parameter`,
+      );
+      return addGuardToken(summary, store, {
+        kind: "automation",
+        trackIndex,
+        groupUuid,
+        parameter,
+      });
+    }),
+  };
+}
+
 export function compactAutomationGuard(
   result: unknown,
   store: GuardTokenStore,

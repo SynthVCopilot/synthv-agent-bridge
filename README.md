@@ -191,6 +191,7 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 | `get_track_notes` | Read | Groups, UUIDs, notes, attributes, offsets, and safe-write fingerprints. |
 | `get_group_voice` | Read | Typed group voice defaults, Vocal Modes, experimental Unison fields, and target selection context. |
 | `get_note_phoneme_data` | Read | User/computed phonemes, phoneset overrides, per-phoneme attributes, and note selection state, with optional compact note-index or seconds-range filtering. |
+| `get_phrase_context` | Read | One compact, write-ready selected/ranged phrase read with note and automation Guard Tokens, voice/Vocal Modes, diagnostics, and recommendation-only review targets. |
 | `get_selection` | Read | Selected groups, notes, Smart Pitch controls, and requested automation points. |
 | `set_selection` | Control | Replace, add, remove, or clear editor selections. |
 | `get_computed_group_data` | Read | Computed phonemes/rap attributes and optional pitch samples. |
@@ -240,6 +241,18 @@ All track, group, and note indices are **1-based**, matching the SynthV Lua API.
 `get_note_phoneme_data`, `get_automation`, and `sample_automation` accept
 `responseMode: "compact"`. Full mode remains the default.
 
+- Prefer `get_phrase_context` before phrase tuning. It can locate the current
+  piano-roll Group without a prior selection call, prefers selected notes when
+  no explicit scope is supplied, and combines compact pitch/timing/phoneme
+  notes, Group voice/Vocal Modes, and bounded automation summaries in one
+  request. Nested note and automation fingerprints become short Guard Tokens.
+- Phrase diagnostics identify timing overlaps, large pitch transitions,
+  sustained notes, breath-sized gaps, and dense short notes without editing the
+  project. `pitchAnalysisFrames` optionally summarizes the computed contour
+  without returning raw frames.
+- Phrase-note seconds are rounded to 0.1 ms. Empty/default phoneme overrides,
+  zero detune, and false selection flags are omitted; non-default values remain,
+  and the response reports `noteDefaultsOmitted` plus `secondsPrecision`.
 - Phoneme reads can filter by exact `noteIndices` and/or an overlapping absolute
   `startSeconds`/`endSeconds` range. Compact notes include timing, lyrics,
   computed phonemes, user overrides, and a short `guardToken`; large raw and
@@ -297,7 +310,9 @@ false success.
 
 The server instructions tell an agent to follow this sequence:
 
-1. Read the project, time axis, track, group, automation, or current selection immediately before editing.
+1. For phrase tuning, call `get_phrase_context` immediately before editing.
+   For other work, read the project, time axis, track, group, automation, or
+   current selection that owns the intended change.
 2. Present or internally construct a small, reviewable change.
 3. Copy the latest applicable group/reference UUIDs and fingerprints, track fingerprint, automation/time-axis fingerprint, and note or Smart Pitch fingerprints.
 4. Call the smallest write tool that completes the intended change. Use

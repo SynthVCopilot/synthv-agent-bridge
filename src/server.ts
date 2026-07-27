@@ -11,6 +11,7 @@ import {
 import {
   compactAutomationGuard,
   compactPhonemeGuards,
+  compactPhraseContextGuards,
   compactTransactionGuards,
   resolveAutomationGuardPayload,
   resolveGuardedActionPayload,
@@ -366,7 +367,7 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     {
       instructions:
-        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, voice, phoneme, library, automation, Smart Pitch state, or selection immediately before writing. Prefer responseMode compact plus note/time filters for tuning workflows, and pass returned Guard Tokens directly to supported writes. When the user refers to the current or selected singer, group, or notes, inspect the returned selection context and enable the applicable selection guard. Explicitly located UUID/index/fingerprint operations may target unselected objects. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Guard Tokens, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits. When the user asks to handle a request from the SynthV sidebar, call sidebar_get_request, read the latest applicable SynthV state, and publish exactly one guarded write or apply_transaction through sidebar_publish_preview instead of executing it directly. Include structured changes and risks. The user confirms or dismisses that preview inside SynthV.",
+        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, voice, phoneme, library, automation, Smart Pitch state, or selection immediately before writing. Prefer get_phrase_context for phrase tuning; otherwise use responseMode compact plus note/time filters, and pass returned Guard Tokens directly to supported writes. When the user refers to the current or selected singer, group, or notes, inspect the returned selection context and enable the applicable selection guard. Explicitly located UUID/index/fingerprint operations may target unselected objects. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Guard Tokens, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits. When the user asks to handle a request from the SynthV sidebar, call sidebar_get_request, read the latest applicable SynthV state, and publish exactly one guarded write or apply_transaction through sidebar_publish_preview instead of executing it directly. Include structured changes and risks. The user confirms or dismisses that preview inside SynthV.",
     },
   );
   sidebar.start();
@@ -907,6 +908,88 @@ export function createServer(config: BridgeConfig): McpServer {
         return input.responseMode === "compact"
           ? compactPhonemeGuards(result, guardTokens)
           : result;
+      }),
+  );
+
+  server.registerTool(
+    "get_phrase_context",
+    {
+      title: "Get Compact SynthV Phrase Context",
+      description:
+        "Read one compact, write-ready tuning context for a selected phrase or absolute time range: notes with pitch/timing/phonemes and Guard Tokens, Group voice and Vocal Modes, automation summaries with Guard Tokens, bounded phrase diagnostics, and recommendation-only review targets. If trackIndex is omitted, the current piano-roll Group is used.",
+      inputSchema: {
+        trackIndex: indexSchema
+          .optional()
+          .describe(
+            "Optional 1-based track index. Omit to use the current piano-roll Group.",
+          ),
+        groupIndex: indexSchema.optional(),
+        groupUuid: groupUuidSchema.optional(),
+        offset: z.number().int().min(0).default(0),
+        limit: z.number().int().min(1).max(256).default(128),
+        noteIndices: z
+          .array(indexSchema)
+          .min(1)
+          .max(256)
+          .optional()
+          .describe("Optional exact 1-based note indices."),
+        startSeconds: z
+          .number()
+          .finite()
+          .min(0)
+          .optional()
+          .describe("Optional absolute phrase start; supply endSeconds too."),
+        endSeconds: z
+          .number()
+          .finite()
+          .min(0)
+          .optional()
+          .describe("Optional absolute phrase end; supply startSeconds too."),
+        preferSelectedNotes: z
+          .boolean()
+          .default(true)
+          .describe(
+            "When no explicit notes or time range are supplied, use selected notes in the current target Group.",
+          ),
+        includeComputedPhonemes: z
+          .boolean()
+          .default(true)
+          .describe(
+            "Disable for a faster pitch/rhythm/Guard refresh that does not need host-computed phonemes.",
+          ),
+        automationParameters: z
+          .array(z.string().min(1).max(200))
+          .max(8)
+          .default(["loudness", "tension", "breathiness"])
+          .describe(
+            "Automation curves to summarize over the phrase and return as compact Guard Tokens.",
+          ),
+        pitchAnalysisFrames: z
+          .number()
+          .int()
+          .min(0)
+          .max(256)
+          .default(0)
+          .describe(
+            "Optional computed-pitch frames to summarize without returning the raw contour. Zero skips the host pitch computation.",
+          ),
+        breathGapSeconds: z
+          .number()
+          .finite()
+          .min(0.05)
+          .max(2)
+          .default(0.18),
+        recommendationLimit: z.number().int().min(0).max(32).default(12),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => {
+        const result = await client.send("get_phrase_context", input);
+        return compactPhraseContextGuards(result, guardTokens);
       }),
   );
 

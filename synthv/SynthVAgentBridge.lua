@@ -3662,6 +3662,10 @@ function handlers.get_note_phoneme_data(payload)
     if includeComputedAttributes == nil then
         includeComputedAttributes = mode == "full"
     end
+    local includePitch = optionalBoolean(payload.includePitch, "includePitch")
+    if includePitch == nil then
+        includePitch = false
+    end
 
     local hasStartSeconds = isProvided(payload.startSeconds)
     local hasEndSeconds = isProvided(payload.endSeconds)
@@ -3796,6 +3800,12 @@ function handlers.get_note_phoneme_data(payload)
             serialized.absoluteDurationSeconds =
                 absoluteEndSeconds - absoluteOnsetSeconds
         end
+        if includePitch then
+            serialized.pitch = note:getPitch()
+            serialized.absolutePitch =
+                note:getPitch() + reference:getPitchOffset()
+            serialized.detune = note:getDetune()
+        end
         notes[#notes + 1] = serialized
     end
 
@@ -3870,6 +3880,501 @@ function handlers.get_note_phoneme_data(payload)
         responseMode = mode,
         notes = notes
     }
+end
+
+local function roundedMetric(value)
+    if type(value) ~= "number" then
+        return JSON_NULL
+    end
+    if value >= 0 then
+        return math.floor(value * 10000 + 0.5) / 10000
+    end
+    return math.ceil(value * 10000 - 0.5) / 10000
+end
+
+local function compactPhraseNoteDefaults(notes)
+    for index = 1, #notes do
+        local note = notes[index]
+        note.absoluteOnsetSeconds =
+            roundedMetric(note.absoluteOnsetSeconds)
+        note.absoluteEndSeconds =
+            roundedMetric(note.absoluteEndSeconds)
+        note.absoluteDurationSeconds =
+            roundedMetric(note.absoluteDurationSeconds)
+        if note.selected == false then
+            note.selected = nil
+        end
+        if note.detune == 0 then
+            note.detune = nil
+        end
+        if note.phonemeSequence == "" then
+            note.phonemeSequence = nil
+        end
+        if note.languageOverride == "" then
+            note.languageOverride = nil
+        end
+        if note.phonesetOverride == JSON_NULL
+            or note.phonesetOverride == "" then
+            note.phonesetOverride = nil
+        end
+        if note.evenSyllableDuration == JSON_NULL
+            or note.evenSyllableDuration == true then
+            note.evenSyllableDuration = nil
+        end
+        if type(note.phonemeAttributes) == "table"
+            and #note.phonemeAttributes == 0 then
+            note.phonemeAttributes = nil
+        end
+    end
+end
+
+local function analyzePhraseNotes(notes, breathGapSeconds, recommendationLimit)
+    local analysis = {
+        noteCount = #notes,
+        startPosition = JSON_NULL,
+        endPosition = JSON_NULL,
+        startSeconds = JSON_NULL,
+        endSeconds = JSON_NULL,
+        durationSeconds = 0,
+        voicedDurationSeconds = 0,
+        meanNoteDurationSeconds = JSON_NULL,
+        minimumPitch = JSON_NULL,
+        maximumPitch = JSON_NULL,
+        pitchRangeSemitones = JSON_NULL,
+        meanPitch = JSON_NULL,
+        gapCount = 0,
+        breathGapCount = 0,
+        overlapCount = 0,
+        largeLeapCount = 0,
+        sustainedNoteCount = 0,
+        shortNoteCount = 0
+    }
+    local recommendations = json.array()
+    if #notes == 0 then
+        return analysis, recommendations
+    end
+
+    local gaps = json.array()
+    local overlaps = json.array()
+    local leaps = json.array()
+    local sustains = json.array()
+    local shortNotes = json.array()
+    local minimumPitch = nil
+    local maximumPitch = nil
+    local pitchTotal = 0
+    local phraseStart = nil
+    local phraseEnd = nil
+    local phraseStartSeconds = nil
+    local phraseEndSeconds = nil
+    local voicedDurationSeconds = 0
+    local previous = nil
+
+    for index = 1, #notes do
+        local note = notes[index]
+        local pitch = note.absolutePitch
+        local onset = note.absoluteOnset
+        local ending = onset + note.duration
+        local onsetSeconds = note.absoluteOnsetSeconds
+        local endSeconds = note.absoluteEndSeconds
+        local durationSeconds = note.absoluteDurationSeconds
+        phraseStart = phraseStart == nil and onset or math.min(phraseStart, onset)
+        phraseEnd = phraseEnd == nil and ending or math.max(phraseEnd, ending)
+        phraseStartSeconds = phraseStartSeconds == nil
+            and onsetSeconds
+            or math.min(phraseStartSeconds, onsetSeconds)
+        phraseEndSeconds = phraseEndSeconds == nil
+            and endSeconds
+            or math.max(phraseEndSeconds, endSeconds)
+        voicedDurationSeconds = voicedDurationSeconds + durationSeconds
+        minimumPitch = minimumPitch == nil and pitch or math.min(minimumPitch, pitch)
+        maximumPitch = maximumPitch == nil and pitch or math.max(maximumPitch, pitch)
+        pitchTotal = pitchTotal + pitch
+
+        if durationSeconds >= 0.75 then
+            analysis.sustainedNoteCount = analysis.sustainedNoteCount + 1
+            sustains[#sustains + 1] = {
+                noteIndex = note.noteIndex,
+                durationSeconds = roundedMetric(durationSeconds)
+            }
+        elseif durationSeconds <= 0.18 then
+            analysis.shortNoteCount = analysis.shortNoteCount + 1
+            shortNotes[#shortNotes + 1] = {
+                noteIndex = note.noteIndex,
+                durationSeconds = roundedMetric(durationSeconds)
+            }
+        end
+
+        if previous ~= nil then
+            local gapSeconds = onsetSeconds - previous.absoluteEndSeconds
+            local interval = math.abs(pitch - previous.absolutePitch)
+            if gapSeconds > 0 then
+                analysis.gapCount = analysis.gapCount + 1
+                if gapSeconds >= breathGapSeconds then
+                    analysis.breathGapCount = analysis.breathGapCount + 1
+                    gaps[#gaps + 1] = {
+                        afterNoteIndex = previous.noteIndex,
+                        beforeNoteIndex = note.noteIndex,
+                        gapSeconds = roundedMetric(gapSeconds)
+                    }
+                end
+            elseif gapSeconds < -0.02 then
+                analysis.overlapCount = analysis.overlapCount + 1
+                overlaps[#overlaps + 1] = {
+                    noteIndices = json.array({
+                        previous.noteIndex,
+                        note.noteIndex
+                    }),
+                    overlapSeconds = roundedMetric(-gapSeconds)
+                }
+            end
+            if interval >= 5 then
+                analysis.largeLeapCount = analysis.largeLeapCount + 1
+                leaps[#leaps + 1] = {
+                    noteIndices = json.array({
+                        previous.noteIndex,
+                        note.noteIndex
+                    }),
+                    intervalSemitones = roundedMetric(interval)
+                }
+            end
+        end
+        previous = note
+    end
+
+    analysis.startPosition = phraseStart
+    analysis.endPosition = phraseEnd
+    analysis.startSeconds = roundedMetric(phraseStartSeconds)
+    analysis.endSeconds = roundedMetric(phraseEndSeconds)
+    analysis.durationSeconds = roundedMetric(
+        phraseEndSeconds - phraseStartSeconds
+    )
+    analysis.voicedDurationSeconds = roundedMetric(voicedDurationSeconds)
+    analysis.meanNoteDurationSeconds = roundedMetric(
+        voicedDurationSeconds / #notes
+    )
+    analysis.minimumPitch = minimumPitch
+    analysis.maximumPitch = maximumPitch
+    analysis.pitchRangeSemitones = roundedMetric(maximumPitch - minimumPitch)
+    analysis.meanPitch = roundedMetric(pitchTotal / #notes)
+
+    local function appendRecommendations(candidates, kind, priority)
+        for index = 1, #candidates do
+            if #recommendations >= recommendationLimit then
+                return
+            end
+            local recommendation = {
+                kind = kind,
+                priority = priority
+            }
+            for key, value in pairs(candidates[index]) do
+                recommendation[key] = value
+            end
+            recommendations[#recommendations + 1] = recommendation
+        end
+    end
+
+    appendRecommendations(overlaps, "timing_overlap", "high")
+    appendRecommendations(leaps, "pitch_transition", "medium")
+    appendRecommendations(sustains, "sustain_expression", "medium")
+    appendRecommendations(gaps, "breath_opportunity", "low")
+    appendRecommendations(shortNotes, "dense_articulation", "low")
+    return analysis, recommendations
+end
+
+local function serializePhraseVoice(reference, trackIndex, groupIndex)
+    local rawVoice = safeCall(function()
+        return reference:getVoice()
+    end, {})
+    if type(rawVoice) ~= "table" then
+        rawVoice = {}
+    end
+    local parameters = {}
+    for publicName, definition in pairs(GROUP_VOICE_PARAMETERS) do
+        parameters[publicName] = valueOrNull(rawVoice[definition.hostKey])
+    end
+    return {
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        referenceFingerprint = makeReferenceFingerprint(reference),
+        parameters = parameters,
+        vocalModes = type(rawVoice.vocalModeParams) == "table"
+            and sanitizeForJson(rawVoice.vocalModeParams)
+            or {}
+    }
+end
+
+local function summarizePhraseAutomation(
+    group,
+    parameterName,
+    beginPosition,
+    endPosition
+)
+    local automation, serialized = serializeAutomation(group, parameterName)
+    local rawPoints = automation:getPoints(beginPosition, endPosition)
+    local middlePosition = math.floor((beginPosition + endPosition) / 2)
+    local startValue = automation:get(beginPosition)
+    local middleValue = automation:get(middlePosition)
+    local endValue = automation:get(endPosition)
+    local minimumValue = math.min(startValue, middleValue, endValue)
+    local maximumValue = math.max(startValue, middleValue, endValue)
+    for index = 1, #rawPoints do
+        minimumValue = math.min(minimumValue, rawPoints[index][2])
+        maximumValue = math.max(maximumValue, rawPoints[index][2])
+    end
+    return {
+        parameter = serialized.parameter,
+        interpolation = serialized.interpolation,
+        fingerprint = serialized.fingerprint,
+        totalPointCount = serialized.pointCount,
+        pointCountInRange = #rawPoints,
+        samples = {
+            start = roundedMetric(startValue),
+            middle = roundedMetric(middleValue),
+            ending = roundedMetric(endValue)
+        },
+        minimum = roundedMetric(minimumValue),
+        maximum = roundedMetric(maximumValue),
+        range = roundedMetric(maximumValue - minimumValue)
+    }
+end
+
+local function summarizeComputedPitch(
+    reference,
+    startPosition,
+    endPosition,
+    frames
+)
+    if frames <= 0 or startPosition == JSON_NULL or endPosition == JSON_NULL then
+        return {
+            included = false
+        }
+    end
+    local interval = frames == 1
+        and math.max(1, endPosition - startPosition)
+        or math.max(1, math.floor((endPosition - startPosition) / (frames - 1)))
+    local rawPitch = SV:getComputedPitchForGroup(
+        reference,
+        startPosition,
+        interval,
+        frames
+    )
+    local minimumPitch = nil
+    local maximumPitch = nil
+    local pitchTotal = 0
+    local voicedFrames = 0
+    for index = 1, frames do
+        local value = rawPitch[index]
+        if type(value) == "number" then
+            minimumPitch = minimumPitch == nil
+                and value
+                or math.min(minimumPitch, value)
+            maximumPitch = maximumPitch == nil
+                and value
+                or math.max(maximumPitch, value)
+            pitchTotal = pitchTotal + value
+            voicedFrames = voicedFrames + 1
+        end
+    end
+    return {
+        included = true,
+        requestedFrames = frames,
+        returnedFrames = #rawPitch,
+        voicedFrames = voicedFrames,
+        pending = #rawPitch == 0,
+        interval = interval,
+        minimumPitch = roundedMetric(minimumPitch),
+        maximumPitch = roundedMetric(maximumPitch),
+        pitchRangeSemitones = minimumPitch ~= nil
+            and roundedMetric(maximumPitch - minimumPitch)
+            or JSON_NULL,
+        meanPitch = voicedFrames > 0
+            and roundedMetric(pitchTotal / voicedFrames)
+            or JSON_NULL
+    }
+end
+
+function handlers.get_phrase_context(payload)
+    payload = requireObject(payload, "payload")
+    local phrasePayload = {}
+    for key, value in pairs(payload) do
+        phrasePayload[key] = value
+    end
+
+    local locatorSource = "explicit"
+    if not isProvided(phrasePayload.trackIndex) then
+        if isProvided(phrasePayload.groupIndex)
+            or isProvided(phrasePayload.groupUuid) then
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "groupIndex/groupUuid require trackIndex, or omit all locators to use the current piano-roll Group"
+            )
+        end
+        local currentReference = safeCall(function()
+            return SV:getMainEditor():getCurrentGroup()
+        end, nil)
+        local current = locateReference(currentReference)
+        if not current or current.instrumental then
+            raiseBridgeError(
+                "GROUP_NOT_FOUND",
+                "The piano roll does not have a current vocal Group"
+            )
+        end
+        phrasePayload.trackIndex = current.trackIndex
+        phrasePayload.groupIndex = current.groupIndex
+        phrasePayload.groupUuid = current.groupUuid
+        locatorSource = "current_editor"
+    end
+
+    local _project, _track, trackIndex, reference, group, groupIndex =
+        resolveGroup(phrasePayload)
+    local selectionContext, selectedNoteIndices =
+        getTargetSelectionContext(reference, group)
+    local hasExplicitIndices = isProvided(phrasePayload.noteIndices)
+    local hasTimeRange = isProvided(phrasePayload.startSeconds)
+        or isProvided(phrasePayload.endSeconds)
+    local preferSelectedNotes = optionalBoolean(
+        phrasePayload.preferSelectedNotes,
+        "preferSelectedNotes"
+    )
+    if preferSelectedNotes == nil then
+        preferSelectedNotes = true
+    end
+    local scopeSource = hasExplicitIndices and "note_indices"
+        or (hasTimeRange and "seconds_range" or "page")
+    if not hasExplicitIndices
+        and not hasTimeRange
+        and preferSelectedNotes
+        and selectionContext.selectedNoteCount > 0 then
+        local selected = json.array()
+        for noteIndex, selectedValue in pairs(selectedNoteIndices) do
+            if selectedValue then
+                selected[#selected + 1] = noteIndex
+            end
+        end
+        table.sort(selected)
+        phrasePayload.noteIndices = selected
+        scopeSource = "selected_notes"
+    end
+
+    phrasePayload.responseMode = "compact"
+    phrasePayload.includeRawAttributes = false
+    phrasePayload.includeComputedAttributes = false
+    phrasePayload.includePitch = true
+    phrasePayload.offset = optionalInteger(
+        phrasePayload.offset,
+        "offset",
+        0,
+        nil,
+        0
+    )
+    phrasePayload.limit = optionalInteger(
+        phrasePayload.limit,
+        "limit",
+        1,
+        256,
+        128
+    )
+    local noteData = handlers.get_note_phoneme_data(phrasePayload)
+    compactPhraseNoteDefaults(noteData.notes)
+    noteData.noteDefaultsOmitted = true
+    noteData.secondsPrecision = 0.0001
+    local breathGapSeconds = optionalNumber(
+        phrasePayload.breathGapSeconds,
+        "breathGapSeconds",
+        0.05,
+        2
+    ) or 0.18
+    local recommendationLimit = optionalInteger(
+        phrasePayload.recommendationLimit,
+        "recommendationLimit",
+        0,
+        32,
+        12
+    )
+    local analysis, recommendations = analyzePhraseNotes(
+        noteData.notes,
+        breathGapSeconds,
+        recommendationLimit
+    )
+
+    local beginPosition = 0
+    local endPosition = 0
+    if analysis.startPosition ~= JSON_NULL then
+        beginPosition =
+            math.max(0, analysis.startPosition - reference:getTimeOffset())
+        endPosition =
+            math.max(beginPosition, analysis.endPosition - reference:getTimeOffset())
+    elseif isProvided(phrasePayload.startSeconds)
+        and isProvided(phrasePayload.endSeconds) then
+        local timeAxis = getProject():getTimeAxis()
+        beginPosition = math.max(
+            0,
+            timeAxis:getBlickFromSeconds(phrasePayload.startSeconds)
+                - reference:getTimeOffset()
+        )
+        endPosition = math.max(
+            beginPosition,
+            timeAxis:getBlickFromSeconds(phrasePayload.endSeconds)
+                - reference:getTimeOffset()
+        )
+    end
+
+    local requestedAutomation = isProvided(phrasePayload.automationParameters)
+        and requireArray(
+            phrasePayload.automationParameters,
+            "automationParameters",
+            0,
+            8
+        )
+        or json.array({ "loudness", "tension", "breathiness" })
+    local automation = json.array()
+    local seenParameters = {}
+    for index = 1, #requestedAutomation do
+        local parameter = requireString(
+            requestedAutomation[index],
+            "automationParameters[" .. index .. "]",
+            false
+        )
+        if seenParameters[parameter] then
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "automationParameters contains a duplicate",
+                { parameter = parameter }
+            )
+        end
+        seenParameters[parameter] = true
+        automation[#automation + 1] = summarizePhraseAutomation(
+            group,
+            parameter,
+            beginPosition,
+            endPosition
+        )
+    end
+
+    local pitchAnalysisFrames = optionalInteger(
+        phrasePayload.pitchAnalysisFrames,
+        "pitchAnalysisFrames",
+        0,
+        256,
+        0
+    )
+    noteData.scope = {
+        locatorSource = locatorSource,
+        source = scopeSource,
+        beginPosition = beginPosition,
+        endPosition = endPosition
+    }
+    noteData.voice = serializePhraseVoice(reference, trackIndex, groupIndex)
+    noteData.analysis = analysis
+    noteData.recommendations = recommendations
+    noteData.automation = automation
+    noteData.pitchAnalysis = summarizeComputedPitch(
+        reference,
+        analysis.startPosition,
+        analysis.endPosition,
+        pitchAnalysisFrames
+    )
+    return noteData
 end
 
 function handlers.get_selection(payload)

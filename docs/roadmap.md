@@ -44,14 +44,16 @@
   Tokens, response-size budgets, and verified phoneme-property retention.
 - Low-latency IPC polling, note-page/index projections, early-ending time-range
   scans, reusable attribute snapshots, and optional computed-phoneme omission.
+- One-request selected/ranged phrase context with write-ready note/automation
+  Guards, compact voice/Vocal Modes, aggregate pitch/rhythm diagnostics, and
+  recommendation-only review targets.
 
-## Next — transaction depth and phrase analysis
+## Next — transaction depth and advanced music analysis
 
 - Dependency-aware transactions that can safely pass newly created object
   locators into later forward steps.
 - Durable rollback metadata with explicit project-revision checks.
 - Selected-range helpers and richer cross-object batch operations.
-- Phrase analysis and recommendation-only previews before edits.
 - Harmony voicing beyond fixed intervals, pronunciation diagnostics, and
   configurable humanization/expression profiles.
 

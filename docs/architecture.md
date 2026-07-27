@@ -79,6 +79,16 @@ client checks for a completed response every 10 ms by default. Session
 ownership is checked every 250 ms and the heartbeat remains one second, keeping
 idle file reads bounded while reducing request wake-up latency.
 
+P2 adds a request-scoped phrase context rather than a cross-request cache.
+Selected notes, an explicit note list, or an absolute-seconds range are scanned
+through the same P1 projections. The executor reuses those notes to derive
+bounded rhythm/pitch diagnostics, compact Group voice data, automation
+summaries, and optional aggregate computed-pitch metrics. The Node boundary
+replaces nested note and automation fingerprints with scope-bound Guard Tokens.
+This collapses the normal selection, note, voice, automation, and pitch-analysis
+read sequence into one correlated IPC request while ensuring every result
+reflects the current SynthV project state.
+
 ## Transaction layer
 
 `apply_transaction` accepts up to 32 existing project-write actions. Before

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   compactAutomationGuard,
   compactPhonemeGuards,
+  compactPhraseContextGuards,
   compactTransactionGuards,
   resolveAutomationGuardPayload,
   resolvePhonemeGuardPayload,
@@ -116,6 +117,100 @@ test("compact phoneme Guards keep a 21-note tuning context below 4 KB", () => {
   const edits = payload.edits as Array<Record<string, unknown>>;
   assert.equal(edits[0]?.fingerprint, noteFingerprint(1));
   assert.equal(edits[0]?.guardToken, undefined);
+});
+
+test("P2 compacts one write-ready phrase context below 8 KB", () => {
+  const store = new GuardTokenStore();
+  const automationFingerprints = [
+    "loudness",
+    "tension",
+    "breathiness",
+  ].map(
+    (parameter) =>
+      `${GROUP_UUID}|${parameter}|Linear|${"[[0,0],".repeat(400)}[]`,
+  );
+  const raw = {
+    trackIndex: 1,
+    groupIndex: 2,
+    groupUuid: GROUP_UUID,
+    matchedNoteCount: 21,
+    returnedNoteCount: 21,
+    responseMode: "compact",
+    scope: { source: "seconds_range" },
+    voice: {
+      referenceFingerprint: `${GROUP_UUID}|voice|Soft=25`,
+      parameters: { loudness: -3, tension: 0.2, breathiness: -0.1 },
+      vocalModes: {
+        Soft: { pitch: 25, timbre: 20, pronunciation: 5 },
+        Powerful: { pitch: 10, timbre: 20, pronunciation: 0 },
+      },
+    },
+    analysis: {
+      noteCount: 21,
+      durationSeconds: 9.3,
+      pitchRangeSemitones: 12,
+      sustainedNoteCount: 2,
+    },
+    recommendations: [
+      {
+        kind: "pitch_transition",
+        priority: "medium",
+        noteIndices: [8, 9],
+        intervalSemitones: 7,
+      },
+    ],
+    notes: Array.from({ length: 21 }, (_, index) => ({
+      noteIndex: index + 1,
+      fingerprint: noteFingerprint(index + 1),
+      lyrics: "词",
+      computedPhonemes: "ts`h i N",
+      onset: index * 352_800_000,
+      duration: 282_240_000,
+      absoluteOnsetSeconds: 182 + index * 0.45,
+      absoluteDurationSeconds: 0.3,
+      absolutePitch: 60 + (index % 8),
+      selected: false,
+    })),
+    automation: automationFingerprints.map((fingerprint, index) => ({
+      parameter: ["loudness", "tension", "breathiness"][index],
+      fingerprint,
+      pointCountInRange: 4,
+      samples: { start: 0, middle: 0.2, ending: 0 },
+      minimum: 0,
+      maximum: 0.2,
+      range: 0.2,
+    })),
+  };
+  const rawLength = JSON.stringify(raw).length;
+  const compact = compactPhraseContextGuards(raw, store) as {
+    notes: Array<Record<string, unknown>>;
+    automation: Array<Record<string, unknown>>;
+  };
+  const serialized = JSON.stringify(compact);
+  assert.ok(
+    serialized.length < 8_000,
+    `compact phrase context was ${serialized.length} chars`,
+  );
+  assert.ok(
+    serialized.length < rawLength * 0.4,
+    `compact phrase context retained too much guard data (${serialized.length}/${rawLength})`,
+  );
+  assert.doesNotMatch(serialized, /fingerprint/u);
+  assert.match(String(compact.notes[0]?.guardToken), /^ng_/u);
+  assert.match(String(compact.automation[0]?.guardToken), /^ag_/u);
+
+  const payload = resolveAutomationGuardPayload(
+    {
+      trackIndex: 1,
+      groupIndex: 2,
+      parameter: "loudness",
+      expectedGuardToken: compact.automation[0]?.guardToken,
+      points: [{ position: 1, value: 0.1 }],
+    },
+    store,
+  );
+  assert.equal(payload.groupUuid, GROUP_UUID);
+  assert.equal(payload.expectedFingerprint, automationFingerprints[0]);
 });
 
 test("compact automation Guards round-trip without exposing the curve fingerprint", () => {
