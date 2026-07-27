@@ -33,6 +33,7 @@ local function indexOf(t, object)
 end
 
 local notePitchAutoWriteSupported = true
+local phonemeStrengthWriteSupported = true
 
 -- SynthV may return distinct Lua proxy values for the same native object.
 -- Delegate every member while intentionally preserving distinct identity.
@@ -160,7 +161,18 @@ local function makeNote()
     function n:getDetune() return self.detune end
     function n:setDetune(v) self.detune=v end
     function n:getAttributes() return deepCopy(self.attrs) end
-    function n:setAttributes(v) for k,x in pairs(v) do self.attrs[k]=deepCopy(x) end end
+    function n:setAttributes(v)
+        for k,x in pairs(v) do self.attrs[k]=deepCopy(x) end
+        if not phonemeStrengthWriteSupported
+            and type(self.attrs.phonemes) == "table" then
+            for _, phoneme in ipairs(self.attrs.phonemes) do
+                if type(phoneme) == "table"
+                    and type(phoneme.strength) == "number" then
+                    phoneme.strength = 1
+                end
+            end
+        end
+    end
     function n:getLanguageOverride() return self.languageOverride end
     function n:setLanguageOverride(v) self.languageOverride=v end
     function n:getMusicalType() return self.musicalType end
@@ -251,6 +263,7 @@ local function makeAutomation(name)
 end
 
 local nextUuid=1
+local groupGetNoteCalls=0
 local function makeGroup()
     local g=attachScriptData({ notes={}, pitchControls={}, params={}, uuid="00000000-0000-4000-8000-"..string.format("%012d",nextUuid), name="Main" })
     nextUuid=nextUuid+1
@@ -260,7 +273,10 @@ local function makeGroup()
     function g:getName() return self.name end
     function g:setName(v) self.name=v end
     function g:getNumNotes() return #self.notes end
-    function g:getNote(i) return self.notes[i] end
+    function g:getNote(i)
+        groupGetNoteCalls=groupGetNoteCalls+1
+        return self.notes[i]
+    end
     function g:addNote(n)
         n.parent=self; self.notes[#self.notes+1]=n
         table.sort(self.notes,function(x,y)return x.onset<y.onset end)
@@ -448,6 +464,8 @@ local function makeTrack()
     return t
 end
 
+local secondsFromBlickCalls=0
+local blickFromSecondsCalls=0
 local function makeTimeAxis()
     local axis=attachScriptData({tempo={[0]=120},measures={[0]={numerator=4,denominator=4}}})
     local function sortedKeys(values)
@@ -457,6 +475,7 @@ local function makeTimeAxis()
         return keys
     end
     function axis:getSecondsFromBlick(b)
+        secondsFromBlickCalls=secondsFromBlickCalls+1
         local keys=sortedKeys(self.tempo)
         local seconds=0
         for index,position in ipairs(keys) do
@@ -470,6 +489,7 @@ local function makeTimeAxis()
         return seconds
     end
     function axis:getBlickFromSeconds(seconds)
+        blickFromSecondsCalls=blickFromSecondsCalls+1
         local keys=sortedKeys(self.tempo)
         local remaining=seconds
         for index,position in ipairs(keys) do
@@ -653,12 +673,14 @@ function arrangement:getNavigation() return arrangementNavigation end
 scheduled=nil
 SV={QUARTER=705600000}
 local clipboard=""
+local computedPhonemeCalls=0
 function SV:getHostInfo() return {osType="Linux",hostName="Mock SynthV",hostVersion="2.2.0",hostVersionNumber=131584,languageCode="en-us"} end
 function SV:getProject() return project end
 function SV:getPlayback() return playback end
 function SV:getMainEditor() return mainEditor end
 function SV:getArrangement() return arrangement end
 function SV:getPhonemesForGroup(reference)
+    computedPhonemeCalls=computedPhonemeCalls+1
     local result={}
     for _,note in ipairs(reference.group.notes) do
         result[#result+1]=note.phonemes~="" and note.phonemes or "l a"
@@ -765,7 +787,7 @@ local function callExpectError(action,payload,errorCode)
 end
 
 local pingResponse=call("ping","{}")
-assert(pingResponse:find('"bridgeVersion":"0.1.4"',1,true),"expected Bridge version 0.1.4")
+assert(pingResponse:find('"bridgeVersion":"0.1.5"',1,true),"expected Bridge version 0.1.5")
 local initialSessionToken=extractJsonString(pingResponse,"sessionToken")
 local reloadResponse=call("reload_bridge","{}")
 assert(reloadResponse:find('"reloading":true',1,true),"hot reload was not acknowledged")
@@ -803,6 +825,11 @@ local advancedFingerprint=extractJsonString(advancedAdded,"fingerprint")
 local phonemeRead=call("get_note_phoneme_data",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'"}')
 assert(phonemeRead:find('"computedPhonemes":"l a"',1,true),"computed phonemes were not returned")
 assert(phonemeRead:find('"currentEditorGroup":false',1,true),"unselected Group context was not returned")
+local compactPhonemeRead=call("get_note_phoneme_data",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","responseMode":"compact","noteIndices":[1],"startSeconds":0,"endSeconds":10}')
+assert(compactPhonemeRead:find('"responseMode":"compact"',1,true),"compact phoneme mode was not returned")
+assert(compactPhonemeRead:find('"absoluteOnsetSeconds":',1,true),"compact phoneme timing was not returned")
+assert(not compactPhonemeRead:find('"computedAttributes":',1,true),"compact phoneme read returned computed attributes by default")
+assert(not compactPhonemeRead:find('"attributes":',1,true),"compact phoneme read returned raw attributes by default")
 local undoBeforeUnselectedPhoneme=project.undo
 callExpectError("set_note_phoneme_properties",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","requireSelectedNotes":true,"edits":[{"noteIndex":1,"fingerprint":"'..escape(advancedFingerprint)..'","changes":{"phonemeSequence":"hh eh l ow"}}]}',"SELECTION_MISMATCH")
 assert(project.undo==undoBeforeUnselectedPhoneme,"selection-guarded phoneme edit must not create an undo record")
@@ -811,9 +838,21 @@ assert(phonemeUpdated:find('"phonemes":"hh eh l ow"',1,true),"phoneme sequence w
 assert(project.tracks[2].refs[1].group.notes[1].attrs.phonesetOverride=="arpabet","phoneset override was not applied")
 assert(project.tracks[2].refs[1].group.notes[1].attrs.phonemes[1].strength==0.8,"phoneme strength was not applied")
 local phonemeFingerprint=extractJsonString(phonemeUpdated,"fingerprint")
+local compactPhonemeUpdated=callWrite("set_note_phoneme_properties",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","responseMode":"compact","edits":[{"noteIndex":1,"fingerprint":"'..escape(phonemeFingerprint)..'","changes":{"evenSyllableDuration":false}}]}')
+assert(compactPhonemeUpdated:find('"responseMode":"compact"',1,true),"compact phoneme write mode was not returned")
+assert(not compactPhonemeUpdated:find('"absoluteDurationSeconds":',1,true),"compact phoneme write returned a full note")
+phonemeFingerprint=extractJsonString(compactPhonemeUpdated,"fingerprint")
 local undoBeforeInvalidPhoneme=project.undo
 callExpectError("set_note_phoneme_properties",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","edits":[{"noteIndex":1,"fingerprint":"'..escape(phonemeFingerprint)..'","changes":{"phonemeAttributes":[{"unsupported":1}]}}]}',"INVALID_ARGUMENT")
 assert(project.undo==undoBeforeInvalidPhoneme,"invalid phoneme edit must not create an undo record")
+phonemeStrengthWriteSupported=false
+local unsupportedPhonemeVoice=call("get_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'"}')
+assert(unsupportedPhonemeVoice:find('"strengthRetained":false',1,true),"phoneme capability probe did not report host clamping")
+local undoBeforeUnsupportedPhoneme=project.undo
+callExpectError("set_note_phoneme_properties",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","edits":[{"noteIndex":1,"fingerprint":"'..escape(phonemeFingerprint)..'","changes":{"phonemeAttributes":[{"strength":1.2},{"leftOffset":0.05,"activity":0.9}]}}]}',"HOST_POSTCONDITION_FAILED")
+assert(project.undo==undoBeforeUnsupportedPhoneme,"unretained phoneme edit must fail before an undo record")
+assert(project.tracks[2].refs[1].group.notes[1].attrs.phonemes[1].strength==0.8,"failed phoneme preflight changed the project note")
+phonemeStrengthWriteSupported=true
 notePitchAutoWriteSupported=false
 local fallbackAdded=callWrite("add_notes",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","notes":[{"onset":705600000,"duration":705600000,"pitch":64,"lyrics":"fallback","pitchAutoMode":true}]}')
 assert(fallbackAdded:find('"pitchAutoMode":true',1,true),"matching pitch mode should not require an unavailable setter")
@@ -822,6 +861,40 @@ local undoBeforeUnsupportedPitchMode=project.undo
 callExpectError("edit_notes",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","edits":[{"noteIndex":2,"fingerprint":"'..escape(fallbackFingerprint)..'","changes":{"pitchAutoMode":false}}]}',"UNSUPPORTED_HOST_CAPABILITY")
 assert(project.undo==undoBeforeUnsupportedPitchMode,"unsupported pitch mode edit must not create an undo record")
 notePitchAutoWriteSupported=true
+
+local getNoteCallsBeforeProjection=groupGetNoteCalls
+local computedCallsBeforeProjection=computedPhonemeCalls
+local projectedPhonemes=call(
+    "get_note_phoneme_data",
+    '{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..
+        '","responseMode":"compact","noteIndices":[2,1,2],"offset":1,"limit":1,'..
+        '"includeComputedPhonemes":false}'
+)
+assert(projectedPhonemes:find('"scanMode":"index_projection"',1,true),"note-index projection fast path was not reported")
+assert(projectedPhonemes:find('"scannedNoteCount":1',1,true),"note-index projection scanned more than its returned page")
+assert(projectedPhonemes:find('"matchedNoteCount":2',1,true),"note-index projection did not deduplicate indices")
+assert(projectedPhonemes:find('"noteIndex":2',1,true),"note-index projection did not preserve group order and pagination")
+assert(not projectedPhonemes:find('"computedPhonemes":',1,true),"computed phonemes were returned after being disabled")
+assert(projectedPhonemes:find('"computedPhonemesIncluded":false',1,true),"computed phoneme omission was not reported")
+assert(groupGetNoteCalls==getNoteCallsBeforeProjection+1,"note-index projection fetched notes outside its returned page")
+assert(computedPhonemeCalls==computedCallsBeforeProjection,"disabled computed phonemes still called the host")
+
+local getNoteCallsBeforeRange=groupGetNoteCalls
+local blickCallsBeforeRange=blickFromSecondsCalls
+local secondsCallsBeforeRange=secondsFromBlickCalls
+local rangedPhonemes=call(
+    "get_note_phoneme_data",
+    '{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..
+        '","responseMode":"compact","startSeconds":0,"endSeconds":0.1,'..
+        '"includeComputedPhonemes":false}'
+)
+assert(rangedPhonemes:find('"scanMode":"time_range"',1,true),"time-range fast path was not reported")
+assert(rangedPhonemes:find('"scannedNoteCount":2',1,true),"time-range fast path did not stop at the first later note")
+assert(rangedPhonemes:find('"matchedNoteCount":1',1,true),"time-range fast path returned the wrong match count")
+assert(groupGetNoteCalls==getNoteCallsBeforeRange+2,"time-range fast path fetched an unexpected number of notes")
+assert(blickFromSecondsCalls==blickCallsBeforeRange+2,"time-range fast path did not convert boundaries once")
+assert(secondsFromBlickCalls==secondsCallsBeforeRange+2,"time-range fast path converted timing for non-returned notes")
+
 local track2Fingerprint="main-group:"..track2GroupUuid
 callWrite("update_track",'{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Lead Source","bounced":true}')
 local groupVoice=call("get_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'"}')
@@ -898,7 +971,9 @@ call("get_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness"}')
 local undoBeforeStaleAutomation=project.undo
 callExpectError("set_automation_points",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","expectedFingerprint":"stale","points":[{"position":0,"value":-3}]}',"STALE_AUTOMATION")
 assert(project.undo==undoBeforeStaleAutomation,"stale automation edit must not create an undo record")
-callWrite("set_automation_points",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","clearMode":"all","points":[{"position":0,"value":-3},{"position":705600000,"value":0}]}')
+local compactAutomationWrite=callWrite("set_automation_points",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","responseMode":"compact","clearMode":"all","points":[{"position":0,"value":-3},{"position":705600000,"value":0}]}')
+assert(compactAutomationWrite:find('"responseMode":"compact"',1,true),"compact automation write mode was not returned")
+assert(not compactAutomationWrite:find('"points":',1,true),"compact automation write returned the full curve")
 callWrite("clear_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","rangeBegin":0,"rangeEnd":100}')
 local track1Fingerprint="main-group:"..project.tracks[1].refs[1].group.uuid
 callWrite("set_track_mixer",'{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","gainDecibel":-3,"pan":0.25,"muted":false,"solo":true}')
@@ -1074,5 +1149,5 @@ callWrite(
 local finalNotes=call("get_track_notes",'{"trackIndex":1,"offset":0,"limit":100}')
 local finalFingerprint=extractJsonString(finalNotes,"fingerprint")
 callWrite("delete_notes",'{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(finalFingerprint)..'"}]}')
-assert(project.undo==44,"expected 44 undo records, got "..project.undo)
+assert(project.undo==45,"expected 45 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

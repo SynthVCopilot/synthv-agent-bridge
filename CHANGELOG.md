@@ -2,6 +2,36 @@
 
 All notable changes will be documented in this file.
 
+## 0.1.5 - 2026-07-27
+
+### Added
+
+- Optional `compact` responses for phoneme and automation tuning workflows,
+  including note-index/absolute-seconds filters and compact write
+  acknowledgements.
+- MCP-local short Guard Tokens that replace verbose note and automation
+  fingerprints in compact responses while preserving protocol-v1 stale-write
+  validation inside SynthV.
+- Clone-first and project-write postcondition checks for phoneme properties,
+  plus a read-only Group voice capability probe for phoneme-strength retention.
+- Response-size regression coverage that keeps a representative 21-note compact
+  tuning context below 4 KB.
+- Projection diagnostics and an `includeComputedPhonemes` switch for
+  guard/override refreshes that do not require whole-Group host computation.
+
+### Changed
+
+- MCP text results now use minified JSON to reduce transport and model-context
+  overhead. Full response mode remains the backward-compatible default.
+- Guard Tokens are resolved consistently for direct writes, transaction steps,
+  and sidebar previews; compact transaction results return replacement tokens.
+- Exact-index and ordinary paginated phoneme reads fetch only the returned page;
+  time filters convert their boundaries once and stop after the range, and note
+  attributes are snapshotted once per returned note.
+- Default response polling is reduced from 50 ms to 10 ms, with the Lua request
+  loop reduced from 100 ms to 25 ms while retaining one-second heartbeats and
+  bounded session ownership checks.
+
 ## 0.1.4 - 2026-07-26
 
 ### Added

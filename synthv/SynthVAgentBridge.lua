@@ -12,11 +12,12 @@ if debug and debug.getinfo then
 end
 
 local SCRIPT_NAME = "Start SynthV Agent Bridge"
-local BRIDGE_VERSION = "0.1.4"
+local BRIDGE_VERSION = "0.1.5"
 local PROTOCOL_VERSION = 1
 local MIN_EDITOR_VERSION = 131330 -- Synthesizer V Studio 2.1.2
-local POLL_INTERVAL_MS = 100
-local HEARTBEAT_EVERY_POLLS = 10
+local POLL_INTERVAL_MS = 25
+local HEARTBEAT_EVERY_POLLS = 40
+local SESSION_CHECK_EVERY_POLLS = 10
 local MAX_REQUEST_BYTES = 8 * 1024 * 1024
 
 local json = {}
@@ -612,6 +613,14 @@ local function optionalBoolean(value, name)
     return requireBoolean(value, name)
 end
 
+local function responseMode(payload)
+    local mode = optionalString(payload.responseMode, "responseMode", false) or "full"
+    if mode ~= "full" and mode ~= "compact" then
+        raiseBridgeError("INVALID_ARGUMENT", "responseMode must be full or compact")
+    end
+    return mode
+end
+
 local function safeCall(callback, fallback)
     local ok, result = pcall(callback)
     if ok then
@@ -953,10 +962,11 @@ local function sanitizeForJson(value, seen)
     return result
 end
 
-local function makeNoteFingerprint(groupUuid, noteIndex, note)
+local function makeNoteFingerprint(groupUuid, noteIndex, note, encodedAttributes)
     local lyrics = note:getLyrics() or ""
     local phonemes = note:getPhonemes() or ""
-    local attributes = json.encode(sanitizeForJson(note:getAttributes()))
+    local attributes = encodedAttributes
+        or json.encode(sanitizeForJson(note:getAttributes()))
     local languageOverride = safeCall(function()
         return note:getLanguageOverride()
     end, "") or ""
@@ -993,6 +1003,8 @@ end
 
 local function serializeNote(group, reference, note, noteIndex)
     local groupUuid = group:getUUID()
+    local sanitizedAttributes = sanitizeForJson(note:getAttributes())
+    local encodedAttributes = json.encode(sanitizedAttributes)
     local localOnset = note:getOnset()
     local localEnd = note:getEnd()
     local localPitch = note:getPitch()
@@ -1005,7 +1017,12 @@ local function serializeNote(group, reference, note, noteIndex)
 
     local result = {
         noteIndex = noteIndex,
-        fingerprint = makeNoteFingerprint(groupUuid, noteIndex, note),
+        fingerprint = makeNoteFingerprint(
+            groupUuid,
+            noteIndex,
+            note,
+            encodedAttributes
+        ),
         onset = localOnset,
         duration = note:getDuration(),
         endPosition = localEnd,
@@ -1013,7 +1030,7 @@ local function serializeNote(group, reference, note, noteIndex)
         lyrics = note:getLyrics(),
         phonemes = note:getPhonemes(),
         detune = note:getDetune(),
-        attributes = sanitizeForJson(note:getAttributes()),
+        attributes = sanitizedAttributes,
         absoluteOnset = absoluteOnset,
         absoluteEnd = absoluteEnd,
         absolutePitch = absolutePitch,
@@ -1363,6 +1380,54 @@ local function valueOrNull(value)
     return value
 end
 
+local function inspectPhonemeCapabilities(group)
+    if group:getNumNotes() < 1 then
+        return {
+            strengthRetained = JSON_NULL,
+            reason = "no_notes"
+        }
+    end
+    local ok, retained = pcall(function()
+        local candidate = group:getNote(1):clone()
+        local rawAttributes = candidate:getAttributes()
+        if type(rawAttributes) ~= "table" then
+            rawAttributes = {}
+        end
+        local phonemes = json.array()
+        if type(rawAttributes.phonemes) == "table" then
+            phonemes = sanitizeForJson(rawAttributes.phonemes)
+        end
+        if type(phonemes[1]) ~= "table" then
+            phonemes[1] = {}
+        end
+        local current = type(phonemes[1].strength) == "number"
+            and phonemes[1].strength
+            or 1
+        local probe = current <= 0.9 and 1.2 or 0.8
+        phonemes[1].strength = probe
+        candidate:setAttributes({ phonemes = phonemes })
+        local retainedAttributes = candidate:getAttributes()
+        local retainedPhonemes = type(retainedAttributes) == "table"
+            and retainedAttributes.phonemes
+            or nil
+        local actual = type(retainedPhonemes) == "table"
+            and type(retainedPhonemes[1]) == "table"
+            and retainedPhonemes[1].strength
+            or nil
+        return type(actual) == "number" and math.abs(actual - probe) <= 0.000001
+    end)
+    if not ok then
+        return {
+            strengthRetained = false,
+            reason = "host_rejected_probe"
+        }
+    end
+    return {
+        strengthRetained = retained == true,
+        reason = retained == true and "verified_on_clone" or "host_changed_value"
+    }
+end
+
 local function serializeGroupVoice(reference, trackIndex, groupIndex)
     if reference:isInstrumental() then
         raiseBridgeError("INVALID_ARGUMENT", "Instrumental references do not expose vocal voice properties")
@@ -1409,6 +1474,7 @@ local function serializeGroupVoice(reference, trackIndex, groupIndex)
             singers = singersPresent and rawVoice.singers or JSON_NULL,
             spacing = spacingPresent and rawVoice.spacing or JSON_NULL
         },
+        phonemeCapabilities = inspectPhonemeCapabilities(group),
         rawVoice = sanitizeForJson(rawVoice)
     }
 end
@@ -2264,6 +2330,89 @@ local function preparePhonemeAttributes(value, path)
     return result
 end
 
+local function verifyPhonemePostconditions(note, prepared, path, phase)
+    local function fail(field, requestedValue, actualValue)
+        raiseBridgeError(
+            "HOST_POSTCONDITION_FAILED",
+            "SynthV did not retain a requested phoneme property",
+            {
+                capability = "Note.phonemeProperties",
+                field = field,
+                phase = phase,
+                requestedValue = valueOrNull(requestedValue),
+                actualValue = valueOrNull(actualValue)
+            }
+        )
+    end
+
+    if prepared.phonemes ~= nil then
+        local actual = note:getPhonemes()
+        if actual ~= prepared.phonemes then
+            fail(path .. ".phonemeSequence", prepared.phonemes, actual)
+        end
+    end
+    if prepared.languageOverride ~= nil then
+        local actual = safeCall(function()
+            return note:getLanguageOverride()
+        end, nil)
+        if actual ~= prepared.languageOverride then
+            fail(path .. ".languageOverride", prepared.languageOverride, actual)
+        end
+    end
+    if prepared.attributes == nil then
+        return
+    end
+
+    local actualAttributes = note:getAttributes()
+    if type(actualAttributes) ~= "table" then
+        fail(path .. ".attributes", prepared.attributes, actualAttributes)
+    end
+    for key, expected in pairs(prepared.attributes) do
+        if key ~= "phonemes" then
+            local actual = actualAttributes[key]
+            local matches = type(expected) == "number"
+                and numbersMatch(expected, actual)
+                or actual == expected
+            if not matches then
+                fail(path .. "." .. key, expected, actual)
+            end
+        else
+            local actualPhonemes = actualAttributes.phonemes
+            if type(actualPhonemes) ~= "table" then
+                fail(path .. ".phonemeAttributes", expected, actualPhonemes)
+            end
+            if #actualPhonemes ~= #expected then
+                fail(
+                    path .. ".phonemeAttributes.length",
+                    #expected,
+                    #actualPhonemes
+                )
+            end
+            for phonemeIndex = 1, #expected do
+                local expectedPhoneme = expected[phonemeIndex]
+                local actualPhoneme = actualPhonemes[phonemeIndex]
+                if type(actualPhoneme) ~= "table" then
+                    fail(
+                        path .. ".phonemeAttributes[" .. phonemeIndex .. "]",
+                        expectedPhoneme,
+                        actualPhoneme
+                    )
+                end
+                for attribute, expectedValue in pairs(expectedPhoneme) do
+                    local actualValue = actualPhoneme[attribute]
+                    if not numbersMatch(expectedValue, actualValue) then
+                        fail(
+                            path .. ".phonemeAttributes[" .. phonemeIndex .. "]." .. attribute,
+                            expectedValue,
+                            actualValue
+                        )
+                    end
+                end
+            end
+        end
+    end
+end
+
 local function preparePhonemePropertyChanges(note, changes, path)
     changes = requireObject(changes, path)
     local allowedKeys = {
@@ -2323,7 +2472,11 @@ local function preparePhonemePropertyChanges(note, changes, path)
     if next(mapped) == nil then
         raiseBridgeError("INVALID_ARGUMENT", path .. " must change at least one phoneme property")
     end
-    return prepareNoteChanges(note, mapped, path)
+    local prepared = prepareNoteChanges(note, mapped, path)
+    local candidate = note:clone()
+    applyPreparedNoteChanges(candidate, prepared, path)
+    verifyPhonemePostconditions(candidate, prepared, path, "preflight")
+    return prepared
 end
 
 local function createNoteFromInput(input, path)
@@ -3484,59 +3637,237 @@ end
 
 function handlers.get_note_phoneme_data(payload)
     payload = requireObject(payload, "payload")
-    local _project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
+    local mode = responseMode(payload)
+    local project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
     local offset = optionalInteger(payload.offset, "offset", 0, nil, 0)
     local limit = optionalInteger(payload.limit, "limit", 1, 1000, 1000)
-    local computedPhonemes = SV:getPhonemesForGroup(reference)
-    local computedAttributes = SV:getComputedAttributesForGroup(reference)
-    local selectionContext, selectedNoteIndices =
-        getTargetSelectionContext(reference, group)
-    local noteCount = group:getNumNotes()
-    local startIndex = math.min(noteCount + 1, offset + 1)
-    local endIndex = math.min(noteCount, offset + limit)
-    local notes = json.array()
+    local includeComputedPhonemes = optionalBoolean(
+        payload.includeComputedPhonemes,
+        "includeComputedPhonemes"
+    )
+    if includeComputedPhonemes == nil then
+        includeComputedPhonemes = true
+    end
+    local includeRawAttributes = optionalBoolean(
+        payload.includeRawAttributes,
+        "includeRawAttributes"
+    )
+    if includeRawAttributes == nil then
+        includeRawAttributes = mode == "full"
+    end
+    local includeComputedAttributes = optionalBoolean(
+        payload.includeComputedAttributes,
+        "includeComputedAttributes"
+    )
+    if includeComputedAttributes == nil then
+        includeComputedAttributes = mode == "full"
+    end
 
-    for noteIndex = startIndex, endIndex do
-        local note = group:getNote(noteIndex)
-        local rawAttributes = note:getAttributes()
-        if type(rawAttributes) ~= "table" then
-            rawAttributes = {}
-        end
-        local phonemeAttributes = json.array()
-        if type(rawAttributes.phonemes) == "table" then
-            for index = 1, #rawAttributes.phonemes do
-                phonemeAttributes[index] = sanitizeForJson(rawAttributes.phonemes[index])
+    local hasStartSeconds = isProvided(payload.startSeconds)
+    local hasEndSeconds = isProvided(payload.endSeconds)
+    if hasStartSeconds ~= hasEndSeconds then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "startSeconds and endSeconds must be supplied together"
+        )
+    end
+    local startSeconds = nil
+    local endSeconds = nil
+    local startBlick = nil
+    local endBlick = nil
+    local timeAxis = nil
+    if hasStartSeconds then
+        startSeconds = requireFiniteNumber(payload.startSeconds, "startSeconds", 0)
+        endSeconds = requireFiniteNumber(payload.endSeconds, "endSeconds", startSeconds)
+        timeAxis = project:getTimeAxis()
+        startBlick = timeAxis:getBlickFromSeconds(startSeconds)
+        endBlick = timeAxis:getBlickFromSeconds(endSeconds)
+    end
+
+    local noteCount = group:getNumNotes()
+    local requestedNoteIndices = nil
+    if isProvided(payload.noteIndices) then
+        local values = requireArray(payload.noteIndices, "noteIndices", 1, 512)
+        local seenNoteIndices = {}
+        requestedNoteIndices = json.array()
+        for index = 1, #values do
+            local noteIndex = requireInteger(
+                values[index],
+                "noteIndices[" .. index .. "]",
+                1,
+                noteCount
+            )
+            if not seenNoteIndices[noteIndex] then
+                seenNoteIndices[noteIndex] = true
+                requestedNoteIndices[#requestedNoteIndices + 1] = noteIndex
             end
         end
-        notes[#notes + 1] = {
+        table.sort(requestedNoteIndices)
+    end
+
+    local computedPhonemes = json.array()
+    if includeComputedPhonemes then
+        computedPhonemes = SV:getPhonemesForGroup(reference)
+    end
+    local computedAttributes = json.array()
+    if includeComputedAttributes then
+        computedAttributes = SV:getComputedAttributesForGroup(reference)
+    end
+    local selectionContext, selectedNoteIndices =
+        getTargetSelectionContext(reference, group)
+    local notes = json.array()
+    local matchedNoteCount = 0
+    local scannedNoteCount = 0
+    local timeOffset = reference:getTimeOffset()
+    local groupUuid = group:getUUID()
+    local scanMode = "page_projection"
+    if requestedNoteIndices ~= nil then
+        scanMode = hasStartSeconds and "index_time_range" or "index_projection"
+    elseif hasStartSeconds then
+        scanMode = "time_range"
+    end
+
+    local function serializeMatchedNote(
+        noteIndex,
+        note,
+        absoluteOnset,
+        absoluteEnd
+    )
+        local attributeValue = note:getAttributes()
+        local sanitizedAttributeValue = sanitizeForJson(attributeValue)
+        local rawAttributes = type(attributeValue) == "table"
+            and attributeValue
+            or {}
+        local sanitizedAttributes = type(attributeValue) == "table"
+            and sanitizedAttributeValue
+            or {}
+        local encodedAttributes = json.encode(sanitizedAttributeValue)
+        local phonemeAttributes = json.array()
+        if type(sanitizedAttributes.phonemes) == "table" then
+            for index = 1, #sanitizedAttributes.phonemes do
+                phonemeAttributes[index] = sanitizedAttributes.phonemes[index]
+            end
+        end
+
+        local serialized = {
             noteIndex = noteIndex,
             selected = selectedNoteIndices[noteIndex] == true,
-            fingerprint = makeNoteFingerprint(group:getUUID(), noteIndex, note),
+            fingerprint = makeNoteFingerprint(
+                groupUuid,
+                noteIndex,
+                note,
+                encodedAttributes
+            ),
             lyrics = note:getLyrics(),
             phonemeSequence = note:getPhonemes(),
             languageOverride = safeCall(function()
                 return note:getLanguageOverride()
             end, ""),
             phonesetOverride = valueOrNull(rawAttributes.phonesetOverride),
-            evenSyllableDuration = valueOrNull(rawAttributes.evenSyllableDuration),
-            phonemeAttributes = phonemeAttributes,
-            attributes = sanitizeForJson(rawAttributes),
-            computedPhonemes = valueOrNull(computedPhonemes[noteIndex]),
-            computedAttributes = valueOrNull(sanitizeForJson(computedAttributes[noteIndex]))
+            evenSyllableDuration = valueOrNull(
+                rawAttributes.evenSyllableDuration
+            ),
+            phonemeAttributes = phonemeAttributes
         }
+        if includeComputedPhonemes then
+            serialized.computedPhonemes =
+                valueOrNull(computedPhonemes[noteIndex])
+        end
+        if includeRawAttributes then
+            serialized.attributes = sanitizedAttributes
+        end
+        if includeComputedAttributes then
+            serialized.computedAttributes =
+                valueOrNull(sanitizeForJson(computedAttributes[noteIndex]))
+        end
+        if mode == "compact" then
+            if timeAxis == nil then
+                timeAxis = project:getTimeAxis()
+            end
+            local absoluteOnsetSeconds =
+                timeAxis:getSecondsFromBlick(absoluteOnset)
+            local absoluteEndSeconds =
+                timeAxis:getSecondsFromBlick(absoluteEnd)
+            serialized.onset = note:getOnset()
+            serialized.duration = note:getDuration()
+            serialized.absoluteOnset = absoluteOnset
+            serialized.absoluteOnsetSeconds = absoluteOnsetSeconds
+            serialized.absoluteEndSeconds = absoluteEndSeconds
+            serialized.absoluteDurationSeconds =
+                absoluteEndSeconds - absoluteOnsetSeconds
+        end
+        notes[#notes + 1] = serialized
+    end
+
+    if not hasStartSeconds then
+        local sourceCount = requestedNoteIndices ~= nil
+            and #requestedNoteIndices
+            or noteCount
+        matchedNoteCount = sourceCount
+        local firstResult = math.min(offset + 1, sourceCount + 1)
+        local lastResult = math.min(offset + limit, sourceCount)
+        for sourceIndex = firstResult, lastResult do
+            local noteIndex = requestedNoteIndices ~= nil
+                and requestedNoteIndices[sourceIndex]
+                or sourceIndex
+            local note = group:getNote(noteIndex)
+            scannedNoteCount = scannedNoteCount + 1
+            serializeMatchedNote(
+                noteIndex,
+                note,
+                note:getOnset() + timeOffset,
+                note:getEnd() + timeOffset
+            )
+        end
+    else
+        local sourceCount = requestedNoteIndices ~= nil
+            and #requestedNoteIndices
+            or noteCount
+        for sourceIndex = 1, sourceCount do
+            local noteIndex = requestedNoteIndices ~= nil
+                and requestedNoteIndices[sourceIndex]
+                or sourceIndex
+            local note = group:getNote(noteIndex)
+            scannedNoteCount = scannedNoteCount + 1
+            local absoluteOnset = note:getOnset() + timeOffset
+            if absoluteOnset > endBlick then
+                break
+            end
+            local absoluteEnd = note:getEnd() + timeOffset
+            if absoluteEnd >= startBlick then
+                matchedNoteCount = matchedNoteCount + 1
+                if matchedNoteCount > offset and #notes < limit then
+                    serializeMatchedNote(
+                        noteIndex,
+                        note,
+                        absoluteOnset,
+                        absoluteEnd
+                    )
+                end
+            end
+        end
     end
 
     return {
         trackIndex = trackIndex,
         groupIndex = groupIndex,
-        groupUuid = group:getUUID(),
+        groupUuid = groupUuid,
         selectionContext = selectionContext,
         noteCount = noteCount,
+        matchedNoteCount = matchedNoteCount,
         returnedNoteOffset = offset,
         returnedNoteCount = #notes,
-        hasMore = endIndex < noteCount,
-        phonemesPending = noteCount > 0 and #computedPhonemes == 0,
-        attributesPending = noteCount > 0 and #computedAttributes == 0,
+        hasMore = matchedNoteCount > offset + #notes,
+        computedPhonemesIncluded = includeComputedPhonemes,
+        phonemesPending = includeComputedPhonemes
+            and noteCount > 0
+            and #computedPhonemes == 0,
+        attributesPending = includeComputedAttributes
+            and noteCount > 0
+            and #computedAttributes == 0,
+        scanMode = scanMode,
+        scannedNoteCount = scannedNoteCount,
+        responseMode = mode,
         notes = notes
     }
 end
@@ -4644,6 +4975,7 @@ end
 
 function handlers.set_note_phoneme_properties(payload)
     payload = requireObject(payload, "payload")
+    local mode = responseMode(payload)
     local project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
     local edits = requireArray(payload.edits, "edits", 1, 512)
     local prepared = {}
@@ -4694,18 +5026,33 @@ function handlers.set_note_phoneme_properties(payload)
     createUndoRecord(project)
     for index = 1, #prepared do
         applyPreparedNoteChanges(prepared[index].note, prepared[index].changes, prepared[index].path)
+        verifyPhonemePostconditions(
+            prepared[index].note,
+            prepared[index].changes,
+            prepared[index].path,
+            "project_write"
+        )
     end
 
     local notes = json.array()
     for index = 1, #prepared do
         local note = prepared[index].note
-        notes[#notes + 1] = serializeNote(group, reference, note, note:getIndexInParent())
+        local noteIndex = note:getIndexInParent()
+        if mode == "compact" then
+            notes[#notes + 1] = {
+                noteIndex = noteIndex,
+                fingerprint = makeNoteFingerprint(group:getUUID(), noteIndex, note)
+            }
+        else
+            notes[#notes + 1] = serializeNote(group, reference, note, noteIndex)
+        end
     end
     return {
         trackIndex = trackIndex,
         groupIndex = groupIndex,
         groupUuid = group:getUUID(),
         editedCount = #notes,
+        responseMode = mode,
         notes = notes
     }
 end
@@ -5142,6 +5489,7 @@ end
 
 function handlers.set_automation_points(payload)
     payload = requireObject(payload, "payload")
+    local mode = responseMode(payload)
     local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
     local parameterName = requireString(payload.parameter, "parameter", false)
     local automation, serializedBefore = serializeAutomation(group, parameterName)
@@ -5194,6 +5542,20 @@ function handlers.set_automation_points(payload)
     serialized.groupUuid = group:getUUID()
     serialized.addedOrUpdatedCount = #prepared
     serialized.clearMode = clearMode
+    if mode == "compact" then
+        return {
+            trackIndex = trackIndex,
+            groupIndex = groupIndex,
+            groupUuid = group:getUUID(),
+            parameter = serialized.parameter,
+            interpolation = serialized.interpolation,
+            fingerprint = serialized.fingerprint,
+            pointCount = serialized.pointCount,
+            addedOrUpdatedCount = #prepared,
+            clearMode = clearMode,
+            responseMode = mode
+        }
+    end
     return serialized
 end
 
@@ -5925,7 +6287,9 @@ local function poll()
     if stopped then
         return
     end
-    if not ownsSession() then
+    pollCount = pollCount + 1
+    if (pollCount == 1 or pollCount % SESSION_CHECK_EVERY_POLLS == 0)
+        and not ownsSession() then
         stopBridge("A newer SynthV Agent Bridge session replaced this one.")
         return
     end
@@ -5946,7 +6310,6 @@ local function poll()
     if reloadRequested ~= nil and performHotReload() then
         return
     end
-    pollCount = pollCount + 1
     if pollCount % HEARTBEAT_EVERY_POLLS == 0 then
         local wrote, statusError = writeStatus("running")
         if not wrote then
@@ -5962,7 +6325,7 @@ function getClientInfo()
         name = SCRIPT_NAME,
         author = "Pengjie Zhou",
         category = "SynthV Agent Bridge",
-        versionNumber = 4,
+        versionNumber = 5,
         minEditorVersion = MIN_EDITOR_VERSION
     }
 end

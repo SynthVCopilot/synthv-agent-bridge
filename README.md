@@ -4,7 +4,7 @@ A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server 
 
 The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse or rewrite `.svp` files, open a network port, or call an AI API by itself.
 
-> Status: **v0.1.4 pre-release**. The protocol, safety guards, broad official
+> Status: **v0.1.5 pre-release**. The protocol, safety guards, broad official
 > scripting-API coverage, native side-panel workflow, guarded transactions,
 > and first musical semantic tools are implemented. Test on copies of important
 > projects.
@@ -190,7 +190,7 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 | `clone_group_reference` | Write | Make a linked or deep-copied reference on another track. |
 | `get_track_notes` | Read | Groups, UUIDs, notes, attributes, offsets, and safe-write fingerprints. |
 | `get_group_voice` | Read | Typed group voice defaults, Vocal Modes, experimental Unison fields, and target selection context. |
-| `get_note_phoneme_data` | Read | User/computed phonemes, phoneset overrides, per-phoneme attributes, and note selection state. |
+| `get_note_phoneme_data` | Read | User/computed phonemes, phoneset overrides, per-phoneme attributes, and note selection state, with optional compact note-index or seconds-range filtering. |
 | `get_selection` | Read | Selected groups, notes, Smart Pitch controls, and requested automation points. |
 | `set_selection` | Control | Replace, add, remove, or clear editor selections. |
 | `get_computed_group_data` | Read | Computed phonemes/rap attributes and optional pitch samples. |
@@ -203,7 +203,7 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 | `delete_group_reference` | Destructive | Remove a non-main vocal or instrumental reference. |
 | `add_notes` | Write | Add notes to a specific group. |
 | `edit_notes` | Write | Edit fingerprint-verified notes. |
-| `set_note_phoneme_properties` | Write | Edit fingerprint-verified phoneme, phoneset, syllable, timing, and strength properties, with optional current-Group/selected-note guards. |
+| `set_note_phoneme_properties` | Write | Edit fingerprint/Guard-verified phoneme, phoneset, syllable, timing, and strength properties, with optional compact acknowledgement and current-Group/selected-note guards. |
 | `delete_notes` | Destructive | Delete fingerprint-verified notes. |
 | `get_note_retakes` | Read | Read take count and Bridge-tracked Take IDs. |
 | `generate_note_retake` | Write | Generate duration, pitch, or timbre variations. |
@@ -213,10 +213,10 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 | `add_pitch_controls` | Write | Add point or curve Smart Pitch objects. |
 | `edit_pitch_controls` | Write | Edit fingerprint-verified Smart Pitch objects. |
 | `delete_pitch_controls` | Destructive | Delete fingerprint-verified Smart Pitch objects. |
-| `get_automation` | Read | Read a parameter definition and every control point. |
+| `get_automation` | Read | Read a parameter definition and control points, optionally returning a compact Guard Token instead of the verbose curve fingerprint. |
 | `sample_automation` | Read | Sample native or linear curve values at requested positions. |
 | `simplify_automation` | Destructive | Remove insignificant points in a curve range. |
-| `set_automation_points` | Write | Add/update points, optionally clearing all or a range first. |
+| `set_automation_points` | Write | Add/update fingerprint/Guard-verified points, optionally clearing all or a range first and returning a compact acknowledgement. |
 | `clear_automation` | Destructive | Clear a complete curve or a selected range. |
 | `get_editor_view` | Read | Read editor time/value ranges and pixel scales. |
 | `set_editor_view` | Control | Move or scale the main-editor or arrangement viewport. |
@@ -234,6 +234,40 @@ Open an MCP-enabled conversation and ask it to call `bridge_status`, followed by
 | `playback` | Control | Read status, play, pause, stop, seek, or loop. |
 
 All track, group, and note indices are **1-based**, matching the SynthV Lua API. Note and automation coordinates are group-local blicks unless the returned field explicitly says `absolute`. Playback positions are seconds.
+
+### Compact tuning responses
+
+`get_note_phoneme_data`, `get_automation`, and `sample_automation` accept
+`responseMode: "compact"`. Full mode remains the default.
+
+- Phoneme reads can filter by exact `noteIndices` and/or an overlapping absolute
+  `startSeconds`/`endSeconds` range. Compact notes include timing, lyrics,
+  computed phonemes, user overrides, and a short `guardToken`; large raw and
+  computed attribute objects are omitted unless explicitly requested.
+- Exact-index and ordinary paginated reads only fetch the returned note page.
+  Time ranges convert their two boundaries once and stop scanning after the
+  first later note. Set `includeComputedPhonemes: false` when only refreshing
+  Guard Tokens or user overrides, avoiding the whole-Group host computation.
+- Pass a note `guardToken` to `set_note_phoneme_properties` instead of its
+  verbose `fingerprint`.
+- Compact automation reads return `guardToken`; pass it as
+  `expectedGuardToken` to `set_automation_points`.
+- These Guard Tokens also work inside `apply_transaction` steps and
+  `sidebar_publish_preview` payloads; they are resolved before the plan reaches
+  file IPC.
+- Compact write responses contain counts and replacement Guard Tokens instead
+  of complete notes or automation curves.
+
+Guard Tokens are opaque and live only in the current MCP server process. After a
+restart, eviction, or `UNKNOWN_GUARD_TOKEN` error, read the target again. The
+server resolves the token to the original protocol-v1 fingerprint before the
+request reaches SynthV, so existing stale-write protection is unchanged.
+
+Phoneme writes are verified on a detached clone before an undo record is
+created, then verified again on the project note. A host or legacy voice that
+quantizes or ignores a requested value fails with
+`HOST_POSTCONDITION_FAILED`. `get_group_voice.phonemeCapabilities` reports
+whether phoneme strength survived a safe clone-only probe.
 
 ### Track colors
 
@@ -306,7 +340,7 @@ The Node server and SynthV script must resolve the **same physical IPC directory
 |---|---:|---|
 | `SYNTHV_AGENT_BRIDGE_DIR` | OS temporary directory | Shared IPC directory. |
 | `SYNTHV_AGENT_BRIDGE_TIMEOUT_MS` | `15000` | Maximum response wait. |
-| `SYNTHV_AGENT_BRIDGE_POLL_MS` | `50` | Node response polling interval. |
+| `SYNTHV_AGENT_BRIDGE_POLL_MS` | `10` | Node response polling interval. |
 | `SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS` | `30000` | Age at which abandoned request files and locks can be recovered. Must be greater than the response timeout. |
 | `SYNTHV_AGENT_BRIDGE_STATUS_STALE_MS` | `5000` | Maximum heartbeat age considered connected. |
 

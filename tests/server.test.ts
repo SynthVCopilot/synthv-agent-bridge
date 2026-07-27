@@ -38,3 +38,28 @@ test("every protocol action is registered exactly once as an MCP tool", async ()
     [...BRIDGE_ACTIONS].sort(),
   );
 });
+
+test("MCP tool text results use compact JSON", async () => {
+  const compiledServer = await readFile(
+    new URL("../src/server.js", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(
+    compiledServer,
+    /JSON\.stringify\(value,\s*null,\s*2\)/,
+  );
+});
+
+test("P1 uses low-latency host polling and exposes selective phoneme computation", async () => {
+  const [compiledServer, bridgeSource] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(
+      new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  assert.match(compiledServer, /includeComputedPhonemes/);
+  assert.match(bridgeSource, /local POLL_INTERVAL_MS = 25/);
+  assert.match(bridgeSource, /local HEARTBEAT_EVERY_POLLS = 40/);
+  assert.match(bridgeSource, /local SESSION_CHECK_EVERY_POLLS = 10/);
+});

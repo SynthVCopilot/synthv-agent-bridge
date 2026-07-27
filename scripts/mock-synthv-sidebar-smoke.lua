@@ -22,7 +22,7 @@ local now = os.time() * 1000
 writeFile(
     prefix .. ".status.json",
     string.format(
-        '{"state":"running","updatedAtEpochMs":%d,"bridgeVersion":"0.1.4"}\n',
+        '{"state":"running","updatedAtEpochMs":%d,"bridgeVersion":"0.1.5"}\n',
         now
     )
 )
@@ -31,7 +31,7 @@ writeFile(
     table.concat({
         "synthv-agent-bridge-sidebar-client-status-v1",
         "state=running",
-        "version=0.1.4",
+        "version=0.1.5",
         "updatedAtEpochMs=" .. tostring(now),
         ""
     }, "\n")
@@ -145,10 +145,10 @@ assert(loadfile(sidebarScript))()
 
 local clientInfo = getClientInfo()
 assert(clientInfo.type == "SidePanelSection", "side panel client type was not registered")
-assert(clientInfo.versionNumber == 4, "side panel version number was not updated")
+assert(clientInfo.versionNumber == 5, "side panel version number was not updated")
 
 local state = getSidePanelSectionState()
-assert(state.title:find("0.1.4", 1, true), "side panel title has no version")
+assert(state.title:find("0.1.5", 1, true), "side panel title has no version")
 assert(#state.rows == 14, "unexpected side panel row count")
 
 local bridgeStatusWidget = state.rows[2].columns[1].value
@@ -156,8 +156,8 @@ local clientStatusWidget = state.rows[2].columns[2].value
 local taskStateWidget = state.rows[3].columns[1].value
 local diagnosticsWidget = state.rows[3].columns[2].value
 local selectionWidget = state.rows[5].columns[1].value
-assert(bridgeStatusWidget.value:find("B 0.1.4", 1, true), "Bridge heartbeat was not displayed")
-assert(clientStatusWidget.value:find("M 0.1.4", 1, true), "MCP heartbeat was not displayed")
+assert(bridgeStatusWidget.value:find("B 0.1.5", 1, true), "Bridge heartbeat was not displayed")
+assert(clientStatusWidget.value:find("M 0.1.5", 1, true), "MCP heartbeat was not displayed")
 assert(taskStateWidget.value:find("Idle", 1, true), "task state was not displayed")
 diagnosticsWidget.callback()
 assert(lastMessage and lastMessage:find("IPC:", 1, true), "diagnostics did not show the IPC path")

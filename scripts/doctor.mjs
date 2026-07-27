@@ -82,8 +82,8 @@ function sha256(content) {
 
 record(
   "package-version",
-  expectedVersion === "0.1.4" ? "ok" : "error",
-  `Package version is ${expectedVersion}; this feature line must remain 0.1.4.`,
+  expectedVersion === "0.1.5" ? "ok" : "error",
+  `Package version is ${expectedVersion}; this feature line must remain 0.1.5.`,
 );
 
 const sourceBridge = await readText(

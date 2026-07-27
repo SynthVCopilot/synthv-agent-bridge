@@ -40,6 +40,10 @@
   object metadata.
 - Typed Group voice and Vocal Mode settings, dedicated phoneme properties, and
   host-validated experimental Unison access.
+- Compact tuning reads/writes, note/time-range filtering, short MCP-local Guard
+  Tokens, response-size budgets, and verified phoneme-property retention.
+- Low-latency IPC polling, note-page/index projections, early-ending time-range
+  scans, reusable attribute snapshots, and optional computed-phoneme omission.
 
 ## Next — transaction depth and phrase analysis
 

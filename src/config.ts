@@ -3,7 +3,7 @@ import path from "node:path";
 
 export const PROTOCOL_VERSION = 1 as const;
 export const SERVER_NAME = "synthv-agent-bridge";
-export const SERVER_VERSION = "0.1.4";
+export const SERVER_VERSION = "0.1.5";
 
 export interface BridgePaths {
   readonly directory: string;
@@ -69,7 +69,7 @@ export function loadConfig(
   );
   const pollIntervalMs = positiveInteger(
     env.SYNTHV_AGENT_BRIDGE_POLL_MS,
-    50,
+    10,
     "SYNTHV_AGENT_BRIDGE_POLL_MS",
   );
   const staleRequestMs = positiveInteger(

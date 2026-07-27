@@ -81,3 +81,7 @@ test("loadConfig requires stale recovery to outlive the response timeout", () =>
     /must be greater than SYNTHV_AGENT_BRIDGE_TIMEOUT_MS/,
   );
 });
+
+test("loadConfig uses the low-latency P1 response poll by default", () => {
+  assert.equal(loadConfig({}, "/tmp").pollIntervalMs, 10);
+});

@@ -8,7 +8,17 @@ import {
   SERVER_VERSION,
   type BridgeConfig,
 } from "./config.js";
+import {
+  compactAutomationGuard,
+  compactPhonemeGuards,
+  compactTransactionGuards,
+  resolveAutomationGuardPayload,
+  resolveGuardedActionPayload,
+  resolvePhonemeGuardPayload,
+  resolveTransactionGuardPayload,
+} from "./compact-results.js";
 import { toPublicError } from "./errors.js";
+import { GuardTokenStore } from "./guard-token-store.js";
 import { FileIpcClient } from "./ipc/file-ipc-client.js";
 import {
   SIDEBAR_PREVIEW_ACTIONS,
@@ -21,7 +31,9 @@ const blickSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const durationSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
 const midiPitchSchema = z.number().int().min(0).max(127);
 const fingerprintSchema = z.string().min(1);
+const guardTokenSchema = z.string().min(1).max(128);
 const groupUuidSchema = z.string().min(1);
+const responseModeSchema = z.enum(["full", "compact"]).default("full");
 export const TRACK_DISPLAY_COLOR_PATTERN =
   /^(?:#[0-9A-Fa-f]{6}|#?[0-9A-Fa-f]{8})$/;
 const displayColorSchema = z
@@ -100,6 +112,21 @@ const phonemePropertyChangesSchema = z
   .refine(
     (value) => Object.values(value).some((entry) => entry !== undefined),
     { message: "At least one phoneme property must be changed." },
+  );
+
+const guardedPhonemeEditSchema = z
+  .object({
+    noteIndex: indexSchema,
+    fingerprint: fingerprintSchema.optional(),
+    guardToken: guardTokenSchema
+      .optional()
+      .describe("Short Guard Token returned by a compact phoneme read."),
+    changes: phonemePropertyChangesSchema,
+  })
+  .refine(
+    (value) =>
+      value.fingerprint !== undefined || value.guardToken !== undefined,
+    { message: "Each edit requires fingerprint or guardToken." },
   );
 
 const groupLocatorShape = {
@@ -300,7 +327,7 @@ function jsonToolResult(value: unknown): CallToolResult {
     content: [
       {
         type: "text",
-        text: JSON.stringify(value, null, 2),
+        text: JSON.stringify(value),
       },
     ],
   };
@@ -313,7 +340,7 @@ function errorToolResult(error: unknown): CallToolResult {
     content: [
       {
         type: "text",
-        text: JSON.stringify({ ok: false, error: publicError }, null, 2),
+        text: JSON.stringify({ ok: false, error: publicError }),
       },
     ],
   };
@@ -329,6 +356,7 @@ async function runTool(operation: () => Promise<unknown>): Promise<CallToolResul
 
 export function createServer(config: BridgeConfig): McpServer {
   const client = new FileIpcClient(config);
+  const guardTokens = new GuardTokenStore();
   const sidebar = new SidebarCoordinator(config, client);
   const server = new McpServer(
     {
@@ -338,7 +366,7 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     {
       instructions:
-        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, voice, phoneme, library, automation, Smart Pitch state, or selection immediately before writing. When the user refers to the current or selected singer, group, or notes, inspect the returned selection context and enable the applicable selection guard. Explicitly located UUID/index/fingerprint operations may target unselected objects. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits. When the user asks to handle a request from the SynthV sidebar, call sidebar_get_request, read the latest applicable SynthV state, and publish exactly one guarded write or apply_transaction through sidebar_publish_preview instead of executing it directly. Include structured changes and risks. The user confirms or dismisses that preview inside SynthV.",
+        "Control Synthesizer V Studio through the local bridge. Read the current project, time axis, track, group, voice, phoneme, library, automation, Smart Pitch state, or selection immediately before writing. Prefer responseMode compact plus note/time filters for tuning workflows, and pass returned Guard Tokens directly to supported writes. When the user refers to the current or selected singer, group, or notes, inspect the returned selection context and enable the applicable selection guard. Explicitly located UUID/index/fingerprint operations may target unselected objects. All indices are 1-based. Copy groupUuid, trackFingerprint, reference/library/automation fingerprints, and note or pitch-control fingerprints from the latest applicable read; never invent fingerprints, Guard Tokens, Take IDs, or UUIDs. Each project-write call becomes one SynthV undo record. Prefer small, reviewable edits. When the user asks to handle a request from the SynthV sidebar, call sidebar_get_request, read the latest applicable SynthV state, and publish exactly one guarded write or apply_transaction through sidebar_publish_preview instead of executing it directly. Include structured changes and risks. The user confirms or dismisses that preview inside SynthV.",
     },
   );
   sidebar.start();
@@ -445,8 +473,16 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async (input) =>
-      runTool(async () =>
-        sidebar.publishPreview({
+      runTool(async () => {
+        const payload =
+          input.action === "apply_transaction"
+            ? resolveTransactionGuardPayload(input.payload, guardTokens)
+            : resolveGuardedActionPayload(
+                input.action,
+                input.payload,
+                guardTokens,
+              );
+        return sidebar.publishPreview({
           ...(input.requestId === undefined
             ? {}
             : { requestId: input.requestId }),
@@ -455,10 +491,10 @@ export function createServer(config: BridgeConfig): McpServer {
           ...(input.changes === undefined ? {} : { changes: input.changes }),
           ...(input.risks === undefined ? {} : { risks: input.risks }),
           action: input.action,
-          payload: input.payload,
+          payload,
           replace: input.replace,
-        }),
-      ),
+        });
+      }),
   );
 
   server.registerTool(
@@ -821,11 +857,44 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Get SynthV Note Phoneme Data",
       description:
-        "Read user phoneme overrides, phoneset and per-phoneme attributes together with SynthV's computed phonemes and per-note selection state for one vocal group.",
+        "Read user phoneme overrides, phoneset and per-phoneme attributes together with computed phonemes and selection state. Prefer responseMode compact with noteIndices or startSeconds/endSeconds for tuning; compact notes return short Guard Tokens.",
       inputSchema: {
         ...groupLocatorShape,
         offset: z.number().int().min(0).default(0),
         limit: z.number().int().min(1).max(1000).default(1000),
+        noteIndices: z
+          .array(indexSchema)
+          .min(1)
+          .max(512)
+          .optional()
+          .describe("Optional exact 1-based note indices to return."),
+        startSeconds: z
+          .number()
+          .finite()
+          .min(0)
+          .optional()
+          .describe("Optional absolute range start; supply endSeconds too."),
+        endSeconds: z
+          .number()
+          .finite()
+          .min(0)
+          .optional()
+          .describe("Optional absolute range end; supply startSeconds too."),
+        includeComputedPhonemes: z
+          .boolean()
+          .optional()
+          .describe(
+            "Defaults true. Set false for a faster guard/override refresh that does not need host-computed phonemes.",
+          ),
+        includeRawAttributes: z
+          .boolean()
+          .optional()
+          .describe("Defaults true in full mode and false in compact mode."),
+        includeComputedAttributes: z
+          .boolean()
+          .optional()
+          .describe("Defaults true in full mode and false in compact mode."),
+        responseMode: responseModeSchema,
       },
       annotations: {
         readOnlyHint: true,
@@ -833,7 +902,12 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async (input) =>
-      runTool(async () => client.send("get_note_phoneme_data", input)),
+      runTool(async () => {
+        const result = await client.send("get_note_phoneme_data", input);
+        return input.responseMode === "compact"
+          ? compactPhonemeGuards(result, guardTokens)
+          : result;
+      }),
   );
 
   server.registerTool(
@@ -1155,7 +1229,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Set SynthV Note Phoneme Properties",
       description:
-        "Safely edit fingerprint-verified phoneme sequences, per-note language or phoneset overrides, syllable timing mode, and per-phoneme timing/strength attributes.",
+        "Safely edit fingerprint- or Guard-verified phoneme sequences, language/phoneset overrides, syllable timing, and per-phoneme timing/strength attributes. Compact mode returns only counts and fresh Guard Tokens.",
       inputSchema: {
         ...groupLocatorShape,
         requireCurrentEditorGroup: z
@@ -1170,16 +1244,8 @@ export function createServer(config: BridgeConfig): McpServer {
           .describe(
             "Reject unless every edited note is currently selected in the target piano-roll group.",
           ),
-        edits: z
-          .array(
-            z.object({
-              noteIndex: indexSchema,
-              fingerprint: fingerprintSchema,
-              changes: phonemePropertyChangesSchema,
-            }),
-          )
-          .min(1)
-          .max(512),
+        responseMode: responseModeSchema,
+        edits: z.array(guardedPhonemeEditSchema).min(1).max(512),
       },
       annotations: {
         readOnlyHint: false,
@@ -1189,9 +1255,16 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async (input) =>
-      runTool(async () =>
-        client.send("set_note_phoneme_properties", input),
-      ),
+      runTool(async () => {
+        const payload = resolvePhonemeGuardPayload(input, guardTokens);
+        const result = await client.send(
+          "set_note_phoneme_properties",
+          payload,
+        );
+        return input.responseMode === "compact"
+          ? compactPhonemeGuards(result, guardTokens)
+          : result;
+      }),
   );
 
   server.registerTool(
@@ -1417,32 +1490,13 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Get SynthV Automation",
       description:
-        "Read all control points and the official definition for a group parameter such as pitchDelta, loudness, tension, breathiness, voicing, gender, vibratoEnv, or vocalMode_<Name>.",
+        "Read control points and the official definition for a group parameter. Compact mode replaces the verbose curve fingerprint with a short Guard Token.",
       inputSchema: {
         ...groupLocatorShape,
         parameter: z.string().min(1),
         rangeBegin: blickSchema.optional(),
         rangeEnd: blickSchema.optional(),
-      },
-      annotations: {
-        readOnlyHint: true,
-        openWorldHint: false,
-      },
-    },
-    async (input) => runTool(async () => client.send("get_automation", input)),
-  );
-
-  server.registerTool(
-    "sample_automation",
-    {
-      title: "Sample SynthV Automation",
-      description:
-        "Evaluate a group automation curve at requested positions using native or forced-linear interpolation.",
-      inputSchema: {
-        ...groupLocatorShape,
-        parameter: z.string().min(1),
-        positions: z.array(blickSchema).min(1).max(10000),
-        interpolation: z.enum(["native", "linear"]).default("native"),
+        responseMode: responseModeSchema,
       },
       annotations: {
         readOnlyHint: true,
@@ -1450,7 +1504,39 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async (input) =>
-      runTool(async () => client.send("sample_automation", input)),
+      runTool(async () => {
+        const result = await client.send("get_automation", input);
+        return input.responseMode === "compact"
+          ? compactAutomationGuard(result, guardTokens)
+          : result;
+      }),
+  );
+
+  server.registerTool(
+    "sample_automation",
+    {
+      title: "Sample SynthV Automation",
+      description:
+        "Evaluate a group automation curve at requested positions using native or forced-linear interpolation. Compact mode returns a short Guard Token.",
+      inputSchema: {
+        ...groupLocatorShape,
+        parameter: z.string().min(1),
+        positions: z.array(blickSchema).min(1).max(10000),
+        interpolation: z.enum(["native", "linear"]).default("native"),
+        responseMode: responseModeSchema,
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => {
+        const result = await client.send("sample_automation", input);
+        return input.responseMode === "compact"
+          ? compactAutomationGuard(result, guardTokens)
+          : result;
+      }),
   );
 
   server.registerTool(
@@ -1483,17 +1569,21 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Set SynthV Automation Points",
       description:
-        "Add or update group-local automation points. Optionally clear all points or a range first. Values are validated against SynthV's parameter definition.",
+        "Add or update group-local automation points using an expected fingerprint or compact Guard Token. Optionally clear points first; compact mode omits the full resulting curve.",
       inputSchema: {
         ...groupLocatorShape,
         parameter: z.string().min(1),
         expectedFingerprint: fingerprintSchema
           .optional()
           .describe("Latest automation fingerprint from get_automation."),
+        expectedGuardToken: guardTokenSchema
+          .optional()
+          .describe("Short Guard Token returned by a compact automation read."),
         clearMode: z.enum(["none", "all", "range"]).default("none"),
         rangeBegin: blickSchema.optional(),
         rangeEnd: blickSchema.optional(),
         points: z.array(automationPointSchema).min(1).max(10000),
+        responseMode: responseModeSchema,
       },
       annotations: {
         readOnlyHint: false,
@@ -1503,7 +1593,13 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async (input) =>
-      runTool(async () => client.send("set_automation_points", input)),
+      runTool(async () => {
+        const payload = resolveAutomationGuardPayload(input, guardTokens);
+        const result = await client.send("set_automation_points", payload);
+        return input.responseMode === "compact"
+          ? compactAutomationGuard(result, guardTokens)
+          : result;
+      }),
   );
 
   server.registerTool(
@@ -1717,7 +1813,11 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async (input) =>
-      runTool(async () => client.send("apply_transaction", input)),
+      runTool(async () => {
+        const payload = resolveTransactionGuardPayload(input, guardTokens);
+        const result = await client.send("apply_transaction", payload);
+        return compactTransactionGuards(payload, result, guardTokens);
+      }),
   );
 
   server.registerTool(

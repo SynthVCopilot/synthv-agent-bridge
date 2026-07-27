@@ -66,6 +66,14 @@ Protocol v1 keeps concurrency fields optional for backward compatibility. New cl
 - `expectedFingerprint` for automation, time-axis, and library-group writes.
 - `trackFingerprint` for track updates, clones, deletes, and mixer writes.
 
+The MCP layer additionally supports short `guardToken` and
+`expectedGuardToken` values in compact tuning workflows. These tokens are
+resolved in memory to the original fingerprint before a protocol-v1 request is
+written, including guarded steps nested in `apply_transaction` and payloads
+staged through `sidebar_publish_preview`, so the Lua executor continues to
+compare the complete current fingerprint. Guard Tokens are intentionally
+invalid after the MCP server restarts or evicts an old entry.
+
 The bridge reports `STALE_GROUP`, `STALE_GROUP_REFERENCE`,
 `STALE_LIBRARY_GROUP`, `STALE_NOTE`, `STALE_PITCH_CONTROL`, `STALE_TRACK`,
 `STALE_AUTOMATION`, or `STALE_TIME_AXIS` before creating an undo record when a
@@ -79,6 +87,25 @@ supplied guard no longer matches.
 - A protocol-version mismatch fails closed.
 - New action names and optional payload fields may be added without changing the v1 envelope.
 - Unknown fields may be added to read responses in minor releases; clients should ignore fields they do not recognize.
+
+### Compact tuning responses
+
+The additive `responseMode` payload field accepts `full` or `compact`; `full`
+is the backward-compatible default. Compact phoneme reads may also provide
+`noteIndices` and/or an absolute `startSeconds`/`endSeconds` overlap range.
+Compact writes return counts and fresh fingerprints rather than complete
+serialized objects. At the MCP boundary those fingerprints are replaced by
+short Guard Tokens.
+
+`includeComputedPhonemes` defaults to `true` for backward compatibility. When
+false, the executor skips `SV:getPhonemesForGroup` and omits each note's
+`computedPhonemes` field. Read responses report `computedPhonemesIncluded`,
+`scanMode`, and `scannedNoteCount`; these additive diagnostics let clients
+confirm whether an index, page, or time-range fast path was used.
+
+The file envelope and protocol version do not change. Response mode is an
+optional v1 payload field, and the Node-only Guard Token substitution is not
+part of the file IPC contract.
 
 ### Additive v1 actions
 

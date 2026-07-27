@@ -52,6 +52,33 @@ same serialized `FileIpcClient` and v1 request channel as a normal MCP call.
 
 The Node side serializes calls and owns the lock. It writes requests using a temporary file plus rename. The Lua side claims a request by renaming it to the processing filename, executes it on SynthV's script thread, and publishes one correlated response.
 
+## Compact MCP boundary
+
+Full protocol-v1 fingerprints deliberately contain all guarded state, which can
+be large for automation curves and attribute-heavy notes. Compact MCP reads
+replace those values with random, scope-bound Guard Tokens held in a bounded
+Node memory cache. A compact write resolves the token back to the original
+fingerprint before entering file IPC. SynthV therefore performs the same
+complete stale-state comparison as a full request, while the model sees only a
+short opaque handle.
+
+Compact phoneme reads also filter inside the Lua executor by note index or
+absolute seconds before serialization. Compact write acknowledgements omit
+complete notes and curves. Full mode remains unchanged for clients that need
+every host field.
+
+P1 adds projection fast paths. Unfiltered pagination and exact note-index reads
+fetch only the returned page instead of walking the complete Group. Time-range
+reads convert the two second boundaries to blicks once and stop when sorted note
+onsets pass the range. Attribute snapshots are sanitized once and reused for
+both the response and the unchanged complete fingerprint. Callers that only
+need Guard Tokens or user overrides can disable host-computed phonemes.
+
+The persistent Lua executor checks for requests every 25 ms, while the Node
+client checks for a completed response every 10 ms by default. Session
+ownership is checked every 250 ms and the heartbeat remains one second, keeping
+idle file reads bounded while reducing request wake-up latency.
+
 ## Transaction layer
 
 `apply_transaction` accepts up to 32 existing project-write actions. Before

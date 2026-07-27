@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 local SCRIPT_NAME = "SynthV Agent"
-local SIDEBAR_VERSION = "0.1.4"
+local SIDEBAR_VERSION = "0.1.5"
 local MIN_EDITOR_VERSION = 131330 -- Synthesizer V Studio 2.1.2
 local POLL_INTERVAL_MS = 500
 local MAX_TEXT_BYTES = 64 * 1024
@@ -658,7 +658,7 @@ function getClientInfo()
         name = SCRIPT_NAME,
         author = "Pengjie Zhou",
         category = "SynthV Agent Bridge",
-        versionNumber = 4,
+        versionNumber = 5,
         minEditorVersion = MIN_EDITOR_VERSION,
         type = "SidePanelSection"
     }
