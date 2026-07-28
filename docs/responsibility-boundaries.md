@@ -37,6 +37,9 @@ The Agent may analyze lyrics, propose phrasing, choose exact note/phoneme/
 automation targets, and provide explicit values. It must not guess a Vocal or
 untouched Vocal Mode names. It reads only the intended target, prefers one
 related batch, and rereads after stale-state or session-change errors.
+The bundled Twinkle Star Demo remains Agent-owned orchestration: its explicit
+score and tuning recipe live in `examples/twinkle-star-demo.json`, while the
+MCP and Lua layers continue to validate and execute only supplied values.
 
 ### TypeScript MCP
 

@@ -28,6 +28,16 @@ const V2_INCLUDE_VALUES = [
   "diagnostics",
 ] as const;
 
+type V2IncludeValue = (typeof V2_INCLUDE_VALUES)[number];
+
+const DEFAULT_PHRASE_INCLUDE: readonly V2IncludeValue[] = [
+  "notes",
+  "voice",
+  "analysis",
+];
+
+const V2_INCLUDE_VALUE_SET = new Set<string>(V2_INCLUDE_VALUES);
+
 const EXPLICIT_DELETE_ACTIONS = new Set([
   "clear_automation",
   "delete_group_reference",
@@ -534,9 +544,54 @@ function stripDiagnostics(root: JsonRecord): void {
   }
 }
 
+function sameIncludeSelection(
+  left: readonly V2IncludeValue[],
+  right: readonly V2IncludeValue[],
+): boolean {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  return (
+    leftSet.size === rightSet.size &&
+    [...leftSet].every((value) => rightSet.has(value))
+  );
+}
+
+function normalizePhraseReadInclude(
+  topLevelInclude: readonly V2IncludeValue[] | undefined,
+  args: JsonRecord,
+): readonly V2IncludeValue[] {
+  const nestedValue = args.include;
+  if (nestedValue === undefined) {
+    return topLevelInclude ?? DEFAULT_PHRASE_INCLUDE;
+  }
+  if (!Array.isArray(nestedValue) || nestedValue.length > 8) {
+    throw new BridgeProtocolError(
+      "get_phrase_context args.include must be an array of at most 8 projection names; prefer the top-level sv_read.include field",
+    );
+  }
+  const nestedInclude = nestedValue.map((value, index) => {
+    if (typeof value !== "string" || !V2_INCLUDE_VALUE_SET.has(value)) {
+      throw new BridgeProtocolError(
+        `get_phrase_context args.include[${index}] is not a supported sv_read projection`,
+      );
+    }
+    return value as V2IncludeValue;
+  });
+  delete args.include;
+  if (
+    topLevelInclude !== undefined &&
+    !sameIncludeSelection(topLevelInclude, nestedInclude)
+  ) {
+    throw new BridgeProtocolError(
+      "get_phrase_context include was supplied in both sv_read.include and args.include with different values; use the top-level sv_read.include field",
+    );
+  }
+  return topLevelInclude ?? nestedInclude;
+}
+
 function projectIncludes(
   root: JsonRecord,
-  include: readonly (typeof V2_INCLUDE_VALUES)[number][] | undefined,
+  include: readonly V2IncludeValue[] | undefined,
 ): void {
   if (include === undefined) {
     return;
@@ -858,6 +913,7 @@ export const v2Testing = {
   defaultReadFields,
   denseNotes,
   expandContext,
+  normalizePhraseReadInclude,
   projectFields,
   projectIncludes,
   stripDiagnostics,
@@ -1233,7 +1289,7 @@ export function registerV2Surface(
     {
       title: "Read SynthV",
       description:
-        "Run one read action. Reuse contextId for scoped reads/writes; phrase and Group Voice reads default to compact projected data.",
+        "Run one read action. Reuse contextId for scoped reads/writes; phrase and Group Voice reads default to compact projected data. For get_phrase_context, top-level include is canonical and args.include is promoted when supplied alone.",
       inputSchema: {
         action: actionSchema,
         args: argsSchema,
@@ -1255,14 +1311,14 @@ export function registerV2Surface(
         if (sessionChange !== undefined && input.contextId !== undefined) {
           throw sessionChangedError(sessionChange);
         }
+        const rawArgs = { ...input.args };
         const include =
-          input.include ??
-          (input.action === "get_phrase_context"
-            ? ["notes", "voice", "analysis"]
-            : undefined);
+          input.action === "get_phrase_context"
+            ? normalizePhraseReadInclude(input.include, rawArgs)
+            : input.include;
         let args = expandContext(
           input.action,
-          { ...input.args },
+          rawArgs,
           input.contextId,
           contexts,
         );

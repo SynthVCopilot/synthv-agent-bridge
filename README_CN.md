@@ -17,6 +17,12 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 > installation, the build, SynthV script installation, MCP registration, and
 > diagnostics.
 
+> [!TIP]
+> 第一次连接？回复 **`运行《小星星》Demo。`** Codex 会用简短小标题说明每个
+> 阶段，创建包含 42 个音符的独立 Demo Group；中途只需选择它的 Vocal 并
+> 提供全部准确唱法名称，随后会自动完成调音、回读验证和循环播放。Demo
+> 不修改工程原有内容。详见[引导式 Demo](docs/twinkle-star-demo_cn.md)。
+
 > [!IMPORTANT]
 > 由于 SynthV 官方脚本 API 无法读取当前 Vocal 身份，也无法枚举从未调整、
 > 仍保持默认值的唱法名称和参数，开始调音前请先选择一个音符组，再为该
@@ -79,6 +85,9 @@ SynthV 保存结果，用户负责最终听感判断。
 
 在一次对话中第一次修改工程前，Agent 必须简短告知用户：
 
+- 可以选择运行引导式 Demo。回复 `运行《小星星》Demo。` 后，Agent 会在
+  不修改原有内容的前提下创建并调音独立示例；执行时打印五个简短进度
+  小标题，并因官方 API 限制在选择 Vocal、提供全部唱法时暂停一次。
 - 在 AI 编辑前保存重要工作；Bridge 写入期间不要同时修改同一个目标。
 - 如果用户撤销或手动修改了 Agent 即将处理的音符、Group、Voice 或
   Vocal Mode，Agent 会只重新读取该目标。无关修改不需要重新读取。

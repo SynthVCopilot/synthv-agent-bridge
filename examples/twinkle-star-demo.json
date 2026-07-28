@@ -1,0 +1,370 @@
+{
+  "schemaVersion": 1,
+  "id": "twinkle-star-mandarin",
+  "title": {
+    "en": "Twinkle Star guided demo",
+    "zh-CN": "《小星星》引导式 Demo"
+  },
+  "triggerPhrases": {
+    "en": "Run the Twinkle Star demo.",
+    "zh-CN": "运行《小星星》Demo。"
+  },
+  "progressHeadings": [
+    {
+      "step": 1,
+      "en": "Demo 1/5: Check the connection and safe location",
+      "zh-CN": "Demo 1/5：检查连接与安全位置"
+    },
+    {
+      "step": 2,
+      "en": "Demo 2/5: Create an isolated Twinkle Star Note Group",
+      "zh-CN": "Demo 2/5：创建独立《小星星》音符组"
+    },
+    {
+      "step": 3,
+      "en": "Demo 3/5: Select the Vocal and identify every singing style",
+      "zh-CN": "Demo 3/5：选择歌手并识别全部唱法"
+    },
+    {
+      "step": 4,
+      "en": "Demo 4/5: Write full-song tuning and pitch curves",
+      "zh-CN": "Demo 4/5：写入整曲调音与音高曲线"
+    },
+    {
+      "step": 5,
+      "en": "Demo 5/5: Reread, verify, and start playback",
+      "zh-CN": "Demo 5/5：回读验证并开始试听"
+    }
+  ],
+  "workflow": {
+    "publicMcpToolCount": 8,
+    "scoreAction": "add_notes",
+    "tuningAction": "apply_group_tuning",
+    "readAction": "get_phrase_context",
+    "playbackAction": "playback",
+    "grouping": "ensureNonMain",
+    "groupName": "SynthV Agent Demo - 小星星",
+    "positionPolicy": "after_existing_project_content_with_two_second_margin",
+    "requiresExplicitUserOptIn": true,
+    "requiresVocalModeOnboardingBeforeTuning": true,
+    "pauseAfterScoreCreationForVocalSelection": true,
+    "requiresFreshReadBeforeEachWritePhase": true,
+    "publishRawMcpPayloads": false,
+    "phraseReadProjection": {
+      "svReadTopLevelInclude": [
+        "notes",
+        "voice",
+        "automation",
+        "analysis",
+        "recommendations",
+        "pitchAnalysis",
+        "diagnostics"
+      ],
+      "automationParameters": [
+        "loudness",
+        "tension",
+        "breathiness",
+        "pitchDelta",
+        "vibratoEnv"
+      ],
+      "pitchAnalysisFrames": 168
+    }
+  },
+  "safety": {
+    "demoGroupOnly": true,
+    "preserveExistingProjectContent": true,
+    "preserveExistingNoteGeometry": true,
+    "treatUnknownProvenanceAsUserOwned": true,
+    "neverGuessVocalIdentity": true,
+    "neverGuessVocalModeNames": true,
+    "automationRangeSource": "same_fresh_synthv_read",
+    "expectedUndoRecords": {
+      "scoreCreation": 1,
+      "tuning": 1
+    }
+  },
+  "score": {
+    "languageOverride": "mandarin",
+    "relativeTimeUnit": "quarter",
+    "tempoReferenceBpm": 120,
+    "meterReference": [
+      4,
+      4
+    ],
+    "phraseRanges": [
+      [
+        1,
+        7
+      ],
+      [
+        8,
+        14
+      ],
+      [
+        15,
+        21
+      ],
+      [
+        22,
+        28
+      ],
+      [
+        29,
+        35
+      ],
+      [
+        36,
+        42
+      ]
+    ],
+    "phraseEndNoteIndices": [
+      7,
+      14,
+      21,
+      28,
+      35,
+      42
+    ],
+    "notes": [
+      { "noteIndex": 1, "onsetQuarter": 0, "durationQuarter": 1, "pitch": 60, "lyrics": "一" },
+      { "noteIndex": 2, "onsetQuarter": 1, "durationQuarter": 1, "pitch": 60, "lyrics": "闪" },
+      { "noteIndex": 3, "onsetQuarter": 2, "durationQuarter": 1, "pitch": 67, "lyrics": "一" },
+      { "noteIndex": 4, "onsetQuarter": 3, "durationQuarter": 1, "pitch": 67, "lyrics": "闪" },
+      { "noteIndex": 5, "onsetQuarter": 4, "durationQuarter": 1, "pitch": 69, "lyrics": "亮" },
+      { "noteIndex": 6, "onsetQuarter": 5, "durationQuarter": 1, "pitch": 69, "lyrics": "晶" },
+      { "noteIndex": 7, "onsetQuarter": 6, "durationQuarter": 1.75, "pitch": 67, "lyrics": "晶" },
+      { "noteIndex": 8, "onsetQuarter": 8, "durationQuarter": 1, "pitch": 65, "lyrics": "满" },
+      { "noteIndex": 9, "onsetQuarter": 9, "durationQuarter": 1, "pitch": 65, "lyrics": "天" },
+      { "noteIndex": 10, "onsetQuarter": 10, "durationQuarter": 1, "pitch": 64, "lyrics": "都" },
+      { "noteIndex": 11, "onsetQuarter": 11, "durationQuarter": 1, "pitch": 64, "lyrics": "是" },
+      { "noteIndex": 12, "onsetQuarter": 12, "durationQuarter": 1, "pitch": 62, "lyrics": "小" },
+      { "noteIndex": 13, "onsetQuarter": 13, "durationQuarter": 1, "pitch": 62, "lyrics": "星" },
+      { "noteIndex": 14, "onsetQuarter": 14, "durationQuarter": 1.75, "pitch": 60, "lyrics": "星" },
+      { "noteIndex": 15, "onsetQuarter": 16, "durationQuarter": 1, "pitch": 67, "lyrics": "挂" },
+      { "noteIndex": 16, "onsetQuarter": 17, "durationQuarter": 1, "pitch": 67, "lyrics": "在" },
+      { "noteIndex": 17, "onsetQuarter": 18, "durationQuarter": 1, "pitch": 65, "lyrics": "天" },
+      { "noteIndex": 18, "onsetQuarter": 19, "durationQuarter": 1, "pitch": 65, "lyrics": "空" },
+      { "noteIndex": 19, "onsetQuarter": 20, "durationQuarter": 1, "pitch": 64, "lyrics": "放" },
+      { "noteIndex": 20, "onsetQuarter": 21, "durationQuarter": 1, "pitch": 64, "lyrics": "光" },
+      { "noteIndex": 21, "onsetQuarter": 22, "durationQuarter": 1.75, "pitch": 62, "lyrics": "明" },
+      { "noteIndex": 22, "onsetQuarter": 24, "durationQuarter": 1, "pitch": 67, "lyrics": "好" },
+      { "noteIndex": 23, "onsetQuarter": 25, "durationQuarter": 1, "pitch": 67, "lyrics": "像" },
+      { "noteIndex": 24, "onsetQuarter": 26, "durationQuarter": 1, "pitch": 65, "lyrics": "许" },
+      { "noteIndex": 25, "onsetQuarter": 27, "durationQuarter": 1, "pitch": 65, "lyrics": "多" },
+      { "noteIndex": 26, "onsetQuarter": 28, "durationQuarter": 1, "pitch": 64, "lyrics": "小" },
+      { "noteIndex": 27, "onsetQuarter": 29, "durationQuarter": 1, "pitch": 64, "lyrics": "眼" },
+      { "noteIndex": 28, "onsetQuarter": 30, "durationQuarter": 1.75, "pitch": 62, "lyrics": "睛" },
+      { "noteIndex": 29, "onsetQuarter": 32, "durationQuarter": 1, "pitch": 60, "lyrics": "一" },
+      { "noteIndex": 30, "onsetQuarter": 33, "durationQuarter": 1, "pitch": 60, "lyrics": "闪" },
+      { "noteIndex": 31, "onsetQuarter": 34, "durationQuarter": 1, "pitch": 67, "lyrics": "一" },
+      { "noteIndex": 32, "onsetQuarter": 35, "durationQuarter": 1, "pitch": 67, "lyrics": "闪" },
+      { "noteIndex": 33, "onsetQuarter": 36, "durationQuarter": 1, "pitch": 69, "lyrics": "亮" },
+      { "noteIndex": 34, "onsetQuarter": 37, "durationQuarter": 1, "pitch": 69, "lyrics": "晶" },
+      { "noteIndex": 35, "onsetQuarter": 38, "durationQuarter": 1.75, "pitch": 67, "lyrics": "晶" },
+      { "noteIndex": 36, "onsetQuarter": 40, "durationQuarter": 1, "pitch": 65, "lyrics": "满" },
+      { "noteIndex": 37, "onsetQuarter": 41, "durationQuarter": 1, "pitch": 65, "lyrics": "天" },
+      { "noteIndex": 38, "onsetQuarter": 42, "durationQuarter": 1, "pitch": 64, "lyrics": "都" },
+      { "noteIndex": 39, "onsetQuarter": 43, "durationQuarter": 1, "pitch": 64, "lyrics": "是" },
+      { "noteIndex": 40, "onsetQuarter": 44, "durationQuarter": 1, "pitch": 62, "lyrics": "小" },
+      { "noteIndex": 41, "onsetQuarter": 45, "durationQuarter": 1, "pitch": 62, "lyrics": "星" },
+      { "noteIndex": 42, "onsetQuarter": 46, "durationQuarter": 2.25, "pitch": 60, "lyrics": "星" }
+    ]
+  },
+  "tuningProfile": {
+    "intent": {
+      "en": "gentle, bright, childlike, clear, and restrained",
+      "zh-CN": "温柔、明亮、童真、清晰且克制"
+    },
+    "groupVoice": {
+      "loudness": -0.8,
+      "tension": -0.06,
+      "breathiness": 0.05,
+      "gender": -0.03,
+      "toneShift": 0.04
+    },
+    "vocalModePolicy": {
+      "mappingOwner": "agent",
+      "useOnlyExactUserProvidedNames": true,
+      "preserveUnmatchedModes": true,
+      "roleProfiles": [
+        { "role": "soft", "pitch": 38, "timbre": 44, "pronunciation": 28 },
+        { "role": "childlike", "pitch": 30, "timbre": 36, "pronunciation": 32 },
+        { "role": "bright", "pitch": 12, "timbre": 16, "pronunciation": 14 },
+        { "role": "cool", "pitch": 8, "timbre": 12, "pronunciation": 10 },
+        { "role": "powerful", "pitch": 10, "timbre": 8, "pronunciation": 8 },
+        { "role": "dramatic", "pitch": 5, "timbre": 6, "pronunciation": 5 },
+        { "role": "breathy", "pitch": 6, "timbre": 12, "pronunciation": 10 },
+        { "role": "nasal", "pitch": 4, "timbre": 6, "pronunciation": 8 }
+      ]
+    },
+    "notePolicy": {
+      "preserveLyricsPitchAndOnset": true,
+      "connectInsidePhraseExactly": true,
+      "phraseEndNoteIndices": [
+        7,
+        14,
+        21,
+        28,
+        35,
+        42
+      ],
+      "largeLeapEntryNoteIndices": [
+        3,
+        15,
+        22,
+        31
+      ],
+      "phonemeStrategy": "read_computed_phonemes_then_adjust_strength_and_timing_without_creating_note_gaps"
+    },
+    "automation": [
+      {
+        "parameter": "loudness",
+        "clearMode": "all",
+        "points": [
+          { "quarter": 0, "value": -1 },
+          { "quarter": 3, "value": 0.2 },
+          { "quarter": 6, "value": 0.5 },
+          { "quarter": 7.75, "value": -1.4 },
+          { "quarter": 8, "value": -0.7 },
+          { "quarter": 11, "value": 0.1 },
+          { "quarter": 14, "value": 0.3 },
+          { "quarter": 15.75, "value": -1.2 },
+          { "quarter": 16, "value": -0.5 },
+          { "quarter": 19, "value": 0.2 },
+          { "quarter": 22, "value": 0.4 },
+          { "quarter": 23.75, "value": -1.1 },
+          { "quarter": 24, "value": -0.6 },
+          { "quarter": 27, "value": 0.1 },
+          { "quarter": 30, "value": 0.3 },
+          { "quarter": 31.75, "value": -1.2 },
+          { "quarter": 32, "value": -0.4 },
+          { "quarter": 38, "value": 0.6 },
+          { "quarter": 39.75, "value": -1.1 },
+          { "quarter": 40, "value": -0.3 },
+          { "quarter": 46, "value": 0.7 },
+          { "quarter": 48.25, "value": -1.8 }
+        ]
+      },
+      {
+        "parameter": "tension",
+        "clearMode": "all",
+        "points": [
+          { "quarter": 0, "value": -0.08 },
+          { "quarter": 4, "value": 0.12 },
+          { "quarter": 7.75, "value": -0.2 },
+          { "quarter": 8, "value": -0.08 },
+          { "quarter": 14, "value": 0.1 },
+          { "quarter": 15.75, "value": -0.18 },
+          { "quarter": 16, "value": -0.04 },
+          { "quarter": 22, "value": 0.14 },
+          { "quarter": 23.75, "value": -0.18 },
+          { "quarter": 24, "value": -0.08 },
+          { "quarter": 30, "value": 0.12 },
+          { "quarter": 31.75, "value": -0.2 },
+          { "quarter": 32, "value": -0.02 },
+          { "quarter": 38, "value": 0.24 },
+          { "quarter": 40, "value": 0 },
+          { "quarter": 48.25, "value": -0.24 }
+        ]
+      },
+      {
+        "parameter": "breathiness",
+        "clearMode": "all",
+        "points": [
+          { "quarter": 0, "value": 0.06 },
+          { "quarter": 6, "value": 0.1 },
+          { "quarter": 7.75, "value": 0.18 },
+          { "quarter": 8, "value": 0.08 },
+          { "quarter": 14, "value": 0.12 },
+          { "quarter": 15.75, "value": 0.18 },
+          { "quarter": 16, "value": 0.06 },
+          { "quarter": 22, "value": 0.12 },
+          { "quarter": 23.75, "value": 0.2 },
+          { "quarter": 24, "value": 0.08 },
+          { "quarter": 30, "value": 0.12 },
+          { "quarter": 31.75, "value": 0.18 },
+          { "quarter": 32, "value": 0.05 },
+          { "quarter": 38, "value": 0.1 },
+          { "quarter": 40, "value": 0.04 },
+          { "quarter": 48.25, "value": 0.22 }
+        ]
+      },
+      {
+        "parameter": "pitchDelta",
+        "clearMode": "all",
+        "points": [
+          { "quarter": 0, "value": 0 },
+          { "quarter": 1.8, "value": -35 },
+          { "quarter": 2.15, "value": 12 },
+          { "quarter": 2.5, "value": 0 },
+          { "quarter": 5.75, "value": -16 },
+          { "quarter": 6.25, "value": 8 },
+          { "quarter": 7.5, "value": -12 },
+          { "quarter": 8, "value": 0 },
+          { "quarter": 14.8, "value": -35 },
+          { "quarter": 16.15, "value": 12 },
+          { "quarter": 16.5, "value": 0 },
+          { "quarter": 21.75, "value": -16 },
+          { "quarter": 22.25, "value": 8 },
+          { "quarter": 22.8, "value": -35 },
+          { "quarter": 24.15, "value": 12 },
+          { "quarter": 24.5, "value": 0 },
+          { "quarter": 29.75, "value": -16 },
+          { "quarter": 30.25, "value": 8 },
+          { "quarter": 31.5, "value": -12 },
+          { "quarter": 32, "value": 0 },
+          { "quarter": 33.8, "value": -35 },
+          { "quarter": 34.15, "value": 12 },
+          { "quarter": 34.5, "value": 0 },
+          { "quarter": 37.75, "value": -18 },
+          { "quarter": 38.25, "value": 9 },
+          { "quarter": 45.75, "value": -18 },
+          { "quarter": 46.25, "value": 10 },
+          { "quarter": 48.25, "value": -28 }
+        ]
+      },
+      {
+        "parameter": "vibratoEnv",
+        "clearMode": "all",
+        "points": [
+          { "quarter": 0, "value": 0.08 },
+          { "quarter": 6.3, "value": 0.08 },
+          { "quarter": 6.8, "value": 0.42 },
+          { "quarter": 7.5, "value": 0.16 },
+          { "quarter": 14.3, "value": 0.08 },
+          { "quarter": 14.8, "value": 0.36 },
+          { "quarter": 15.5, "value": 0.14 },
+          { "quarter": 22.3, "value": 0.08 },
+          { "quarter": 22.8, "value": 0.4 },
+          { "quarter": 23.5, "value": 0.15 },
+          { "quarter": 30.3, "value": 0.08 },
+          { "quarter": 30.8, "value": 0.38 },
+          { "quarter": 31.5, "value": 0.14 },
+          { "quarter": 38.3, "value": 0.08 },
+          { "quarter": 38.8, "value": 0.46 },
+          { "quarter": 39.5, "value": 0.18 },
+          { "quarter": 46.3, "value": 0.08 },
+          { "quarter": 46.9, "value": 0.52 },
+          { "quarter": 47.7, "value": 0.24 },
+          { "quarter": 48.25, "value": 0.16 }
+        ]
+      }
+    ]
+  },
+  "verification": {
+    "expectedNoteCount": 42,
+    "expectedPhraseGapCount": 5,
+    "expectedOverlapCount": 0,
+    "requiredAutomationParameters": [
+      "loudness",
+      "tension",
+      "breathiness",
+      "pitchDelta",
+      "vibratoEnv"
+    ],
+    "rereadVocalModes": true,
+    "rereadComputedPhonemes": true,
+    "rereadPitchAnalysis": true,
+    "startLoopPlaybackAfterSuccess": true
+  }
+}

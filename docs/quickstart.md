@@ -135,6 +135,25 @@ npm run doctor -- --target "/path/to/Synthesizer V Studio 2/scripts"
 If the Bridge is healthy but the MCP heartbeat is missing, restart or reconnect
 the Codex task.
 
+## Optional: run the guided Demo
+
+After the first healthy connection, Codex offers the bundled example. Start it
+with:
+
+```text
+Run the Twinkle Star demo.
+```
+
+Codex prints five short stage headings, creates one isolated 42-note non-main
+Group after existing project content, and never modifies existing notes. After
+score creation, select that Demo Group and select or assign its Vocal, then
+attach the complete Vocal Mode panel or type every singing style exactly as
+shown. This one handoff is required by the official API limitation; tuning,
+pitch curves, verification, and loop playback then finish automatically.
+
+See [Twinkle Star guided demo](twinkle-star-demo.md) for the exact workflow,
+safety rules, undo boundaries, and machine-readable template.
+
 ## 7. Make the first tuning edit
 
 > [!IMPORTANT]

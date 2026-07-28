@@ -6,6 +6,11 @@ All notable changes will be documented in this file.
 
 ### Added
 
+- A bundled, machine-readable Mandarin Twinkle Star guided Demo. The Agent
+  offers it once after the first healthy connection, prints five concise stage
+  headings, creates only an isolated 42-note non-main Group, pauses for the
+  required Vocal/Vocal Mode handoff, then uses the existing v2 actions to tune,
+  verify, and loop the song without changing user-owned project material.
 - A one-time MCP first-use notice that tells the Agent to ask for the current
   singer's exact Vocal Mode names or a panel screenshot before Vocal Mode work,
   reuse the result for that singer, and ask again only after a singer change.
@@ -30,6 +35,11 @@ All notable changes will be documented in this file.
 
 ### Changed
 
+- MCP v2 now promotes `get_phrase_context` projections supplied only through
+  `args.include` into the canonical top-level `sv_read.include` selection
+  before Guard capture. Supplying different projections in both locations
+  fails early with a protocol error instead of silently dropping Automation or
+  pitch-analysis Context data.
 - File IPC now accepts only the compact protocol-v2 request/response envelope;
   Lua rejects protocol-v1 requests with `PROTOCOL_MISMATCH`. The public MCP
   server always exposes the eight compact v2 tools, and the removed

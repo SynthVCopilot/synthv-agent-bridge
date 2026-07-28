@@ -340,6 +340,68 @@ test("reload waiting observes a delayed SynthV session token", async () => {
   assert.equal(unchanged, undefined);
 });
 
+test("v2 phrase reads promote nested include projections before Guard capture", () => {
+  const args: Record<string, unknown> = {
+    include: [
+      "notes",
+      "voice",
+      "automation",
+      "analysis",
+      "pitchAnalysis",
+    ],
+    automationParameters: [
+      "loudness",
+      "tension",
+      "breathiness",
+      "pitchDelta",
+      "vibratoEnv",
+    ],
+    pitchAnalysisFrames: 168,
+  };
+
+  const include = v2Testing.normalizePhraseReadInclude(undefined, args);
+
+  assert.deepEqual(include, [
+    "notes",
+    "voice",
+    "automation",
+    "analysis",
+    "pitchAnalysis",
+  ]);
+  assert.equal("include" in args, false);
+  assert.deepEqual(args.automationParameters, [
+    "loudness",
+    "tension",
+    "breathiness",
+    "pitchDelta",
+    "vibratoEnv",
+  ]);
+  assert.equal(args.pitchAnalysisFrames, 168);
+});
+
+test("v2 phrase reads reject conflicting include locations", () => {
+  assert.throws(
+    () =>
+      v2Testing.normalizePhraseReadInclude(
+        ["notes", "voice", "automation"],
+        { include: ["notes", "voice", "pitchAnalysis"] },
+      ),
+    /supplied in both sv_read\.include and args\.include with different values/u,
+  );
+
+  const duplicateArgs: Record<string, unknown> = {
+    include: ["automation", "voice", "notes"],
+  };
+  assert.deepEqual(
+    v2Testing.normalizePhraseReadInclude(
+      ["notes", "voice", "automation"],
+      duplicateArgs,
+    ),
+    ["notes", "voice", "automation"],
+  );
+  assert.equal("include" in duplicateArgs, false);
+});
+
 test("v2 phrase projection removes unused sections and redundant note fields", () => {
   const result = {
     notes: [
