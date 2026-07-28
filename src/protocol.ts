@@ -38,6 +38,7 @@ export const BRIDGE_ACTIONS = [
   "delete_group_reference",
   "add_notes",
   "edit_notes",
+  "transform_notes",
   "set_note_phoneme_properties",
   "delete_notes",
   "get_note_retakes",

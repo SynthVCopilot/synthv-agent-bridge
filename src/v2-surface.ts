@@ -76,6 +76,7 @@ const NOTE_ARRAY_FIELDS: Readonly<Record<string, string>> = {
   fit_lyrics: "notes",
   humanize_notes: "notes",
   set_note_phoneme_properties: "edits",
+  transform_notes: "notes",
 };
 
 const PITCH_ARRAY_FIELDS: Readonly<Record<string, string>> = {
@@ -137,6 +138,7 @@ const GROUP_LOCATOR_ACTIONS = new Set([
   "set_group_voice",
   "set_note_phoneme_properties",
   "simplify_automation",
+  "transform_notes",
   "update_group",
 ]);
 
@@ -689,10 +691,51 @@ function expandContext(
   if (action === "add_notes") {
     result.grouping ??= "ensureNonMain";
   }
+  if (
+    action === "transform_notes" &&
+    result.target !== undefined &&
+    result.target !== "contextNotes"
+  ) {
+    throw new BridgeProtocolError(
+      "transform_notes args.target must be contextNotes",
+    );
+  }
+  if (
+    action === "transform_notes" &&
+    result.target === "contextNotes" &&
+    contextId === undefined
+  ) {
+    throw new BridgeProtocolError(
+      "transform_notes args.target=contextNotes requires a fresh contextId",
+    );
+  }
   if (contextId === undefined) {
     return result;
   }
   const context = contexts.resolve(contextId);
+
+  if (action === "transform_notes" && result.target === "contextNotes") {
+    if (result.notes !== undefined) {
+      throw new BridgeProtocolError(
+        "transform_notes args.target=contextNotes cannot be combined with args.notes",
+      );
+    }
+    const notes = [...context.noteFingerprints.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([noteIndex, fingerprint]) => ({ noteIndex, fingerprint }));
+    if (notes.length === 0) {
+      throw new BridgeProtocolError(
+        "contextId does not contain any note guards for transform_notes",
+      );
+    }
+    if (notes.length > 512) {
+      throw new BridgeProtocolError(
+        "transform_notes accepts at most 512 context notes",
+      );
+    }
+    result.notes = notes;
+    delete result.target;
+  }
 
   if (GROUP_LOCATOR_ACTIONS.has(action)) {
     result.trackIndex ??= context.trackIndex;
@@ -912,7 +955,9 @@ function describeTool(name: string, tool: RegisteredTool): JsonRecord {
     }
   }
   const contextHint =
-    NOTE_ARRAY_FIELDS[name] !== undefined
+    name === "transform_notes"
+      ? "With a fresh phrase/note contextId, set args.target to contextNotes and omit notes and the Group locator; every guarded note in that exact read scope becomes a target. Alternatively supply note indices and omit fingerprints."
+      : NOTE_ARRAY_FIELDS[name] !== undefined
       ? "With sv_edit/sv_delete contextId, use item index or noteIndex and omit item fingerprints and the Group locator."
       : PITCH_ARRAY_FIELDS[name] !== undefined
         ? "With contextId from get_pitch_controls, use item index or pitchControlIndex and omit item fingerprints and the Group locator."

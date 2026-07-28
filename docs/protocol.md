@@ -387,6 +387,29 @@ host-returned automation range—before `Project:newUndoRecord()`, then applies
 the pass as exactly one SynthV undo record. Prefer it over several sequential
 writes when one tuning decision affects the same Group.
 
+### Deterministic note transform batch
+
+`transform_notes` applies one explicit numeric transform to 1–512
+fingerprint-guarded notes in the same Group. Supported fields are
+`onsetOffsetBlick` or `onsetOffsetSeconds` (mutually exclusive),
+`durationScale`, `durationOffsetBlick`, and `pitchOffsetSemitones`.
+The duration calculation is
+`round(originalDuration * durationScale) + durationOffsetBlick`.
+
+A seconds onset offset converts every current absolute onset through the fresh
+project `TimeAxis`, adds the requested number of seconds, converts back to
+blicks, and keeps the original duration unit in blicks. The complete batch is
+rejected before its undo boundary if any target is stale or any resulting
+onset, duration, or MIDI pitch is invalid. Successful writes use the existing
+`edit_notes` clone preflight, create one undo record, and verify the retained
+values afterward.
+
+On MCP v2, callers may pass `target: "contextNotes"` with a fresh
+`contextId`. The TypeScript layer expands exactly the note guards returned by
+that read and removes the compact alias before file IPC. This is a transport
+optimization, not target inference: the Agent still chooses the read scope and
+the explicit numeric transform.
+
 ### Hot reload
 
 `reload_bridge` compiles the currently running script file with Lua

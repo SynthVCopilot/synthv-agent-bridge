@@ -189,6 +189,71 @@ test("same-Group tuning is one prevalidated Lua undo record", async () => {
   );
 });
 
+test("deterministic note transforms stay guarded and use one edit undo boundary", async () => {
+  const [compiledServer, bridgeSource] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(
+      new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  assert.match(compiledServer, /"transform_notes"/);
+  assert.match(compiledServer, /args\.target=contextNotes/);
+  assert.match(compiledServer, /explicit numeric transform/);
+
+  const handlerStart = bridgeSource.indexOf(
+    "function handlers.transform_notes",
+  );
+  const handlerEnd = bridgeSource.indexOf(
+    "local function makeDeterministicRandom",
+    handlerStart,
+  );
+  const handler = bridgeSource.slice(handlerStart, handlerEnd);
+  assert.ok(handlerStart >= 0);
+  assert.match(handler, /validateFingerprint/);
+  assert.match(handler, /getBlickFromSeconds/);
+  assert.match(handler, /handlers\.edit_notes/);
+  assert.match(handler, /HOST_POSTCONDITION_FAILED/);
+  assert.match(handler, /never chooses musical intent or target notes/);
+  assert.doesNotMatch(handler, /createUndoRecord\(project\)/);
+});
+
+test("automation writes fail closed without the fresh host definition range", async () => {
+  const bridgeSource = await readFile(
+    new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    bridgeSource,
+    /local function requireAutomationDefinitionRange/,
+  );
+  assert.match(bridgeSource, /Automation\.getDefinition\(\)\.range/);
+
+  const ordinaryStart = bridgeSource.indexOf(
+    "function handlers.set_automation_points",
+  );
+  const ordinaryEnd = bridgeSource.indexOf(
+    "function handlers.clear_automation",
+    ordinaryStart,
+  );
+  assert.match(
+    bridgeSource.slice(ordinaryStart, ordinaryEnd),
+    /requireAutomationDefinitionRange/,
+  );
+
+  const batchStart = bridgeSource.indexOf(
+    "function handlers.apply_group_tuning",
+  );
+  const batchEnd = bridgeSource.indexOf(
+    "function handlers.get_editor_view",
+    batchStart,
+  );
+  assert.match(
+    bridgeSource.slice(batchStart, batchEnd),
+    /requireAutomationDefinitionRange/,
+  );
+});
+
 test("P1 uses low-latency host polling and exposes selective phoneme computation", async () => {
   const [compiledServer, bridgeSource] = await Promise.all([
     readFile(new URL("../src/server.js", import.meta.url), "utf8"),

@@ -131,6 +131,80 @@ test("v2 context expands one same-Group tuning batch", () => {
   ]);
 });
 
+test("v2 expands every guarded context note for one deterministic transform", () => {
+  const contexts = new V2ContextStore();
+  const contextId = contexts.issue({
+    trackIndex: 2,
+    groupIndex: 3,
+    groupUuid: GROUP_UUID,
+    referenceFingerprint: "reference",
+    noteFingerprints: new Map([
+      [8, "note-8"],
+      [7, "note-7"],
+    ]),
+    pitchControlFingerprints: new Map(),
+    automationFingerprints: new Map(),
+  });
+
+  const expanded = v2Testing.expandContext(
+    "transform_notes",
+    {
+      target: "contextNotes",
+      transform: { onsetOffsetSeconds: 2 },
+    },
+    contextId,
+    contexts,
+  );
+
+  assert.equal(expanded.trackIndex, 2);
+  assert.equal(expanded.groupIndex, 3);
+  assert.equal(expanded.groupUuid, GROUP_UUID);
+  assert.equal(expanded.target, undefined);
+  assert.deepEqual(expanded.notes, [
+    { noteIndex: 7, fingerprint: "note-7" },
+    { noteIndex: 8, fingerprint: "note-8" },
+  ]);
+});
+
+test("v2 context-note transforms reject ambiguous or missing context targets", () => {
+  const contexts = new V2ContextStore();
+  const contextId = contexts.issue({
+    trackIndex: 1,
+    groupUuid: GROUP_UUID,
+    noteFingerprints: new Map([[1, "note-1"]]),
+    pitchControlFingerprints: new Map(),
+    automationFingerprints: new Map(),
+  });
+
+  assert.throws(
+    () =>
+      v2Testing.expandContext(
+        "transform_notes",
+        {
+          target: "contextNotes",
+          notes: [{ index: 1 }],
+          transform: { pitchOffsetSemitones: 1 },
+        },
+        contextId,
+        contexts,
+      ),
+    /cannot be combined with args\.notes/u,
+  );
+  assert.throws(
+    () =>
+      v2Testing.expandContext(
+        "transform_notes",
+        {
+          target: "contextNotes",
+          transform: { pitchOffsetSemitones: 1 },
+        },
+        undefined,
+        contexts,
+      ),
+    /requires a fresh contextId/u,
+  );
+});
+
 test("v2 note insertion ensures an editable non-main group by default", () => {
   const contexts = new V2ContextStore();
   const automatic = v2Testing.expandContext(

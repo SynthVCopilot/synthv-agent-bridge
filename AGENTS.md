@@ -13,6 +13,18 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
 - Do not parse or mutate `.svp` files directly.
 - Do not log project lyrics or note data to stderr unless explicitly requested for debugging.
 - Keep protocol v1 backward compatible; add a new protocol version for breaking envelope changes.
+- Keep the responsibility boundary enforceable in code:
+  - The Agent and user own intent, lyric/emotion/style interpretation, target
+    choice, Vocal/Vocal Mode onboarding, and the requested musical values.
+  - The TypeScript MCP layer owns schemas, action routing, compact projections,
+    `contextId`/Guard expansion, session invalidation, and minimal
+    acknowledgements. It must not invent musical values.
+  - The Lua executor owns authoritative SynthV reads, host capability and
+    dynamic-range checks, deterministic batch expansion, complete preflight,
+    one undo boundary, and postcondition verification. It must not infer
+    emotion, style, singer identity, or which notes deserve emphasis.
+  - SynthV remains the project-state authority; the user remains the final
+    listening and artistic authority.
 - Do not probe tuning ranges at startup or at the start of each conversation.
   Treat Group Voice loudness as `-48..12`, Group Voice
   tension/breathiness/gender/tone shift as `-1..1`, Vocal Mode
@@ -25,6 +37,12 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
 - Prefer `apply_group_tuning` when one tuning pass changes Voice/Vocal Modes,
   notes or phonemes, and one or more automation curves in the same Group. It
   validates the complete batch and creates one SynthV undo record.
+- Prefer `transform_notes` when every note in one freshly read scope receives
+  the same explicit mechanical onset, duration, or semitone transform. With
+  MCP v2, use `target: "contextNotes"` and the fresh `contextId` instead of
+  repeating note indices. The Agent chooses the exact target scope and numeric
+  transform; the Bridge only expands and verifies it. A seconds onset offset
+  uses the fresh SynthV time axis and preserves note durations in blicks.
 - If an MCP v2 call returns `SYNTHV_SESSION_CHANGED`, do not retry its old
   `contextId` or Guard Tokens. The server has already cleared them; read the
   intended target again and build the write from the fresh context.

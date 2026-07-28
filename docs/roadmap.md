@@ -55,6 +55,10 @@
 - V2 note insertion automatically creates a reusable non-main group when the
   requested target is a track main group, preserving Voice/Vocal Mode editing
   for newly inserted notes.
+- Deterministic guarded note transforms apply one explicit onset, duration, or
+  semitone operation to an entire fresh Context without repeating note guards.
+- Agent, TypeScript MCP, Lua executor, SynthV, and user responsibility
+  boundaries are explicit and enforced by the write architecture.
 - The complete default MCP tool catalog is kept below 12 KB; the current build
   is below 6 KB while all file-protocol actions remain available.
 
@@ -67,7 +71,7 @@ performance roadmap or a second SynthV editing interface.
 - Dependency-aware transactions that can safely pass newly created object
   locators into later forward steps.
 - Durable rollback metadata with explicit project-revision checks.
-- Selected-range helpers and richer cross-object batch operations.
+- Shared-value/override compression and richer cross-object batch operations.
 - Harmony voicing beyond fixed intervals, pronunciation diagnostics, and
   configurable humanization/expression profiles.
 

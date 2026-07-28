@@ -57,7 +57,7 @@ The Node side serializes calls and owns the lock. It writes requests using a tem
 
 ## Compact MCP boundary
 
-P4 makes the compact surface the default. Sixty-two file-protocol actions are
+P4 makes the compact surface the default. Sixty-three file-protocol actions are
 kept behind eight MCP tools and a just-in-time schema catalog. This keeps action
 validation and the Lua executor unchanged while reducing the default serialized
 tool metadata from roughly 72 KB to under 6 KB.
@@ -122,6 +122,19 @@ caching mutable note data. Multi-range reads convert all boundaries once,
 sweep the Group once, serialize the union of matching notes once, and reference
 that shared array from per-range analyses. Automation is serialized and
 fingerprinted once per parameter, then sampled for every requested range.
+
+## Responsibility boundary
+
+Musical intent and execution safety are deliberately separated. The user and
+Agent decide what a phrase should express and supply explicit targets and
+values. The TypeScript MCP layer transports that decision compactly without
+inventing musical data. The Lua executor resolves it against current SynthV
+state, performs deterministic calculations, validates the complete write, and
+owns the single undo boundary. SynthV and the user remain the final state and
+listening authorities.
+
+The complete responsibility table and batch-design rules are documented in
+[Agent / MCP responsibility boundaries](responsibility-boundaries.md).
 
 ## Transaction layer
 

@@ -20,6 +20,7 @@ local POLL_INTERVAL_MS = 25
 local HEARTBEAT_EVERY_POLLS = 40
 local SESSION_CHECK_EVERY_POLLS = 10
 local MAX_REQUEST_BYTES = 8 * 1024 * 1024
+local MAX_SAFE_INTEGER = 9007199254740991
 
 local json = {}
 local JSON_ARRAY_MT = {}
@@ -1853,6 +1854,45 @@ local function serializeAutomation(group, parameterName)
         pointCount = #points,
         points = points
     }
+end
+
+local function requireAutomationDefinitionRange(definition, path, parameterName)
+    if type(definition) ~= "table"
+        or type(definition.range) ~= "table"
+        or type(definition.range[1]) ~= "number"
+        or type(definition.range[2]) ~= "number" then
+        raiseBridgeError(
+            "UNSUPPORTED_HOST_CAPABILITY",
+            "SynthV did not provide a usable Automation definition.range",
+            {
+                capability = "Automation.getDefinition().range",
+                field = path,
+                parameter = parameterName
+            }
+        )
+    end
+    local minimum = requireFiniteNumber(
+        definition.range[1],
+        path .. "[1]"
+    )
+    local maximum = requireFiniteNumber(
+        definition.range[2],
+        path .. "[2]"
+    )
+    if minimum > maximum then
+        raiseBridgeError(
+            "UNSUPPORTED_HOST_CAPABILITY",
+            "SynthV returned an invalid Automation definition.range",
+            {
+                capability = "Automation.getDefinition().range",
+                field = path,
+                parameter = parameterName,
+                minimum = minimum,
+                maximum = maximum
+            }
+        )
+    end
+    return minimum, maximum
 end
 
 local function serializeTimeAxis(timeAxis)
@@ -5857,6 +5897,264 @@ function handlers.edit_notes(payload)
     }
 end
 
+function handlers.transform_notes(payload)
+    payload = requireObject(payload, "payload")
+    local project, _track, trackIndex, reference, group, groupIndex =
+        resolveGroup(payload)
+    local targets = requireArray(payload.notes, "notes", 1, 512)
+    local transform = requireObject(payload.transform, "transform")
+
+    local onsetOffsetBlick = optionalInteger(
+        transform.onsetOffsetBlick,
+        "transform.onsetOffsetBlick",
+        -MAX_SAFE_INTEGER,
+        MAX_SAFE_INTEGER
+    )
+    local onsetOffsetSeconds = optionalNumber(
+        transform.onsetOffsetSeconds,
+        "transform.onsetOffsetSeconds"
+    )
+    if onsetOffsetBlick ~= nil and onsetOffsetSeconds ~= nil then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "onsetOffsetBlick and onsetOffsetSeconds are mutually exclusive"
+        )
+    end
+    local durationScale = optionalNumber(
+        transform.durationScale,
+        "transform.durationScale",
+        0.000001,
+        1000
+    ) or 1
+    local durationOffsetBlick = optionalInteger(
+        transform.durationOffsetBlick,
+        "transform.durationOffsetBlick",
+        -MAX_SAFE_INTEGER,
+        MAX_SAFE_INTEGER,
+        0
+    )
+    local pitchOffsetSemitones = optionalInteger(
+        transform.pitchOffsetSemitones,
+        "transform.pitchOffsetSemitones",
+        -127,
+        127,
+        0
+    )
+    if (onsetOffsetBlick or 0) == 0
+        and (onsetOffsetSeconds or 0) == 0
+        and durationScale == 1
+        and durationOffsetBlick == 0
+        and pitchOffsetSemitones == 0 then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "At least one non-identity note transform is required"
+        )
+    end
+
+    local timeAxis = onsetOffsetSeconds ~= nil and project:getTimeAxis() or nil
+    local referenceOffset = onsetOffsetSeconds ~= nil
+        and requireInteger(
+            reference:getTimeOffset(),
+            "reference.timeOffset",
+            -MAX_SAFE_INTEGER,
+            MAX_SAFE_INTEGER
+        )
+        or 0
+    local edits = json.array()
+    local expected = {}
+    local seen = {}
+    local unchangedCount = 0
+
+    for index = 1, #targets do
+        local path = "notes[" .. index .. "]"
+        local target = requireObject(targets[index], path)
+        local noteIndex = requireInteger(
+            target.noteIndex,
+            path .. ".noteIndex",
+            1,
+            group:getNumNotes()
+        )
+        if seen[noteIndex] then
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "The same noteIndex appears more than once",
+                { noteIndex = noteIndex }
+            )
+        end
+        seen[noteIndex] = true
+        local fingerprint = requireString(
+            target.fingerprint,
+            path .. ".fingerprint",
+            false
+        )
+        local note = validateFingerprint(group, noteIndex, fingerprint)
+        local changes = {}
+
+        if onsetOffsetBlick ~= nil then
+            changes.onset = requireInteger(
+                note:getOnset() + onsetOffsetBlick,
+                path .. ".transformedOnset",
+                0,
+                MAX_SAFE_INTEGER
+            )
+        elseif onsetOffsetSeconds ~= nil then
+            local absoluteOnset = note:getOnset() + referenceOffset
+            local readSeconds, currentSecondsOrError = pcall(function()
+                return timeAxis:getSecondsFromBlick(absoluteOnset)
+            end)
+            if not readSeconds then
+                raiseBridgeError(
+                    "UNSUPPORTED_HOST_CAPABILITY",
+                    "SynthV could not convert the current note onset to seconds",
+                    {
+                        capability = "TimeAxis.getSecondsFromBlick",
+                        noteIndex = noteIndex,
+                        cause = tostring(currentSecondsOrError)
+                    }
+                )
+            end
+            local currentSeconds = requireFiniteNumber(
+                currentSecondsOrError,
+                path .. ".currentOnsetSeconds"
+            )
+            local targetSeconds = requireFiniteNumber(
+                currentSeconds + onsetOffsetSeconds,
+                path .. ".transformedOnsetSeconds",
+                0
+            )
+            local converted, convertedOrError = pcall(function()
+                return timeAxis:getBlickFromSeconds(targetSeconds)
+            end)
+            if not converted then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "SynthV rejected the transformed note onset in seconds",
+                    {
+                        noteIndex = noteIndex,
+                        targetSeconds = targetSeconds,
+                        cause = tostring(convertedOrError)
+                    }
+                )
+            end
+            changes.onset = requireInteger(
+                convertedOrError - referenceOffset,
+                path .. ".transformedOnset",
+                0,
+                MAX_SAFE_INTEGER
+            )
+        end
+
+        if durationScale ~= 1 or durationOffsetBlick ~= 0 then
+            changes.duration = requireInteger(
+                math.floor(note:getDuration() * durationScale + 0.5)
+                    + durationOffsetBlick,
+                path .. ".transformedDuration",
+                1,
+                MAX_SAFE_INTEGER
+            )
+        end
+
+        if pitchOffsetSemitones ~= 0 then
+            changes.pitch = requireInteger(
+                note:getPitch() + pitchOffsetSemitones,
+                path .. ".transformedPitch",
+                0,
+                127
+            )
+        end
+
+        local effective = {}
+        if changes.onset ~= nil and changes.onset ~= note:getOnset() then
+            effective.onset = changes.onset
+        end
+        if changes.duration ~= nil
+            and changes.duration ~= note:getDuration() then
+            effective.duration = changes.duration
+        end
+        if changes.pitch ~= nil and changes.pitch ~= note:getPitch() then
+            effective.pitch = changes.pitch
+        end
+
+        if next(effective) == nil then
+            unchangedCount = unchangedCount + 1
+        else
+            edits[#edits + 1] = {
+                noteIndex = noteIndex,
+                fingerprint = fingerprint,
+                changes = effective
+            }
+            expected[#expected + 1] = {
+                note = note,
+                noteIndex = noteIndex,
+                changes = effective
+            }
+        end
+    end
+
+    if #edits == 0 then
+        raiseBridgeError(
+            "NO_CHANGES",
+            "The requested transform would not change any target note",
+            { targetedCount = #targets }
+        )
+    end
+
+    -- edit_notes owns the clone preflight and the one undo boundary. This
+    -- semantic wrapper only performs deterministic expansion from explicit
+    -- numeric inputs; it never chooses musical intent or target notes.
+    local result = handlers.edit_notes({
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        groupUuid = group:getUUID(),
+        edits = edits
+    })
+
+    for index = 1, #expected do
+        local check = expected[index]
+        local actualOnset = check.note:getOnset()
+        local actualDuration = check.note:getDuration()
+        local actualPitch = check.note:getPitch()
+        if (check.changes.onset ~= nil
+                and actualOnset ~= check.changes.onset)
+            or (check.changes.duration ~= nil
+                and actualDuration ~= check.changes.duration)
+            or (check.changes.pitch ~= nil
+                and actualPitch ~= check.changes.pitch) then
+            raiseBridgeError(
+                "HOST_POSTCONDITION_FAILED",
+                "SynthV did not retain a transformed note value",
+                {
+                    noteIndex = check.noteIndex,
+                    requested = check.changes,
+                    actual = {
+                        onset = actualOnset,
+                        duration = actualDuration,
+                        pitch = actualPitch
+                    },
+                    undoGuidance =
+                        "Use SynthV Edit > Undo to revert this transform."
+                }
+            )
+        end
+    end
+
+    result.semanticAction = "transform_notes"
+    result.targetedCount = #targets
+    result.transformedCount = #edits
+    result.unchangedCount = unchangedCount
+    result.transform = {
+        onsetOffsetBlick = onsetOffsetBlick or JSON_NULL,
+        onsetOffsetSeconds = onsetOffsetSeconds or JSON_NULL,
+        durationScale = durationScale,
+        durationOffsetBlick = durationOffsetBlick,
+        pitchOffsetSemitones = pitchOffsetSemitones,
+        durationUnitPreserved = "blick"
+    }
+    result.verified = true
+    result.undoRecordCount = 1
+    return result
+end
+
 local function makeDeterministicRandom(seed)
     local state = seed % 2147483647
     if state == 0 then state = 1 end
@@ -6703,9 +7001,15 @@ function handlers.set_automation_points(payload)
         raiseBridgeError("INVALID_ARGUMENT", "rangeBegin/rangeEnd are only valid when clearMode is range")
     end
 
-    local definition = serializedBefore.definition
-    local minimum = definition.range and definition.range[1] or nil
-    local maximum = definition.range and definition.range[2] or nil
+    local minimum = nil
+    local maximum = nil
+    if #points > 0 then
+        minimum, maximum = requireAutomationDefinitionRange(
+            serializedBefore.definition,
+            "definition.range",
+            parameterName
+        )
+    end
     local prepared = {}
     for index = 1, #points do
         local point = requireObject(points[index], "points[" .. index .. "]")
@@ -6966,11 +7270,15 @@ function handlers.apply_group_tuning(payload)
                     path .. " must add points or clear automation"
                 )
             end
-            local definition = before.definition
-            local minimum =
-                definition.range and definition.range[1] or nil
-            local maximum =
-                definition.range and definition.range[2] or nil
+            local minimum = nil
+            local maximum = nil
+            if #rawPoints > 0 then
+                minimum, maximum = requireAutomationDefinitionRange(
+                    before.definition,
+                    path .. ".definition.range",
+                    parameterName
+                )
+            end
             local points = {}
             for pointIndex = 1, #rawPoints do
                 local pointPath =
@@ -7704,6 +8012,7 @@ PROJECT_WRITE_ACTIONS = {
     delete_group_reference = true,
     add_notes = true,
     edit_notes = true,
+    transform_notes = true,
     set_note_phoneme_properties = true,
     delete_notes = true,
     generate_note_retake = true,

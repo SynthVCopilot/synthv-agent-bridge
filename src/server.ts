@@ -205,6 +205,67 @@ const noteChangesSchema = z
     message: "At least one note property must be changed.",
   });
 
+const noteTransformSchema = z
+  .object({
+    onsetOffsetBlick: z
+      .number()
+      .int()
+      .min(-Number.MAX_SAFE_INTEGER)
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional()
+      .describe("Signed Group-local musical-time offset in blicks."),
+    onsetOffsetSeconds: z
+      .number()
+      .finite()
+      .optional()
+      .describe(
+        "Signed absolute-time offset in seconds. Mutually exclusive with onsetOffsetBlick; note durations remain in blicks.",
+      ),
+    durationScale: z
+      .number()
+      .finite()
+      .min(0.000001)
+      .max(1000)
+      .optional()
+      .describe(
+        "Multiply each original duration before applying durationOffsetBlick.",
+      ),
+    durationOffsetBlick: z
+      .number()
+      .int()
+      .min(-Number.MAX_SAFE_INTEGER)
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional()
+      .describe(
+        "Signed blick offset applied after durationScale and rounding.",
+      ),
+    pitchOffsetSemitones: z
+      .number()
+      .int()
+      .min(-127)
+      .max(127)
+      .optional()
+      .describe("Signed MIDI-semitone offset."),
+  })
+  .refine(
+    (value) =>
+      value.onsetOffsetBlick === undefined ||
+      value.onsetOffsetSeconds === undefined,
+    {
+      message:
+        "onsetOffsetBlick and onsetOffsetSeconds are mutually exclusive.",
+    },
+  )
+  .refine(
+    (value) =>
+      (value.onsetOffsetBlick ?? 0) !== 0 ||
+      (value.onsetOffsetSeconds ?? 0) !== 0 ||
+      (value.durationScale ?? 1) !== 1 ||
+      (value.durationOffsetBlick ?? 0) !== 0 ||
+      (value.pitchOffsetSemitones ?? 0) !== 0,
+    { message: "At least one non-identity note transform is required." },
+  );
+
 const fingerprintedNoteSchema = z.object({
   noteIndex: indexSchema.describe("Current 1-based note index."),
   fingerprint: fingerprintSchema.describe(
@@ -1500,6 +1561,28 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async (input) => runTool(async () => client.send("edit_notes", input)),
+  );
+
+  server.registerTool(
+    "transform_notes",
+    {
+      title: "Transform SynthV Notes",
+      description:
+        "Apply one explicit numeric transform to a fingerprint-guarded note batch. The Bridge performs only deterministic onset, duration, and pitch mechanics; the Agent remains responsible for choosing targets and values. With MCP v2, args.target=contextNotes expands every note from a fresh contextId without repeating note indices.",
+      inputSchema: {
+        ...groupLocatorShape,
+        notes: z.array(fingerprintedNoteSchema).min(1).max(512),
+        transform: noteTransformSchema,
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("transform_notes", input)),
   );
 
   server.registerTool(

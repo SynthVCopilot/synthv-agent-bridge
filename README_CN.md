@@ -47,6 +47,9 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 | 安全编辑 | 使用最新指纹和 Guard Token 保护写入；预检最多 32 个独立步骤；创建一个 SynthV 撤销记录，并可选保留受保护回滚计划。 |
 | 审核与本地隐私 | 在可选原生侧边栏中审核、应用、放弃或取消受保护预览。文件 IPC 保持本地：Bridge 不解析 `.svp` 文件、不打开网络端口，也不调用 AI API。 |
 
+参阅 [Agent / MCP 责任边界](docs/responsibility-boundaries_cn.md)，了解艺术
+决策、紧凑协议、SynthV 权威校验和用户审核之间的明确分工。
+
 ## 首次 MCP 连接：用户提示
 
 在一次对话中第一次修改工程前，Agent 必须简短告知用户：
@@ -314,6 +317,7 @@ SYNTHV_AGENT_BRIDGE_MCP_SURFACE=legacy
 | `delete_group_reference` | 破坏性 | 删除非主人声或乐器引用。 |
 | `add_notes` | 写入 | 向目标 Group 添加音符。V2 默认为 `grouping=ensureNonMain`：目标为轨道主 Group 时创建可复用的非主 Group/引用；使用 `grouping=target` 可写入准确目标 Group。 |
 | `edit_notes` | 写入 | 编辑经过指纹验证的音符。 |
+| `transform_notes` | 破坏性 | 对受保护音符批量应用明确的起音偏移、时值缩放/偏移或音高偏移。V2 可直接变换新鲜 Context 中的全部音符，无需重复索引。 |
 | `set_note_phoneme_properties` | 写入 | 编辑经过指纹/Guard 验证的音素、音素集、音节、时值和强度属性，可选紧凑确认及当前 Group/选中音符保护。 |
 | `delete_notes` | 破坏性 | 删除经过指纹验证的音符。 |
 | `get_note_retakes` | 读取 | 读取 Take 数量和 Bridge 跟踪的 Take ID。 |

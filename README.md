@@ -46,6 +46,10 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 | Safe editing | Protect writes with fresh fingerprints and Guard Tokens; preflight up to 32 independent steps; create one SynthV undo record and optionally retain a guarded rollback plan. |
 | Review and local privacy | Review, apply, dismiss, or cancel guarded previews in the optional native side panel. File IPC stays local: the Bridge does not parse `.svp` files, open a network port, or call an AI API. |
 
+See [Agent / MCP responsibility boundaries](docs/responsibility-boundaries.md)
+for the explicit division between artistic decisions, compact protocol work,
+authoritative SynthV validation, and user review.
+
 ## First MCP connection: user notice
 
 On the first project-changing use in a conversation, the Agent must briefly
@@ -331,6 +335,7 @@ the default tool-schema budget.
 | `delete_group_reference` | Destructive | Remove a non-main vocal or instrumental reference. |
 | `add_notes` | Write | Add notes to a target group. V2 defaults to `grouping=ensureNonMain`, creating a reusable non-main group/reference when the target is the track main group; use `grouping=target` to write to the exact group. |
 | `edit_notes` | Write | Edit fingerprint-verified notes. |
+| `transform_notes` | Destructive | Apply one explicit guarded batch offset/scale to note onset, duration, or pitch. V2 can transform every note in a fresh Context without repeating indices. |
 | `set_note_phoneme_properties` | Write | Edit fingerprint/Guard-verified phoneme, phoneset, syllable, timing, and strength properties, with optional compact acknowledgement and current-Group/selected-note guards. |
 | `delete_notes` | Destructive | Delete fingerprint-verified notes. |
 | `get_note_retakes` | Read | Read take count and Bridge-tracked Take IDs. |
