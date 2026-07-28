@@ -9,6 +9,9 @@
 Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重写
 `.svp` 文件，不会打开网络端口，也不会自行调用 AI API。
 
+> 第一次使用？请参阅[中文快速开始](docs/quickstart_cn.md)。
+> English users: see the [Quickstart](docs/quickstart.md).
+
 > 状态：**v0.1.5 预发布版**。协议、安全保护、广泛的官方脚本 API
 > 覆盖、可选的原生侧边栏工作流、受保护的事务，以及首批音乐语义工具
 > 均已实现。请在重要工程的副本上测试。
