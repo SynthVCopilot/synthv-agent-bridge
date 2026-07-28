@@ -1409,51 +1409,21 @@ local function valueOrNull(value)
     return value
 end
 
-local function inspectPhonemeCapabilities(group)
-    if group:getNumNotes() < 1 then
-        return {
-            strengthRetained = JSON_NULL,
-            reason = "no_notes"
-        }
-    end
-    local ok, retained = pcall(function()
-        local candidate = group:getNote(1):clone()
-        local rawAttributes = candidate:getAttributes()
-        if type(rawAttributes) ~= "table" then
-            rawAttributes = {}
-        end
-        local phonemes = json.array()
-        if type(rawAttributes.phonemes) == "table" then
-            phonemes = sanitizeForJson(rawAttributes.phonemes)
-        end
-        if type(phonemes[1]) ~= "table" then
-            phonemes[1] = {}
-        end
-        local current = type(phonemes[1].strength) == "number"
-            and phonemes[1].strength
-            or 1
-        local probe = current <= 0.9 and 1.2 or 0.8
-        phonemes[1].strength = probe
-        candidate:setAttributes({ phonemes = phonemes })
-        local retainedAttributes = candidate:getAttributes()
-        local retainedPhonemes = type(retainedAttributes) == "table"
-            and retainedAttributes.phonemes
-            or nil
-        local actual = type(retainedPhonemes) == "table"
-            and type(retainedPhonemes[1]) == "table"
-            and retainedPhonemes[1].strength
-            or nil
-        return type(actual) == "number" and math.abs(actual - probe) <= 0.000001
-    end)
-    if not ok then
-        return {
-            strengthRetained = false,
-            reason = "host_rejected_probe"
-        }
-    end
+local function inspectPhonemeCapabilities(_group)
     return {
-        strengthRetained = retained == true,
-        reason = retained == true and "verified_on_clone" or "host_changed_value"
+        strengthRetained = JSON_NULL,
+        reason = "not_probed_write_verified",
+        probed = false,
+        ranges = {
+            leftOffset = {
+                minimum = JSON_NULL,
+                maximum = JSON_NULL,
+                unit = "seconds"
+            },
+            position = { minimum = 0, maximum = 1 },
+            activity = { minimum = 0, maximum = 1 },
+            strength = { minimum = -1, maximum = 1 }
+        }
     }
 end
 
@@ -1694,7 +1664,8 @@ local function prepareGroupVoiceUpdate(reference, payload)
             local changed = false
             for _, axis in ipairs({ "pitch", "timbre", "pronunciation" }) do
                 if isProvided(update[axis]) then
-                    local value = requireFiniteNumber(update[axis], path .. "." .. axis, 0)
+                    local value =
+                        requireFiniteNumber(update[axis], path .. "." .. axis, 0, 150)
                     sparseMode[axis] = value
                     mergedMode[axis] = value
                     checks[#checks + 1] = {
@@ -2371,6 +2342,12 @@ local PHONEME_ATTRIBUTE_KEYS = {
     strength = true
 }
 
+local PHONEME_ATTRIBUTE_RANGES = {
+    position = { minimum = 0, maximum = 1 },
+    activity = { minimum = 0, maximum = 1 },
+    strength = { minimum = -1, maximum = 1 }
+}
+
 local function preparePhonemeAttributes(value, path)
     local input = requireArray(value, path, 0, 256)
     local result = json.array()
@@ -2384,7 +2361,13 @@ local function preparePhonemeAttributes(value, path)
                     field = key
                 })
             end
-            prepared[key] = requireFiniteNumber(rawValue, attributePath .. "." .. key)
+            local range = PHONEME_ATTRIBUTE_RANGES[key]
+            prepared[key] = requireFiniteNumber(
+                rawValue,
+                attributePath .. "." .. key,
+                range and range.minimum or nil,
+                range and range.maximum or nil
+            )
         end
         if next(prepared) == nil then
             raiseBridgeError("INVALID_ARGUMENT", attributePath .. " must change at least one field")
@@ -6804,6 +6787,340 @@ function handlers.clear_automation(payload)
     return serialized
 end
 
+function handlers.apply_group_tuning(payload)
+    payload = requireObject(payload, "payload")
+    local project, _track, trackIndex, reference, group, groupIndex =
+        resolveGroup(payload)
+    local summary = requireString(payload.summary, "summary", false)
+    if #summary > 1000 then
+        raiseBridgeError("INVALID_ARGUMENT", "summary must be at most 1000 bytes")
+    end
+
+    validateCurrentEditorGroupGuard(payload, reference, group)
+
+    local voicePayload = nil
+    local voiceUpdate = nil
+    local voiceChecks = nil
+    local expectedVocalModes = nil
+    local allowAdditionalVocalModes = false
+    if isProvided(payload.voice) then
+        voicePayload = requireObject(payload.voice, "voice")
+        validateReferenceFingerprint(
+            reference,
+            requireString(
+                payload.referenceFingerprint,
+                "referenceFingerprint",
+                false
+            ),
+            trackIndex,
+            groupIndex
+        )
+        voiceUpdate, voiceChecks, expectedVocalModes, allowAdditionalVocalModes =
+            prepareGroupVoiceUpdate(reference, voicePayload)
+    elseif isProvided(payload.referenceFingerprint) then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "referenceFingerprint is only used when voice changes are included"
+        )
+    end
+
+    local preparedNotes = {}
+    if isProvided(payload.noteEdits) then
+        local noteEdits = requireArray(payload.noteEdits, "noteEdits", 1, 512)
+        local seenNotes = {}
+        for index = 1, #noteEdits do
+            local path = "noteEdits[" .. index .. "]"
+            local edit = requireObject(noteEdits[index], path)
+            local noteIndex = requireInteger(
+                edit.noteIndex,
+                path .. ".noteIndex",
+                1,
+                group:getNumNotes()
+            )
+            if seenNotes[noteIndex] then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "The same noteIndex appears more than once",
+                    { noteIndex = noteIndex }
+                )
+            end
+            seenNotes[noteIndex] = true
+            local note = validateFingerprint(
+                group,
+                noteIndex,
+                requireString(edit.fingerprint, path .. ".fingerprint", false)
+            )
+            local noteChanges = nil
+            local phonemeChanges = nil
+            local validationNote = note
+            if isProvided(edit.changes) then
+                noteChanges =
+                    prepareNoteChanges(note, edit.changes, path .. ".changes")
+                validationNote = note:clone()
+                applyPreparedNoteChanges(
+                    validationNote,
+                    noteChanges,
+                    path .. ".changes"
+                )
+            end
+            if isProvided(edit.phonemeChanges) then
+                phonemeChanges = preparePhonemePropertyChanges(
+                    validationNote,
+                    edit.phonemeChanges,
+                    path .. ".phonemeChanges"
+                )
+            end
+            if noteChanges == nil and phonemeChanges == nil then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    path .. " must change note or phoneme data"
+                )
+            end
+            preparedNotes[#preparedNotes + 1] = {
+                note = note,
+                noteChanges = noteChanges,
+                notePath = path .. ".changes",
+                phonemeChanges = phonemeChanges,
+                phonemePath = path .. ".phonemeChanges"
+            }
+        end
+    end
+
+    local function applyPreparedAutomation(target, update)
+        if update.clearMode == "all" then
+            target:removeAll()
+        elseif update.clearMode == "range" then
+            target:remove(update.rangeBegin, update.rangeEnd)
+        end
+        for pointIndex = 1, #update.points do
+            target:add(
+                update.points[pointIndex].position,
+                update.points[pointIndex].value
+            )
+        end
+    end
+
+    local preparedAutomations = {}
+    if isProvided(payload.automations) then
+        local automations = requireArray(payload.automations, "automations", 1, 32)
+        local seenParameters = {}
+        for index = 1, #automations do
+            local path = "automations[" .. index .. "]"
+            local input = requireObject(automations[index], path)
+            local parameterName =
+                requireString(input.parameter, path .. ".parameter", false)
+            if seenParameters[parameterName] then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "The same automation parameter appears more than once",
+                    { parameter = parameterName }
+                )
+            end
+            seenParameters[parameterName] = true
+
+            local automation, before = serializeAutomation(group, parameterName)
+            validateExpectedFingerprint(
+                before.fingerprint,
+                requireString(
+                    input.expectedFingerprint,
+                    path .. ".expectedFingerprint",
+                    false
+                ),
+                "STALE_AUTOMATION",
+                "The automation curve changed after it was read"
+            )
+
+            local clearMode =
+                optionalString(input.clearMode, path .. ".clearMode", false)
+                    or "none"
+            if clearMode ~= "none"
+                and clearMode ~= "all"
+                and clearMode ~= "range" then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    path .. ".clearMode must be one of none, all, or range"
+                )
+            end
+            local rangeBegin = nil
+            local rangeEnd = nil
+            if clearMode == "range" then
+                rangeBegin =
+                    requireInteger(input.rangeBegin, path .. ".rangeBegin", 0)
+                rangeEnd = requireInteger(
+                    input.rangeEnd,
+                    path .. ".rangeEnd",
+                    rangeBegin
+                )
+            elseif isProvided(input.rangeBegin) or isProvided(input.rangeEnd) then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    path .. ".rangeBegin/rangeEnd require clearMode=range"
+                )
+            end
+
+            local rawPoints =
+                requireArray(input.points, path .. ".points", 0, 10000)
+            if #rawPoints == 0 and clearMode == "none" then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    path .. " must add points or clear automation"
+                )
+            end
+            local definition = before.definition
+            local minimum =
+                definition.range and definition.range[1] or nil
+            local maximum =
+                definition.range and definition.range[2] or nil
+            local points = {}
+            for pointIndex = 1, #rawPoints do
+                local pointPath =
+                    path .. ".points[" .. pointIndex .. "]"
+                local point = requireObject(rawPoints[pointIndex], pointPath)
+                points[#points + 1] = {
+                    position =
+                        requireInteger(point.position, pointPath .. ".position", 0),
+                    value = requireFiniteNumber(
+                        point.value,
+                        pointPath .. ".value",
+                        minimum,
+                        maximum
+                    )
+                }
+            end
+
+            local prepared = {
+                parameter = parameterName,
+                automation = automation,
+                clearMode = clearMode,
+                rangeBegin = rangeBegin,
+                rangeEnd = rangeEnd,
+                points = points
+            }
+            preparedAutomations[#preparedAutomations + 1] = prepared
+        end
+    end
+
+    if voiceUpdate == nil
+        and #preparedNotes == 0
+        and #preparedAutomations == 0 then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "At least one voice, note, phoneme, or automation change is required"
+        )
+    end
+
+    createUndoRecord(project)
+
+    if voiceUpdate ~= nil then
+        local applied, applyError = pcall(function()
+            reference:setVoice(voiceUpdate)
+        end)
+        if not applied then
+            raiseBridgeError(
+                "HOST_WRITE_FAILED",
+                "SynthV rejected a prevalidated group voice update",
+                { cause = tostring(applyError) }
+            )
+        end
+        local updatedVoice = safeCall(function()
+            return reference:getVoice()
+        end, nil)
+        verifyGroupVoiceChecks(
+            updatedVoice,
+            voiceChecks,
+            "HOST_POSTCONDITION_FAILED"
+        )
+        verifyVocalModeSnapshot(
+            updatedVoice,
+            expectedVocalModes,
+            "HOST_POSTCONDITION_FAILED",
+            allowAdditionalVocalModes
+        )
+    end
+
+    for index = 1, #preparedNotes do
+        local prepared = preparedNotes[index]
+        if prepared.noteChanges ~= nil then
+            applyPreparedNoteChanges(
+                prepared.note,
+                prepared.noteChanges,
+                prepared.notePath
+            )
+        end
+        if prepared.phonemeChanges ~= nil then
+            applyPreparedNoteChanges(
+                prepared.note,
+                prepared.phonemeChanges,
+                prepared.phonemePath
+            )
+            verifyPhonemePostconditions(
+                prepared.note,
+                prepared.phonemeChanges,
+                prepared.phonemePath,
+                "project_write"
+            )
+        end
+    end
+
+    for index = 1, #preparedAutomations do
+        applyPreparedAutomation(
+            preparedAutomations[index].automation,
+            preparedAutomations[index]
+        )
+    end
+
+    local notes = json.array()
+    for index = 1, #preparedNotes do
+        local note = preparedNotes[index].note
+        local noteIndex = note:getIndexInParent()
+        notes[#notes + 1] = {
+            noteIndex = noteIndex,
+            fingerprint =
+                makeNoteFingerprint(group:getUUID(), noteIndex, note)
+        }
+    end
+
+    local automationResults = json.array()
+    for index = 1, #preparedAutomations do
+        local prepared = preparedAutomations[index]
+        local _automation, serialized =
+            serializeAutomation(group, prepared.parameter)
+        automationResults[#automationResults + 1] = {
+            parameter = serialized.parameter,
+            interpolation = serialized.interpolation,
+            fingerprint = serialized.fingerprint,
+            pointCount = serialized.pointCount,
+            addedOrUpdatedCount = #prepared.points,
+            clearMode = prepared.clearMode
+        }
+    end
+
+    local voice = JSON_NULL
+    local referenceFingerprint = JSON_NULL
+    if voiceUpdate ~= nil then
+        voice = serializeGroupVoice(reference, trackIndex, groupIndex)
+        referenceFingerprint = makeReferenceFingerprint(reference)
+    end
+    return {
+        trackIndex = trackIndex,
+        groupIndex = groupIndex,
+        groupUuid = group:getUUID(),
+        summary = summary,
+        changedCount =
+            (voiceUpdate ~= nil and 1 or 0)
+            + #preparedNotes
+            + #preparedAutomations,
+        voiceChanged = voiceUpdate ~= nil,
+        noteEditedCount = #preparedNotes,
+        automationChangedCount = #preparedAutomations,
+        undoRecordCount = 1,
+        referenceFingerprint = referenceFingerprint,
+        voice = voice,
+        notes = notes,
+        automation = automationResults
+    }
+end
+
 function handlers.get_editor_view(payload)
     payload = requireObject(payload, "payload")
     local viewName = optionalString(payload.view, "view", false) or "mainEditor"
@@ -7383,6 +7700,7 @@ PROJECT_WRITE_ACTIONS = {
     delete_track = true,
     update_group = true,
     set_group_voice = true,
+    apply_group_tuning = true,
     delete_group_reference = true,
     add_notes = true,
     edit_notes = true,

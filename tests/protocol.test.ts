@@ -107,3 +107,20 @@ test("parseBridgeStatus preserves host extensions and validates heartbeat fields
   assert.equal(parsed.host.customField, "kept");
   assert.equal(parsed.sessionToken, "session");
 });
+
+test("parseBridgeStatus validates a present session token", () => {
+  assert.throws(
+    () =>
+      parseBridgeStatus({
+        protocolVersion: 1,
+        state: "running",
+        updatedAtEpochMs: 1234,
+        bridgeVersion: "0.1.0",
+        host: {},
+        projectFile: "song.svp",
+        ipcDirectory: "C:\\Temp",
+        sessionToken: 123,
+      }),
+    /sessionToken must be a string/u,
+  );
+});

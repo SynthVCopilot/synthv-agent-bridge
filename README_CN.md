@@ -174,19 +174,19 @@ SynthV 运行期间，该脚本会保持活动并写入心跳。需要停止时�
 
 ### 4. 连接 MCP 宿主
 
-#### Codex CLI
+#### Codex
 
-使用构建入口的绝对路径：
+仓库已经包含项目级 `.codex/config.toml`：
 
-```bash
-codex mcp add synthv-agent-bridge -- node "/项目绝对路径/synthv-agent-bridge/dist/src/cli.js"
+```toml
+[mcp_servers.synthv-agent-bridge]
+command = "node"
+args = ["dist/src/cli.js"]
+startup_timeout_sec = 120
 ```
 
-然后验证注册：
-
-```bash
-codex mcp list
-```
+请在 Codex 中信任并打开仓库根目录，完成构建后重启 Codex 或新建任务。
+这样 MCP 注册只对当前项目生效，不会修改用户的全局 Codex 配置。
 
 完整 TOML 示例位于
 [examples/codex-config.toml](examples/codex-config.toml)。其他支持
@@ -310,6 +310,7 @@ SYNTHV_AGENT_BRIDGE_MCP_SURFACE=legacy
 | `delete_track` | 破坏性 | 删除经过指纹验证且不是最后一条的轨道。 |
 | `update_group` | 写入 | 修改人声/乐器引用状态和受支持的人声属性。 |
 | `set_group_voice` | 写入 | 使用指纹验证更新类型化 Voice、Vocal Mode 和经宿主验证的实验性 Unison，可选当前 Group 保护。 |
+| `apply_group_tuning` | 破坏性 | 在一个撤销记录中原子应用同一 Group 的 Voice/唱法、音符/音素及多条自动化调音。 |
 | `delete_group_reference` | 破坏性 | 删除非主人声或乐器引用。 |
 | `add_notes` | 写入 | 向目标 Group 添加音符。V2 默认为 `grouping=ensureNonMain`：目标为轨道主 Group 时创建可复用的非主 Group/引用；使用 `grouping=target` 可写入准确目标 Group。 |
 | `edit_notes` | 写入 | 编辑经过指纹验证的音符。 |
@@ -387,14 +388,18 @@ SYNTHV_AGENT_BRIDGE_MCP_SURFACE=legacy
 - 紧凑写入响应返回数量和替换后的 Guard Token，而不是完整音符或自动化
   曲线。
 
-Guard Token 是不透明的，并且只存在于当前 MCP 服务器进程。重启、淘汰或
-出现 `UNKNOWN_GUARD_TOKEN` 后，请重新读取目标。服务器会在请求到达 SynthV
-前把 Token 解析为原始完整指纹，因此现有的陈旧写入保护保持不变。
+Guard Token 是不透明的，并且只存在于当前 MCP 服务器进程。MCP v2 会自动
+检测 SynthV/Bridge 会话 Token 变化，并清除全部缓存 Context 和 Guard
+Token。此后的写入会返回 `SYNTHV_SESSION_CHANGED`；请重新读取目标，并用
+新 Context 构建写入。无旧 Context 的新读取可以直接继续，并返回
+`sessionReset`。淘汰或 `UNKNOWN_GUARD_TOKEN` 同样需要重新读取。服务器会在
+请求到达 SynthV 前把 Token 解析为原始完整指纹，因此陈旧写入保护不变。
 
 音素写入会先在分离的克隆上验证，再创建撤销记录，之后还会在工程音符上
 再次验证。如果宿主或旧版 Voice 对请求值进行量化或忽略，会返回
-`HOST_POSTCONDITION_FAILED`。`get_group_voice.phonemeCapabilities` 会报告
-音素强度是否通过仅克隆安全探测。
+`HOST_POSTCONDITION_FAILED`。稳定音素范围会直接校验：位置/活跃度
+`0..1`、强度 `-1..1`，`leftOffset` 为有限秒数且 Bridge 不额外设限。
+启动或首次使用时不再执行范围探测。
 
 ### 轨道颜色
 
@@ -419,7 +424,7 @@ Setter。在不兼容宿主上真正修改模式，会在创建撤销记录前�
 
 ## 安全编辑工作流
 
-服务器说明要求 Agent 按以下顺序执行：
+Codex Agent 规则要求按以下顺序执行：
 
 1. 乐句调音时，在编辑前立即调用 `get_phrase_context`。对于 Group Voice
    或 Vocal Mode，调用不带定位器的 `get_group_voice`，以当前钢琴卷帘
@@ -428,8 +433,10 @@ Setter。在不兼容宿主上真正修改模式，会在创建撤销记录前�
 2. 展示或在内部构建一个小型、便于审核的变更。
 3. 复制最新适用的 Group/引用 UUID 和指纹、轨道指纹、自动化/时间轴指纹，
    以及音符或 Smart Pitch 指纹。
-4. 调用能完成目标的最小写入工具。只有完整、相互独立的多对象批处理确实
-   需要一个撤销记录时，才使用 `apply_transaction`。
+4. 调用能完成目标的最小写入工具。同一次调音会修改同一 Group 的
+   Voice/唱法、音符/音素或多条自动化时，优先使用
+   `apply_group_tuning`；完整且相互独立的多对象批处理再使用
+   `apply_transaction`。
 5. SynthV 返回任何 `STALE_*` 错误时重新读取，不进行猜测。
 
 一次紧凑读取应支持一批完整的相关变更。如果只修改了 Group Voice，不要

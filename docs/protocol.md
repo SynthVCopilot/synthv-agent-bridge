@@ -296,8 +296,8 @@ the MCP v2 surface, the default projection contains only `trackIndex`,
 `groupIndex`, documented `parameters`, `vocalModes`, and a guarded `contextId`.
 Callers can request additional fields explicitly for diagnostics.
 
-The MCP server instructions require one first-use notice per conversation,
-not one notice per edit. Before Vocal Mode work, the Agent asks the user to
+The Codex Agent rule requires one first-use notice per conversation, not one
+notice per edit. Before Vocal Mode work, the Agent asks the user to
 select the intended Note Group, select or assign its singer, and then provide
 either the exact current singer mode names or a screenshot of that panel.
 Vocal Mode names cannot appear before a singer is selected. The Agent reuses
@@ -317,9 +317,8 @@ field list. It accepts them only when the current reference returns the field,
 and it verifies the requested value on a cloned reference before creating an
 undo record.
 
-Vocal Mode axes accept non-negative finite values. The bridge deliberately
-does not impose a fixed upper bound because current projects can return values
-above the older documented range. SynthV may omit every default Vocal Mode from
+Vocal Mode pitch, timbre, and pronunciation axes accept `0..150`. SynthV may
+omit every default Vocal Mode from
 `getVoice()` until a non-default value is written, so an empty
 `vocalModeParams` map is not treated as a capability catalog. The caller may
 submit all desired mode names in one `set_group_voice` request. The Bridge
@@ -341,9 +340,52 @@ then retry all identified names in one batch and reuse them for that singer.
 The Bridge first tries a sparse nested update and verifies every previously
 visible Vocal Mode value, so an unrequested legacy value is never silently
 clamped. A directly requested value must still survive
-`NoteGroupReference:setVoice()` on a cloned reference; SynthV 2.2.1 clamps some
-host-returned values such as 220 to 150 when they are written, and the bridge
-therefore rejects that write before an undo record is created.
+`NoteGroupReference:setVoice()` on a cloned reference. The TypeScript and Lua
+bound prevents values above 150 from reaching that preflight.
+
+### Tuning parameter ranges
+
+The Bridge does not perform exploratory range writes at startup or at the
+beginning of a conversation. Stable public or verified ranges are validated in
+TypeScript and Lua:
+
+| Scope | Parameter | Accepted range |
+|---|---|---:|
+| Group Voice | loudness | `-48..12` dB |
+| Group Voice | tension, breathiness, gender, tone shift | `-1..1` |
+| Group Voice | Vocal Mode pitch/timbre/pronunciation | `0..150` |
+| Phoneme | position, activity | `0..1` |
+| Phoneme | strength | `-1..1` |
+| Phoneme | left offset | finite seconds; no Bridge-imposed bound |
+| Expression preset | strength | `0..2` |
+
+Automation is intentionally different: `Automation:getDefinition().range` is
+the authority for each current Group, host, and voice. The existing
+fingerprint/Guard read already returns this definition, so no separate probe is
+needed. SynthV Studio 2.2.1 was verified to return `pitchDelta -1200..1200`,
+`vibratoEnv 0..2`, `loudness -48..24`, `tension/breathiness/gender -2..2`,
+`voicing 0..1`, `toneShift -800..800`, `mouthOpening -1..1`,
+`rapIntonation 0..1`, and current singer `vocalMode_<Name> -150..150`.
+Because these live ranges differ from older public tables, the Bridge validates
+automation point values against the host-returned definition rather than a
+duplicated fixed list.
+
+Clone-only SynthV 2.2.1 verification also confirmed phoneme
+`position/activity 0..1`, `strength -1..1`, and unchanged `leftOffset` values
+through at least `-10..10` seconds. Generic note attributes remain
+host-validated finite values unless a semantic action has a narrower contract;
+for example, `apply_expression_preset` deliberately limits its strength to
+`0..2`.
+
+### Same-Group tuning batch
+
+`apply_group_tuning` accepts an optional Group Voice/Vocal Mode change,
+fingerprint-guarded note edits with optional phoneme changes, and up to 32
+fingerprint-guarded automation updates for one Group. It resolves and validates
+the complete payload—including every current fingerprint and every
+host-returned automation range—before `Project:newUndoRecord()`, then applies
+the pass as exactly one SynthV undo record. Prefer it over several sequential
+writes when one tuning decision affects the same Group.
 
 ### Hot reload
 
@@ -357,6 +399,16 @@ session token changed. The manifest fallback is needed because SynthV 2.2.1
 does not expose the loaded script path to Lua. A Bridge version that predates
 this action must be restarted manually once before later installs can reload
 automatically.
+
+The MCP v2 surface tracks the heartbeat `sessionToken`. When SynthV restarts or
+the Bridge hot-reloads, the next v2 call automatically detects the changed
+token and clears every cached `contextId` and Guard Token. A write is rejected
+with `SYNTHV_SESSION_CHANGED` and `requiredAction=read_target_again`; a fresh
+read without an old context proceeds and includes `sessionReset` in its result.
+This makes the reset explicit to the Agent without attempting to restart the
+SynthV application. Automatically restarting SynthV is intentionally out of
+scope because it can interrupt unsaved work; the safe automatic behavior is
+cache invalidation followed by a fresh guarded read.
 
 ### Selection-aware writes
 

@@ -5,7 +5,7 @@ import type {
 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { BridgeProtocolError, toPublicError } from "./errors.js";
+import { BridgeError, BridgeProtocolError, toPublicError } from "./errors.js";
 import type { GuardTokenStore } from "./guard-token-store.js";
 import {
   V2ContextStore,
@@ -69,6 +69,7 @@ const SIDEBAR_OPERATIONS = {
 } as const;
 
 const NOTE_ARRAY_FIELDS: Readonly<Record<string, string>> = {
+  apply_group_tuning: "noteEdits",
   apply_expression_preset: "notes",
   delete_notes: "notes",
   edit_notes: "edits",
@@ -90,6 +91,7 @@ const TRACK_GUARD_ACTIONS = new Set([
 ]);
 
 const REFERENCE_GUARD_ACTIONS = new Set([
+  "apply_group_tuning",
   "delete_group_reference",
   "set_group_voice",
   "update_group",
@@ -111,6 +113,7 @@ const GROUP_LOCATOR_ACTIONS = new Set([
   "activate_note_retake",
   "add_notes",
   "add_pitch_controls",
+  "apply_group_tuning",
   "apply_expression_preset",
   "clear_automation",
   "delete_group_reference",
@@ -600,6 +603,9 @@ function projectFields(root: JsonRecord, fields: readonly string[]): JsonRecord 
   if (root.hasMore !== undefined) {
     projected.hasMore = root.hasMore;
   }
+  if (root.sessionReset !== undefined) {
+    projected.sessionReset = root.sessionReset;
+  }
   return projected;
 }
 
@@ -788,6 +794,19 @@ function expandContext(
     result.expectedAutomationFingerprint ??=
       context.automationFingerprints.get(parameter);
   }
+  if (action === "apply_group_tuning" && Array.isArray(result.automations)) {
+    for (const value of result.automations) {
+      const update = asRecord(value, "automations[]");
+      const parameter = optionalString(update.parameter);
+      if (
+        parameter !== undefined &&
+        update.expectedFingerprint === undefined
+      ) {
+        update.expectedFingerprint =
+          context.automationFingerprints.get(parameter);
+      }
+    }
+  }
   return result;
 }
 
@@ -974,12 +993,67 @@ async function invokeV2(
   }
 }
 
+export interface V2SessionChange {
+  readonly previousSessionToken: string;
+  readonly currentSessionToken: string;
+}
+
+export class V2SessionTracker {
+  private sessionToken: string | undefined;
+
+  public observe(sessionToken: string | undefined): V2SessionChange | undefined {
+    if (sessionToken === undefined || sessionToken.length === 0) {
+      return undefined;
+    }
+    if (this.sessionToken === undefined) {
+      this.sessionToken = sessionToken;
+      return undefined;
+    }
+    if (this.sessionToken === sessionToken) {
+      return undefined;
+    }
+    const change = {
+      previousSessionToken: this.sessionToken,
+      currentSessionToken: sessionToken,
+    };
+    this.sessionToken = sessionToken;
+    return change;
+  }
+}
+
 export function registerV2Surface(
   registerTool: RegisterTool,
   definitions: V2ToolDefinitions,
   guardTokens: GuardTokenStore,
+  getSessionToken?: () => Promise<string | undefined>,
 ): void {
   const contexts = new V2ContextStore();
+  const sessionTracker = new V2SessionTracker();
+  const observeSession = async (): Promise<V2SessionChange | undefined> => {
+    const change = sessionTracker.observe(await getSessionToken?.());
+    if (change !== undefined) {
+      contexts.clear();
+      guardTokens.clear();
+    }
+    return change;
+  };
+  const sessionChangedError = (change: V2SessionChange): BridgeError =>
+    new BridgeError(
+      "SynthV was restarted or the Bridge was reloaded. Cached contexts and Guard Tokens were cleared; read the target again before writing.",
+      "SYNTHV_SESSION_CHANGED",
+      {
+        ...change,
+        cachesCleared: true,
+        requiredAction: "read_target_again",
+      },
+    );
+  const sessionResetResult = (change: V2SessionChange): JsonRecord => ({
+    code: "SYNTHV_SESSION_CHANGED",
+    message:
+      "SynthV restart or Bridge reload detected. Cached contexts and Guard Tokens were cleared; this read is fresh.",
+    ...change,
+    cachesCleared: true,
+  });
   const argsSchema = z.record(z.string(), z.unknown()).default({});
   const actionSchema = z
     .string()
@@ -1068,6 +1142,10 @@ export function registerV2Surface(
     async (input) => {
       try {
         assertActionCategory(definitions, input.action, "read");
+        const sessionChange = await observeSession();
+        if (sessionChange !== undefined && input.contextId !== undefined) {
+          throw sessionChangedError(sessionChange);
+        }
         const include =
           input.include ??
           (input.action === "get_phrase_context"
@@ -1105,6 +1183,9 @@ export function registerV2Surface(
           return result;
         }
         const root = asRecord(readJsonResult(result), "result");
+        if (sessionChange !== undefined) {
+          root.sessionReset = sessionResetResult(sessionChange);
+        }
         addNestedContexts(input.action, root, contexts, guardTokens);
         if (input.action === "get_phrase_context") {
           projectIncludes(root, include);
@@ -1153,6 +1234,10 @@ export function registerV2Surface(
       async (input) => {
         try {
           assertActionCategory(definitions, input.action, category);
+          const sessionChange = await observeSession();
+          if (sessionChange !== undefined) {
+            throw sessionChangedError(sessionChange);
+          }
           const args = expandContext(
             input.action,
             { ...input.args },
@@ -1207,6 +1292,10 @@ export function registerV2Surface(
     async (input) => {
       try {
         assertActionCategory(definitions, input.action, "transaction");
+        const sessionChange = await observeSession();
+        if (sessionChange !== undefined) {
+          throw sessionChangedError(sessionChange);
+        }
         const args =
           input.action === "apply_transaction"
             ? expandTransactionContexts({ ...input.args }, contexts)
@@ -1250,6 +1339,10 @@ export function registerV2Surface(
     async (input) => {
       try {
         assertActionCategory(definitions, input.action, "ui");
+        const sessionChange = await observeSession();
+        if (sessionChange !== undefined && input.contextId !== undefined) {
+          throw sessionChangedError(sessionChange);
+        }
         const result = await invokeTool(
           definitions,
           input.action,
@@ -1264,6 +1357,9 @@ export function registerV2Surface(
           return result;
         }
         const root = asRecord(readJsonResult(result), "result");
+        if (sessionChange !== undefined) {
+          root.sessionReset = sessionResetResult(sessionChange);
+        }
         addNestedContexts(input.action, root, contexts, guardTokens);
         stripDiagnostics(root);
         return jsonResult(root);
@@ -1296,6 +1392,10 @@ export function registerV2Surface(
         const action = SIDEBAR_OPERATIONS[input.operation];
         let args = { ...input.args };
         if (input.operation === "publish") {
+          const sessionChange = await observeSession();
+          if (sessionChange !== undefined) {
+            throw sessionChangedError(sessionChange);
+          }
           const previewAction = optionalString(args.action);
           const payload = optionalRecord(args.payload, "args.payload");
           if (previewAction !== undefined && payload !== undefined) {

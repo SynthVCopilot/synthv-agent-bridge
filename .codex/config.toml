@@ -1,0 +1,4 @@
+[mcp_servers.synthv-agent-bridge]
+command = "node"
+args = ["dist/src/cli.js"]
+startup_timeout_sec = 120

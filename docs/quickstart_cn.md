@@ -22,7 +22,7 @@ cd synthv-agent-bridge
 请安装并配置这个 SynthV Agent Bridge 项目。先检查是否有 Node.js 20.10
 或更高版本；如果没有或版本过低，请使用系统包管理器安装合适的 Node.js
 LTS，必要时向我申请权限。然后使用锁文件安装依赖、构建项目，把 SynthV
-脚本安装到我提供的脚本目录，使用构建入口的绝对路径注册 MCP，最后运行
+脚本安装到我提供的脚本目录，检查仓库自带的项目级 MCP 配置，最后运行
 项目诊断。
 ```
 
@@ -76,17 +76,20 @@ C:\Users\<用户名>\AppData\Roaming\Dreamtonics\Synthesizer V Studio 2\scripts
 
 请以 SynthV 实际打开的目录为准，不要直接假定示例路径适用于当前电脑。
 
-## 4. 在 Codex 中注册 MCP
+## 4. 加载项目级 MCP 配置
 
-使用构建入口的绝对路径：
+仓库已经包含 `.codex/config.toml`：
 
-```bash
-codex mcp add synthv-agent-bridge -- node "/项目绝对路径/synthv-agent-bridge/dist/src/cli.js"
-codex mcp list
+```toml
+[mcp_servers.synthv-agent-bridge]
+command = "node"
+args = ["dist/src/cli.js"]
+startup_timeout_sec = 120
 ```
 
-如果 Codex 已经处于打开状态，注册后请新建任务或重新连接，让 Codex 重新
-加载 MCP 配置。
+不需要写入用户级 MCP 配置，也不需要填写绝对安装路径。请在 Codex 中信任
+并打开仓库根目录，完成构建后重启 Codex 或新建任务，让 Codex 加载项目
+配置。未被信任的项目不会加载项目级配置。
 
 ## 5. 重新扫描并启动 Bridge
 
@@ -294,4 +297,5 @@ npm run doctor -- --target "/Synthesizer V Studio 2/脚本目录"
 | 侧边栏缺失或版本不对 | 执行 **脚本 → 重新扫描**，然后重新启动 Bridge。 |
 | 找不到 `node` 或 `npm` | 让 Codex 安装 Node.js LTS，然后重启终端或 Codex。 |
 | 写入返回 `STALE_*` | 只重新读取目标，不要重复提交旧请求。 |
+| 写入返回 `SYNTHV_SESSION_CHANGED` | SynthV 或 Bridge 已重启，缓存 Context 已自动清除。重新读取目标后，用新 Context 继续。 |
 | `Ctrl+Z` 撤销了侧边栏文字 | 先点击主编辑区，或使用 **编辑 → 撤销**。 |

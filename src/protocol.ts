@@ -34,6 +34,7 @@ export const BRIDGE_ACTIONS = [
   "delete_track",
   "update_group",
   "set_group_voice",
+  "apply_group_tuning",
   "delete_group_reference",
   "add_notes",
   "edit_notes",
@@ -124,6 +125,7 @@ export interface BridgeStatus {
   readonly host: BridgeHostInfo;
   readonly projectFile: string;
   readonly ipcDirectory: string;
+  readonly sessionToken?: string;
   readonly message?: string;
   readonly [key: string]: unknown;
 }
@@ -323,6 +325,10 @@ export function parseBridgeStatus(value: unknown): BridgeStatus {
   if (message !== undefined && typeof message !== "string") {
     fail("message", "must be a string when present");
   }
+  const sessionToken = record.sessionToken;
+  if (sessionToken !== undefined && typeof sessionToken !== "string") {
+    fail("sessionToken", "must be a string when present");
+  }
 
   return {
     ...record,
@@ -339,6 +345,7 @@ export function parseBridgeStatus(value: unknown): BridgeStatus {
       typeof record.ipcDirectory === "string"
         ? record.ipcDirectory
         : fail("ipcDirectory", "must be a string"),
+    ...(sessionToken === undefined ? {} : { sessionToken }),
     ...(message === undefined ? {} : { message }),
   };
 }

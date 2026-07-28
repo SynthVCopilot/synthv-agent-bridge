@@ -13,6 +13,21 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
 - Do not parse or mutate `.svp` files directly.
 - Do not log project lyrics or note data to stderr unless explicitly requested for debugging.
 - Keep protocol v1 backward compatible; add a new protocol version for breaking envelope changes.
+- Do not probe tuning ranges at startup or at the start of each conversation.
+  Treat Group Voice loudness as `-48..12`, Group Voice
+  tension/breathiness/gender/tone shift as `-1..1`, Vocal Mode
+  pitch/timbre/pronunciation axes as `0..150`, phoneme position/activity as
+  `0..1`, and phoneme strength as `-1..1`. Phoneme `leftOffset` is a finite
+  number of seconds without a Bridge-imposed bound. For automation, use the
+  `definition.range` returned by the same fresh curve/phrase read instead of a
+  fixed table because SynthV host and voice versions can expose different
+  ranges.
+- Prefer `apply_group_tuning` when one tuning pass changes Voice/Vocal Modes,
+  notes or phonemes, and one or more automation curves in the same Group. It
+  validates the complete batch and creates one SynthV undo record.
+- If an MCP v2 call returns `SYNTHV_SESSION_CHANGED`, do not retry its old
+  `contextId` or Guard Tokens. The server has already cleared them; read the
+  intended target again and build the write from the fresh context.
 - Before the first tuning write in a conversation, the Agent must ask the user
   to select the intended Note Group in SynthV, select or assign the intended
   Vocal (singer/voice database) for that Group, and then either attach a

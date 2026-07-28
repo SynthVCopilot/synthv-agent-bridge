@@ -191,6 +191,11 @@ export class GuardTokenStore {
     return resolution;
   }
 
+  public clear(): void {
+    this.entries.clear();
+    this.reverse.clear();
+  }
+
   private evictIfNeeded(): void {
     while (this.entries.size > this.maximumEntries) {
       const oldestToken = this.entries.keys().next().value as string | undefined;

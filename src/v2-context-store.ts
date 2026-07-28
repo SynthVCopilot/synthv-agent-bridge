@@ -87,4 +87,9 @@ export class V2ContextStore {
     this.entries.set(normalized, entry);
     return entry;
   }
+
+  public clear(): void {
+    this.entries.clear();
+    this.totalWeight = 0;
+  }
 }

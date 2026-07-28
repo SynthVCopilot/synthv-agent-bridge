@@ -23,8 +23,8 @@ Set up this SynthV Agent Bridge project. Check whether Node.js 20.10 or later is
 available. If it is missing or too old, install a suitable Node.js LTS release
 with the system package manager, asking for permission when required. Then
 install the locked dependencies, build the project, install the SynthV scripts
-into the scripts directory I provide, register the MCP server with its absolute
-path, and run the project doctor.
+into the scripts directory I provide, verify the repository's project-scoped
+MCP configuration, and run the project doctor.
 ```
 
 Codex can run the environment checks and package-manager commands, but an
@@ -80,17 +80,21 @@ C:\Users\<you>\AppData\Roaming\Dreamtonics\Synthesizer V Studio 2\scripts
 Use the path opened by SynthV rather than assuming the example is correct for
 your machine.
 
-## 4. Register the MCP server with Codex
+## 4. Load the project-scoped MCP configuration
 
-Use the absolute path to the built entry point:
+The repository already contains `.codex/config.toml`:
 
-```bash
-codex mcp add synthv-agent-bridge -- node "/absolute/path/to/synthv-agent-bridge/dist/src/cli.js"
-codex mcp list
+```toml
+[mcp_servers.synthv-agent-bridge]
+command = "node"
+args = ["dist/src/cli.js"]
+startup_timeout_sec = 120
 ```
 
-If you use a Codex surface that was already open, start a new task or reconnect
-after registration so it loads the new MCP configuration.
+No user-level MCP registration or absolute installation path is required. Trust
+and open the repository root in Codex, complete the build, then restart Codex
+or start a new task so it loads the project configuration. Codex ignores
+project-scoped configuration for untrusted projects.
 
 ## 5. Rescan and start the Bridge
 
@@ -307,4 +311,5 @@ If the installer reports that the runtime or side panel changed, choose
 | Side panel is missing or outdated | Run **Scripts → Rescan**, then restart the Bridge. |
 | `node` or `npm` is not found | Ask Codex to install Node.js LTS, then restart the terminal/Codex. |
 | A write returns `STALE_*` | Read only the target again; do not retry the old payload. |
+| A write returns `SYNTHV_SESSION_CHANGED` | SynthV or the Bridge restarted; cached contexts were cleared automatically. Read the target again, then continue from the fresh context. |
 | Undo affects a side-panel text field | Focus the main editor first, or use **Edit → Undo**. |

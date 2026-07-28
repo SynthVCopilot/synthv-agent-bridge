@@ -71,9 +71,9 @@ const groupVoiceParameterChangesSchema = z
 const vocalModeChangesSchema = z
   .object({
     name: z.string().min(1).max(200),
-    pitch: z.number().finite().min(0).optional(),
-    timbre: z.number().finite().min(0).optional(),
-    pronunciation: z.number().finite().min(0).optional(),
+    pitch: z.number().finite().min(0).max(150).optional(),
+    timbre: z.number().finite().min(0).max(150).optional(),
+    pronunciation: z.number().finite().min(0).max(150).optional(),
   })
   .refine(
     (value) =>
@@ -96,9 +96,9 @@ const experimentalUnisonChangesSchema = z
 const phonemeAttributeSchema = z
   .object({
     leftOffset: z.number().finite().optional(),
-    position: z.number().finite().optional(),
-    activity: z.number().finite().optional(),
-    strength: z.number().finite().optional(),
+    position: z.number().finite().min(0).max(1).optional(),
+    activity: z.number().finite().min(0).max(1).optional(),
+    strength: z.number().finite().min(-1).max(1).optional(),
   })
   .refine(
     (value) => Object.values(value).some((entry) => entry !== undefined),
@@ -216,6 +216,44 @@ const automationPointSchema = z.object({
   position: blickSchema.describe("Group-local position in blicks."),
   value: z.number().finite(),
 });
+
+const groupTuningNoteEditSchema = z
+  .object({
+    noteIndex: indexSchema,
+    fingerprint: fingerprintSchema,
+    changes: noteChangesSchema.optional(),
+    phonemeChanges: phonemePropertyChangesSchema.optional(),
+  })
+  .refine(
+    (value) =>
+      value.changes !== undefined || value.phonemeChanges !== undefined,
+    { message: "Each tuning note edit must change note or phoneme data." },
+  );
+
+const groupTuningAutomationSchema = z
+  .object({
+    parameter: z.string().min(1).max(200),
+    expectedFingerprint: fingerprintSchema,
+    clearMode: z.enum(["none", "all", "range"]).default("none"),
+    rangeBegin: blickSchema.optional(),
+    rangeEnd: blickSchema.optional(),
+    points: z.array(automationPointSchema).max(10000).default([]),
+  })
+  .refine(
+    (value) =>
+      value.points.length > 0 || value.clearMode !== "none",
+    { message: "Each automation update must add points or clear a curve." },
+  )
+  .refine(
+    (value) =>
+      value.clearMode === "range"
+        ? value.rangeBegin !== undefined && value.rangeEnd !== undefined
+        : value.rangeBegin === undefined && value.rangeEnd === undefined,
+    {
+      message:
+        "rangeBegin and rangeEnd are required only when clearMode is range.",
+    },
+  );
 
 const libraryGroupLocatorShape = {
   libraryIndex: indexSchema.optional(),
@@ -1304,7 +1342,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Set SynthV Group Voice",
       description:
-        "Safely update documented group voice defaults and non-negative Vocal Mode axes. An empty vocalModes read means no non-default values are stored, not unsupported modes. Use exact names supplied by the user or identified from their panel screenshot, batch them in one call, and do not probe guesses. If VOCAL_MODE_NOT_FOUND is returned, ask once for the current singer's exact names. Experimental Unison fields are accepted only when the host returns and retains them.",
+        "Safely update documented group voice defaults and 0..150 Vocal Mode axes. An empty vocalModes read means no non-default values are stored, not unsupported modes. Use exact names supplied by the user or identified from their panel screenshot, batch them in one call, and do not probe guesses. If VOCAL_MODE_NOT_FOUND is returned, ask once for the current singer's exact names. Experimental Unison fields are accepted only when the host returns and retains them.",
       inputSchema: {
         ...groupLocatorShape,
         referenceFingerprint: fingerprintSchema.describe(
@@ -1329,6 +1367,57 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     async (input) =>
       runTool(async () => client.send("set_group_voice", input)),
+  );
+
+  server.registerTool(
+    "apply_group_tuning",
+    {
+      title: "Apply SynthV Group Tuning Batch",
+      description:
+        "Atomically apply one same-Group tuning pass: Group Voice/Vocal Modes, fingerprint-guarded note and phoneme edits, and multiple fingerprint-guarded automation curves. The Lua host validates the complete batch before creating exactly one SynthV undo record.",
+      inputSchema: {
+        ...groupLocatorShape,
+        summary: z.string().min(1).max(1000),
+        referenceFingerprint: fingerprintSchema
+          .optional()
+          .describe("Required when voice changes are included."),
+        requireCurrentEditorGroup: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Reject unless this target is the current piano-roll Group.",
+          ),
+        voice: z
+          .object({
+            parameters: groupVoiceParameterChangesSchema.optional(),
+            vocalModes: z
+              .array(vocalModeChangesSchema)
+              .min(1)
+              .max(64)
+              .optional(),
+            experimentalUnison: experimentalUnisonChangesSchema.optional(),
+          })
+          .optional(),
+        noteEdits: z
+          .array(groupTuningNoteEditSchema)
+          .min(1)
+          .max(512)
+          .optional(),
+        automations: z
+          .array(groupTuningAutomationSchema)
+          .min(1)
+          .max(32)
+          .optional(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("apply_group_tuning", input)),
   );
 
   server.registerTool(
@@ -2161,7 +2250,12 @@ export function createServer(config: BridgeConfig): McpServer {
   );
 
   if (useV2Surface) {
-    registerV2Surface(registerLegacyTool, capturedTools, guardTokens);
+    registerV2Surface(
+      registerLegacyTool,
+      capturedTools,
+      guardTokens,
+      async () => (await client.getStatus()).status?.sessionToken,
+    );
   }
 
   return server;

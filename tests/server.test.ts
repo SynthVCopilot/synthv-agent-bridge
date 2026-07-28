@@ -152,6 +152,43 @@ test("empty Vocal Mode maps are initialized by clone validation", async () => {
   );
 });
 
+test("same-Group tuning is one prevalidated Lua undo record", async () => {
+  const [compiledServer, bridgeSource] = await Promise.all([
+    readFile(new URL("../src/server.js", import.meta.url), "utf8"),
+    readFile(
+      new URL("../../synthv/SynthVAgentBridge.lua", import.meta.url),
+      "utf8",
+    ),
+  ]);
+  assert.match(compiledServer, /"apply_group_tuning"/);
+  assert.match(compiledServer, /\.min\(0\)\.max\(150\)/);
+  assert.match(compiledServer, /strength: z\.number\(\)\.finite\(\)\.min\(-1\)\.max\(1\)/);
+  assert.match(bridgeSource, /function handlers\.apply_group_tuning/);
+  assert.match(bridgeSource, /local PHONEME_ATTRIBUTE_RANGES/);
+  assert.match(bridgeSource, /reason = "not_probed_write_verified"/);
+  assert.match(bridgeSource, /undoRecordCount = 1/);
+
+  const handlerStart = bridgeSource.indexOf(
+    "function handlers.apply_group_tuning",
+  );
+  const handlerEnd = bridgeSource.indexOf(
+    "function handlers.get_editor_view",
+    handlerStart,
+  );
+  const handler = bridgeSource.slice(handlerStart, handlerEnd);
+  assert.ok(handler.indexOf("prepareGroupVoiceUpdate") >= 0);
+  assert.ok(handler.indexOf("prepareNoteChanges") >= 0);
+  assert.ok(handler.indexOf("definition.range") >= 0);
+  assert.ok(
+    handler.indexOf("createUndoRecord(project)") >
+      handler.indexOf("definition.range"),
+  );
+  assert.equal(
+    handler.match(/createUndoRecord\(project\)/gu)?.length,
+    1,
+  );
+});
+
 test("P1 uses low-latency host polling and exposes selective phoneme computation", async () => {
   const [compiledServer, bridgeSource] = await Promise.all([
     readFile(new URL("../src/server.js", import.meta.url), "utf8"),

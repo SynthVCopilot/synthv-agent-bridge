@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { GuardTokenStore } from "../src/guard-token-store.js";
 import { V2ContextStore } from "../src/v2-context-store.js";
-import { v2Testing } from "../src/v2-surface.js";
+import { V2SessionTracker, v2Testing } from "../src/v2-surface.js";
 
 const GROUP_UUID = "8ab8ba75-f776-402b-a8bb-ee1f64bcf95e";
 
@@ -62,6 +63,72 @@ test("v2 context refuses a note missing from the original read", () => {
       ),
     /does not contain a guard/u,
   );
+});
+
+test("v2 context expands one same-Group tuning batch", () => {
+  const contexts = new V2ContextStore();
+  const contextId = contexts.issue({
+    trackIndex: 2,
+    groupIndex: 3,
+    groupUuid: GROUP_UUID,
+    referenceFingerprint: "reference",
+    noteFingerprints: new Map([[7, "note-7"]]),
+    pitchControlFingerprints: new Map(),
+    automationFingerprints: new Map([
+      ["loudness", "loudness-guard"],
+      ["tension", "tension-guard"],
+    ]),
+  });
+
+  const expanded = v2Testing.expandContext(
+    "apply_group_tuning",
+    {
+      summary: "one pass",
+      voice: { vocalModes: [{ name: "Soft", pitch: 20 }] },
+      noteEdits: [
+        {
+          index: 7,
+          phonemeChanges: {
+            phonemeAttributes: [{ strength: 0.8 }],
+          },
+        },
+      ],
+      automations: [
+        { parameter: "loudness", clearMode: "none", points: [] },
+        { parameter: "tension", clearMode: "none", points: [] },
+      ],
+    },
+    contextId,
+    contexts,
+  );
+
+  assert.equal(expanded.trackIndex, 2);
+  assert.equal(expanded.groupIndex, 3);
+  assert.equal(expanded.groupUuid, GROUP_UUID);
+  assert.equal(expanded.referenceFingerprint, "reference");
+  assert.deepEqual(expanded.noteEdits, [
+    {
+      noteIndex: 7,
+      fingerprint: "note-7",
+      phonemeChanges: {
+        phonemeAttributes: [{ strength: 0.8 }],
+      },
+    },
+  ]);
+  assert.deepEqual(expanded.automations, [
+    {
+      parameter: "loudness",
+      expectedFingerprint: "loudness-guard",
+      clearMode: "none",
+      points: [],
+    },
+    {
+      parameter: "tension",
+      expectedFingerprint: "tension-guard",
+      clearMode: "none",
+      points: [],
+    },
+  ]);
 });
 
 test("v2 note insertion ensures an editable non-main group by default", () => {
@@ -139,6 +206,45 @@ test("v2 context store evicts by total guard weight", () => {
 
   assert.throws(() => contexts.resolve(first), /unknown or expired/u);
   assert.equal(contexts.resolve(second).noteFingerprints.get(3), "three");
+});
+
+test("session changes clear context and Guard Token stores", () => {
+  const tracker = new V2SessionTracker();
+  assert.equal(tracker.observe(undefined), undefined);
+  assert.equal(tracker.observe("session-a"), undefined);
+  assert.equal(tracker.observe("session-a"), undefined);
+  assert.deepEqual(tracker.observe("session-b"), {
+    previousSessionToken: "session-a",
+    currentSessionToken: "session-b",
+  });
+
+  const contexts = new V2ContextStore();
+  const contextId = contexts.issue({
+    noteFingerprints: new Map([[1, "note"]]),
+    pitchControlFingerprints: new Map(),
+    automationFingerprints: new Map(),
+  });
+  contexts.clear();
+  assert.throws(() => contexts.resolve(contextId), /unknown or expired/u);
+
+  const guards = new GuardTokenStore();
+  const guardToken = guards.issue("note", {
+    kind: "note",
+    trackIndex: 1,
+    groupUuid: GROUP_UUID,
+    noteIndex: 1,
+  });
+  guards.clear();
+  assert.throws(
+    () =>
+      guards.resolve(guardToken, {
+        kind: "note",
+        trackIndex: 1,
+        groupUuid: GROUP_UUID,
+        noteIndex: 1,
+      }),
+    /unknown or expired/u,
+  );
 });
 
 test("v2 phrase projection removes unused sections and redundant note fields", () => {

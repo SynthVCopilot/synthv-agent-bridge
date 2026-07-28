@@ -185,19 +185,20 @@ The script remains active and writes a heartbeat while SynthV is running. To sto
 
 ### 4. Connect an MCP host
 
-#### Codex CLI
+#### Codex
 
-Use an absolute path to the built entry point:
+The repository includes a project-scoped `.codex/config.toml`:
 
-```bash
-codex mcp add synthv-agent-bridge -- node "/absolute/path/to/synthv-agent-bridge/dist/src/cli.js"
+```toml
+[mcp_servers.synthv-agent-bridge]
+command = "node"
+args = ["dist/src/cli.js"]
+startup_timeout_sec = 120
 ```
 
-Then verify the registration:
-
-```bash
-codex mcp list
-```
+Trust and open the repository root, build it, then restart Codex or start a new
+task. This keeps the MCP registration scoped to this project and avoids
+modifying the user's global Codex configuration.
 
 A complete TOML example is available at [examples/codex-config.toml](examples/codex-config.toml). Other local MCP hosts can use the same `node .../dist/src/cli.js` command when they support **STDIO** servers.
 
@@ -326,6 +327,7 @@ the default tool-schema budget.
 | `delete_track` | Destructive | Delete a fingerprint-verified non-final track. |
 | `update_group` | Write | Change vocal/instrumental reference state and supported vocal properties. |
 | `set_group_voice` | Write | Fingerprint-verified typed voice, Vocal Mode, and host-validated experimental Unison updates, with an optional current-Group guard. |
+| `apply_group_tuning` | Destructive | Atomically apply one same-Group Voice/Vocal Mode, note/phoneme, and multi-automation tuning pass in one undo record. |
 | `delete_group_reference` | Destructive | Remove a non-main vocal or instrumental reference. |
 | `add_notes` | Write | Add notes to a target group. V2 defaults to `grouping=ensureNonMain`, creating a reusable non-main group/reference when the target is the track main group; use `grouping=target` to write to the exact group. |
 | `edit_notes` | Write | Edit fingerprint-verified notes. |
@@ -408,16 +410,21 @@ All track, group, and note indices are **1-based**, matching the SynthV Lua API.
 - Compact write responses contain counts and replacement Guard Tokens instead
   of complete notes or automation curves.
 
-Guard Tokens are opaque and live only in the current MCP server process. After a
-restart, eviction, or `UNKNOWN_GUARD_TOKEN` error, read the target again. The
-server resolves the token to the original complete fingerprint before the
+Guard Tokens are opaque and live only in the current MCP server process. MCP v2
+automatically detects a changed SynthV/Bridge session token and clears every
+cached context and Guard Token. A write then returns
+`SYNTHV_SESSION_CHANGED`; read the target again and build the write from its
+fresh context. A fresh read can proceed immediately and reports
+`sessionReset`. Eviction or `UNKNOWN_GUARD_TOKEN` likewise requires a reread.
+The server resolves each token to the original complete fingerprint before the
 request reaches SynthV, so existing stale-write protection is unchanged.
 
 Phoneme writes are verified on a detached clone before an undo record is
 created, then verified again on the project note. A host or legacy voice that
 quantizes or ignores a requested value fails with
-`HOST_POSTCONDITION_FAILED`. `get_group_voice.phonemeCapabilities` reports
-whether phoneme strength survived a safe clone-only probe.
+`HOST_POSTCONDITION_FAILED`. Stable phoneme ranges are validated directly:
+position/activity `0..1`, strength `-1..1`, and finite-second `leftOffset`
+without a Bridge-imposed bound. No startup or first-use range probe is needed.
 
 ### Track colors
 
@@ -445,7 +452,7 @@ false success.
 
 ## Safe editing workflow
 
-The server instructions tell an agent to follow this sequence:
+The Codex Agent rules require this sequence:
 
 1. For phrase tuning, call `get_phrase_context` immediately before editing.
    For Group Voice or Vocal Modes, call `get_group_voice` with no locator to
@@ -455,9 +462,10 @@ The server instructions tell an agent to follow this sequence:
    change.
 2. Present or internally construct a small, reviewable change.
 3. Copy the latest applicable group/reference UUIDs and fingerprints, track fingerprint, automation/time-axis fingerprint, and note or Smart Pitch fingerprints.
-4. Call the smallest write tool that completes the intended change. Use
-   `apply_transaction` only for a complete independent multi-object batch that
-   benefits from one undo record.
+4. Call the smallest write tool that completes the intended change. Prefer
+   `apply_group_tuning` when one pass changes Voice/Vocal Modes,
+   notes/phonemes, or multiple automation curves in the same Group. Use
+   `apply_transaction` for complete independent multi-object batches.
 5. If SynthV reports any `STALE_*` error, read again rather than guessing.
 
 One compact read should feed one complete batch of related changes. Do not
