@@ -402,6 +402,29 @@ test("v2 phrase reads reject conflicting include locations", () => {
   assert.equal("include" in duplicateArgs, false);
 });
 
+test("explicit phrase diagnostics survive the default non-debug projection", () => {
+  assert.equal(
+    v2Testing.shouldStripDiagnostics(
+      "get_phrase_context",
+      ["notes", "diagnostics"],
+      false,
+    ),
+    false,
+  );
+  assert.equal(
+    v2Testing.shouldStripDiagnostics(
+      "get_phrase_context",
+      ["notes"],
+      false,
+    ),
+    true,
+  );
+  assert.equal(
+    v2Testing.shouldStripDiagnostics("get_phrase_context", ["notes"], true),
+    false,
+  );
+});
+
 test("v2 phrase projection removes unused sections and redundant note fields", () => {
   const result = {
     notes: [

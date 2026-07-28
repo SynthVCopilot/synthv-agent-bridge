@@ -334,7 +334,11 @@ fingerprint-guarded automation updates for one Group. It resolves and validates
 the complete payload—including every current fingerprint and every
 host-returned automation range—before `Project:newUndoRecord()`, then applies
 the pass as exactly one SynthV undo record. Prefer it over several sequential
-writes when one tuning decision affects the same Group.
+writes when one tuning decision affects the same Group. SynthV's public
+scripting API does not expose Undo. If the host unexpectedly rejects execution
+after that undo boundary, the Bridge returns `undoRequired`,
+`partialWritePossible`, and one-step Undo guidance; callers must not retry until
+the user undoes once and the target is reread.
 
 ### Deterministic note transform batch
 

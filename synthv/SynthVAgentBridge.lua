@@ -821,6 +821,26 @@ local function normalizeError(errorValue)
     }
 end
 
+local function raiseUndoRequiredExecutionError(action, errorValue)
+    local normalized = normalizeError(errorValue)
+    local details = {}
+    if type(normalized.details) == "table" and normalized.details ~= JSON_NULL then
+        for key, value in pairs(normalized.details) do
+            details[key] = value
+        end
+    end
+    details.action = action
+    details.partialWritePossible = true
+    details.undoRequired = true
+    details.undoGuidance =
+        "Use SynthV Edit > Undo once before any retry, then reread the target."
+    raiseBridgeError(
+        normalized.code or "PROJECT_WRITE_EXECUTION_FAILED",
+        normalized.message or "SynthV rejected a prevalidated project write during execution",
+        details
+    )
+end
+
 local function writeResponse(requestId, ok, value)
     local response = {
         v = PROTOCOL_VERSION,
@@ -7294,6 +7314,7 @@ function handlers.apply_group_tuning(payload)
 
     createUndoRecord(project)
 
+    local executed, resultOrError = xpcall(function()
     if voiceUpdate ~= nil then
         local applied, applyError = pcall(function()
             reference:setVoice(voiceUpdate)
@@ -7402,6 +7423,13 @@ function handlers.apply_group_tuning(payload)
         notes = notes,
         automation = automationResults
     }
+    end, function(errorValue)
+        return errorValue
+    end)
+    if not executed then
+        raiseUndoRequiredExecutionError("apply_group_tuning", resultOrError)
+    end
+    return resultOrError
 end
 
 function handlers.get_editor_view(payload)

@@ -1430,7 +1430,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Apply SynthV Group Tuning Batch",
       description:
-        "Atomically apply one same-Group tuning pass: Group Voice/Vocal Modes, fingerprint-guarded note and phoneme edits, and multiple fingerprint-guarded automation curves. The Lua host validates the complete batch before creating exactly one SynthV undo record.",
+        "Prevalidate and apply one same-Group tuning pass: Group Voice/Vocal Modes, fingerprint-guarded note and phoneme edits, and multiple fingerprint-guarded automation curves. The Lua host validates the complete batch before creating exactly one SynthV undo record; an unexpected execution failure explicitly requires one SynthV Undo.",
       inputSchema: {
         ...groupLocatorShape,
         summary: z.string().min(1).max(1000),

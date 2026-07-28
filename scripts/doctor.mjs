@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
-import { access, readFile, stat } from "node:fs/promises";
+import { access, readFile, readdir, stat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SERVER_NAME = "synthv-agent-bridge";
 const EXPECTED_PROTOCOL_VERSION = 2;
@@ -81,6 +81,29 @@ function sha256(content) {
     : null;
 }
 
+async function collectFiles(directory, predicate) {
+  const entries = await readdir(directory, { withFileTypes: true }).catch(
+    () => [],
+  );
+  const files = [];
+  for (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await collectFiles(entryPath, predicate)));
+    } else if (entry.isFile() && predicate(entryPath)) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+async function newestMtimeMs(files) {
+  const mtimes = await Promise.all(
+    files.map((filePath) => stat(filePath).then((value) => value.mtimeMs)),
+  );
+  return mtimes.length === 0 ? null : Math.max(...mtimes);
+}
+
 record(
   "package-version",
   expectedVersion === "0.1.5" ? "ok" : "error",
@@ -120,6 +143,55 @@ record(
     Number.isFinite(sourceProtocolVersion) ? sourceProtocolVersion : "missing"
   }; expected ${EXPECTED_PROTOCOL_VERSION}.`,
 );
+
+const runtimeSourceFiles = await collectFiles(
+  path.join(repositoryRoot, "src"),
+  (filePath) => filePath.endsWith(".ts"),
+);
+const buildInputs = [
+  ...runtimeSourceFiles,
+  path.join(repositoryRoot, "package.json"),
+  path.join(repositoryRoot, "tsconfig.json"),
+];
+const buildInfoFile = path.join(repositoryRoot, "dist", "src", "build-info.js");
+const [newestBuildInputMtimeMs, buildInfoStat] = await Promise.all([
+  newestMtimeMs(buildInputs),
+  stat(buildInfoFile).catch(() => null),
+]);
+const buildFresh =
+  newestBuildInputMtimeMs !== null &&
+  buildInfoStat !== null &&
+  buildInfoStat.mtimeMs + 1_000 >= newestBuildInputMtimeMs;
+record(
+  "mcp-build",
+  buildFresh ? "ok" : "error",
+  buildFresh
+    ? "Compiled MCP build is present and newer than its runtime source inputs."
+    : "Compiled MCP build is missing or stale; run npm run build, then restart/reconnect the Codex MCP server.",
+  {
+    buildInfoFile,
+    buildMtimeMs: buildInfoStat?.mtimeMs ?? null,
+    newestBuildInputMtimeMs,
+  },
+);
+
+let expectedCapabilityFingerprint = null;
+let expectedBuildFingerprint = null;
+if (buildInfoStat !== null) {
+  try {
+    const buildInfo = await import(pathToFileURL(buildInfoFile).href);
+    expectedBuildFingerprint =
+      typeof buildInfo.SERVER_BUILD_FINGERPRINT === "string"
+        ? buildInfo.SERVER_BUILD_FINGERPRINT
+        : null;
+    expectedCapabilityFingerprint =
+      typeof buildInfo.SERVER_CAPABILITY_FINGERPRINT === "string"
+        ? buildInfo.SERVER_CAPABILITY_FINGERPRINT
+        : null;
+  } catch {
+    // The build check above already reports a missing or unreadable build.
+  }
+}
 
 const bridgeStatus = await readJson(`${prefix}.status.json`);
 const bridgeAgeMs =
@@ -168,17 +240,48 @@ record(
 
 const clientStatus = await readText(`${prefix}.sidebar.client-status.txt`);
 const clientUpdatedAt = Number(lineValue(clientStatus, "updatedAtEpochMs"));
+const clientRunningAndFresh =
+  lineValue(clientStatus, "state") === "running" && fresh(clientUpdatedAt);
 record(
   "mcp-heartbeat",
-  lineValue(clientStatus, "state") === "running" &&
-    fresh(clientUpdatedAt)
-    ? "ok"
-    : "warning",
+  clientRunningAndFresh ? "ok" : "warning",
   clientStatus === null
     ? "MCP sidebar heartbeat is missing; restart or reconnect the Codex MCP server."
     : `MCP ${lineValue(clientStatus, "version") ?? "?"}, state ${
         lineValue(clientStatus, "state") ?? "unknown"
-      }.`,
+  }.`,
+);
+
+const runningCapabilityFingerprint = lineValue(
+  clientStatus,
+  "capabilityFingerprint",
+);
+const runningBuildFingerprint = lineValue(clientStatus, "buildFingerprint");
+const capabilityMatches =
+  expectedCapabilityFingerprint !== null &&
+  runningCapabilityFingerprint === expectedCapabilityFingerprint;
+const runningBuildMatches =
+  expectedBuildFingerprint !== null &&
+  runningBuildFingerprint === expectedBuildFingerprint;
+record(
+  "mcp-capabilities",
+  !clientRunningAndFresh
+    ? "warning"
+    : capabilityMatches && runningBuildMatches
+      ? "ok"
+      : "error",
+  !clientRunningAndFresh
+    ? "A fresh running MCP process is required to verify its capability fingerprint."
+    : capabilityMatches && runningBuildMatches
+      ? "Running MCP build and capabilities match the current compiled build."
+      : "Running MCP build or capabilities are stale or unknown; restart/reconnect the Codex MCP server.",
+  {
+    expectedBuildFingerprint,
+    runningBuildFingerprint: runningBuildFingerprint ?? null,
+    expectedCapabilityFingerprint,
+    runningCapabilityFingerprint:
+      runningCapabilityFingerprint ?? null,
+  },
 );
 
 const residualFiles = [];

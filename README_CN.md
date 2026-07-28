@@ -339,7 +339,7 @@ Apply 命令由 Node 协调器消费，并通过 MCP 工具使用的同一个串
 | `delete_track` | 破坏性 | 删除经过指纹验证且不是最后一条的轨道。 |
 | `update_group` | 写入 | 修改人声/乐器引用状态和受支持的人声属性。 |
 | `set_group_voice` | 写入 | 使用指纹验证更新类型化 Voice、Vocal Mode 和经宿主验证的实验性 Unison，可选当前 Group 保护。 |
-| `apply_group_tuning` | 破坏性 | 在一个撤销记录中原子应用同一 Group 的 Voice/唱法、音符/音素及多条自动化调音。 |
+| `apply_group_tuning` | 破坏性 | 完整预检后，在一个撤销记录中应用同一 Group 的 Voice/唱法、音符/音素及多条自动化调音；若宿主在执行期意外失败，重试前必须先在 SynthV 中撤销一次。 |
 | `delete_group_reference` | 破坏性 | 删除非主人声或乐器引用。 |
 | `add_notes` | 写入 | 向目标 Group 添加音符。V2 默认为 `grouping=ensureNonMain`：目标为轨道主 Group 时创建可复用的非主 Group/引用；使用 `grouping=target` 可写入准确目标 Group。 |
 | `edit_notes` | 写入 | 编辑经过指纹验证的音符。 |
@@ -555,9 +555,10 @@ Lua 文件，并通过模拟 SynthV 集成框架测试常驻 Bridge 和侧边栏
 npm run doctor -- --target "/Synthesizer V Studio 2/脚本目录"
 ```
 
-Doctor 会检查源码/安装版本、脚本准确内容、Bridge 和 MCP 心跳、解析后的
-IPC 目录、残留处理/控制文件以及 Codex 配置。添加 `--json` 可获得机器
-可读输出。它不会修改工程或已安装文件。
+Doctor 会检查源码/安装版本、脚本准确内容、MCP 构建新鲜度、运行中 MCP 的
+能力指纹、Bridge 和 MCP 心跳、解析后的 IPC 目录、残留处理/控制文件以及
+Codex 配置。添加 `--json` 可获得机器可读输出。它不会修改工程或已安装
+文件。
 
 ## 当前限制
 

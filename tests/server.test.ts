@@ -143,6 +143,16 @@ test("same-Group tuning is one prevalidated Lua undo record", async () => {
   assert.match(bridgeSource, /local PHONEME_ATTRIBUTE_RANGES/);
   assert.match(bridgeSource, /reason = "not_probed_write_verified"/);
   assert.match(bridgeSource, /undoRecordCount = 1/);
+  assert.match(bridgeSource, /partialWritePossible = true/);
+  assert.match(bridgeSource, /undoRequired = true/);
+  assert.match(
+    bridgeSource,
+    /Use SynthV Edit > Undo once before any retry/,
+  );
+  assert.doesNotMatch(
+    compiledServer,
+    /Atomically apply one same-Group tuning pass/,
+  );
 
   const handlerStart = bridgeSource.indexOf(
     "function handlers.apply_group_tuning",
@@ -163,6 +173,7 @@ test("same-Group tuning is one prevalidated Lua undo record", async () => {
     handler.match(/createUndoRecord\(project\)/gu)?.length,
     1,
   );
+  assert.match(handler, /raiseUndoRequiredExecutionError/);
 });
 
 test("deterministic note transforms stay guarded and use one edit undo boundary", async () => {

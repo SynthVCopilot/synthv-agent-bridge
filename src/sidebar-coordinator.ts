@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 
 import { SERVER_VERSION, type BridgeConfig } from "./config.js";
+import {
+  SERVER_BUILD_FINGERPRINT,
+  SERVER_CAPABILITY_FINGERPRINT,
+} from "./build-info.js";
 import { BridgeError, toPublicError } from "./errors.js";
 import type { FileIpcClient } from "./ipc/file-ipc-client.js";
 import type { BridgeAction } from "./protocol.js";
@@ -1012,6 +1016,8 @@ export class SidebarCoordinator {
       "synthv-agent-bridge-sidebar-client-status-v1",
       `state=${state}`,
       `version=${SERVER_VERSION}`,
+      `buildFingerprint=${SERVER_BUILD_FINGERPRINT}`,
+      `capabilityFingerprint=${SERVER_CAPABILITY_FINGERPRINT}`,
       `updatedAtEpochMs=${now}`,
       `ipcDirectory=${sanitizeLine(this.config.paths.directory)}`,
     ];
