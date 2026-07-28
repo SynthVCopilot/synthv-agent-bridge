@@ -1,5 +1,7 @@
 # SynthV Agent Bridge
 
+[English](README.md) | [简体中文](README_CN.md)
+
 A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that lets compatible AI clients inspect and control the project currently open in **Synthesizer V Studio 2 Pro**.
 
 The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse or rewrite `.svp` files, open a network port, or call an AI API by itself.
@@ -90,6 +92,11 @@ File IPC is deliberately used for the first version because it works within Synt
 This project targets the scripting environment in Synthesizer V Studio 2 Pro; it does not target the Basic edition.
 
 ## Installation
+
+New users can follow the end-to-end [Quickstart](docs/quickstart.md) or
+[中文快速开始](docs/quickstart_cn.md). It covers cloning the repository,
+Codex-assisted Node.js setup, script installation, MCP registration, connection
+verification, and the first guarded tuning edit.
 
 ### 1. Build the MCP server
 
@@ -555,20 +562,3 @@ Synthesizer V and Synthesizer V Studio are products and trademarks of Dreamtonic
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
-
----
-
-## 中文快速说明
-
-这是一个本地 MCP 控制桥：Codex 或其他支持本地 stdio 的 MCP 客户端通过 Node.js 服务发出结构化命令，SynthV 内部常驻的 Lua 脚本再调用官方脚本 API 修改当前工程。
-
-最小安装流程：
-
-```bash
-npm install
-npm run build
-npm run install:synthv -- --target "/SynthV/脚本目录"
-codex mcp add synthv-agent-bridge -- node "/绝对路径/dist/src/cli.js"
-```
-
-然后在 SynthV 中执行 **脚本 → 重新扫描 → SynthV Agent Bridge → Start SynthV Agent Bridge**。首次使用建议先复制工程，并让 AI 每次修改前先读取当前选区、展示修改计划，再执行写操作。
