@@ -47,8 +47,33 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 | 安全编辑 | 使用最新指纹和 Guard Token 保护写入；预检最多 32 个独立步骤；创建一个 SynthV 撤销记录，并可选保留受保护回滚计划。 |
 | 审核与本地隐私 | 在可选原生侧边栏中审核、应用、放弃或取消受保护预览。文件 IPC 保持本地：Bridge 不解析 `.svp` 文件、不打开网络端口，也不调用 AI API。 |
 
-参阅 [Agent / MCP 责任边界](docs/responsibility-boundaries_cn.md)，了解艺术
-决策、紧凑协议、SynthV 权威校验和用户审核之间的明确分工。
+## 责任边界
+
+Bridge 将音乐判断与确定性执行分开：Agent 决定**为什么改、改哪里、改多少**；
+MCP 和 Lua 根据 SynthV 的当前状态，紧凑、安全地执行这个明确决定；
+SynthV 保存结果，用户负责最终听感判断。
+
+| 工作 | 负责人 | 原因 |
+|---|---|---|
+| 理解用户意图、歌词情感、演唱风格 | Agent | 需要语言和音乐语义判断 |
+| 决定哪些字加强、减弱、拖长或增加音高过渡 | Agent | 属于艺术决策 |
+| 询问当前歌手、全部唱法名称 | Agent＋用户 | 官方接口无法读取歌手身份或枚举未调整的默认唱法 |
+| 决定先调一小段还是更大范围 | Agent | 需要结合用户目标、审核成本和 token 成本 |
+| 把温柔、明亮、克制等要求转换成明确参数 | Agent | Bridge 不应自行解释艺术语言 |
+| 选择新鲜目标范围和明确的批量数值变换 | Agent | 目标和音乐数值属于当前任务决策 |
+| 提供当前 Group、音符、Voice 和自动化数据 | Lua Bridge | SynthV 实时对象模型才是权威数据源 |
+| 缓存并展开 `contextId` 和 Guard 数据 | TypeScript MCP | 避免重复传输大型指纹，同时保留陈旧写入保护 |
+| 压缩读取结果和写入确认 | TypeScript MCP | 避免无关宿主数据进入模型上下文 |
+| 检测 SynthV 重启或 Bridge 重载 | TypeScript MCP | 再次写入前必须清除旧 Context 和 Guard |
+| 校验请求结构、路由、索引和稳定协议范围 | TypeScript MCP | 在文件 IPC 前拒绝错误请求 |
+| 读取当前 Automation `definition.range` | Lua Bridge | 范围可能随宿主、歌手和参数变化 |
+| 展开确定性音符变换和其他批处理机械计算 | Lua Bridge | 机械计算应集中、可复现 |
+| 校验指纹和完整的预备批次 | Lua Bridge | 防止覆盖用户修改或只执行部分无效请求 |
+| 创建一个撤销记录并验证宿主写入结果 | Lua Bridge＋SynthV | 提供一个恢复边界并避免假成功 |
+| 保存、试听、撤销并确认最终效果 | 用户＋SynthV | 用户是最终艺术判断者 |
+
+详细的代码分层规则与批处理准入条件请参阅
+[Agent / MCP 责任边界](docs/responsibility-boundaries_cn.md)。
 
 ## 首次 MCP 连接：用户提示
 

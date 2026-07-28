@@ -46,9 +46,34 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 | Safe editing | Protect writes with fresh fingerprints and Guard Tokens; preflight up to 32 independent steps; create one SynthV undo record and optionally retain a guarded rollback plan. |
 | Review and local privacy | Review, apply, dismiss, or cancel guarded previews in the optional native side panel. File IPC stays local: the Bridge does not parse `.svp` files, open a network port, or call an AI API. |
 
-See [Agent / MCP responsibility boundaries](docs/responsibility-boundaries.md)
-for the explicit division between artistic decisions, compact protocol work,
-authoritative SynthV validation, and user review.
+## Responsibility boundaries
+
+The Bridge separates musical judgment from deterministic execution. The Agent
+decides **why, where, and how much** to change. The MCP and Lua layers execute
+that explicit decision compactly, safely, and against current SynthV state.
+SynthV stores the result, and the user makes the final listening decision.
+
+| Work | Owner | Reason |
+|---|---|---|
+| Understand user intent, lyric emotion, and singing style | Agent | Requires language and musical-semantic judgment |
+| Decide which words to strengthen, soften, lengthen, or connect with pitch transitions | Agent | This is an artistic decision |
+| Ask for the current Vocal and every Vocal Mode name | Agent + user | The official API cannot read Vocal identity or enumerate untouched default-only Vocal Modes |
+| Decide whether to tune a short phrase or a larger scope | Agent | Depends on the goal, review cost, and token budget |
+| Convert terms such as warm, restrained, or bright into explicit parameters | Agent | The Bridge must not interpret artistic language |
+| Choose a fresh target scope and explicit numeric batch transform | Agent | Target selection and musical values belong to the current task |
+| Provide current Group, note, Voice, and automation data | Lua Bridge | SynthV's live object model is authoritative |
+| Cache and expand `contextId` and Guard data | TypeScript MCP | Avoids repeating large fingerprints while preserving stale-write protection |
+| Project compact reads and minimal write acknowledgements | TypeScript MCP | Keeps irrelevant host data out of the model context |
+| Detect SynthV restart or Bridge reload | TypeScript MCP | Old Context and Guard data must be invalidated before another write |
+| Validate request structure, routing, indices, and stable protocol ranges | TypeScript MCP | Rejects malformed work before file IPC |
+| Read the current Automation `definition.range` | Lua Bridge | The range can vary with the host, voice, and parameter |
+| Expand deterministic note transforms and other batch mechanics | Lua Bridge | Mechanical calculations should be centralized and reproducible |
+| Validate fingerprints and the complete prepared batch | Lua Bridge | Prevents overwriting user edits or partially applying invalid work |
+| Create one undo record and verify host postconditions | Lua Bridge + SynthV | Provides one recovery boundary and avoids false success |
+| Save, audition, undo, and approve the final result | User + SynthV | The user is the final artistic authority |
+
+See the detailed [Agent / MCP responsibility boundaries](docs/responsibility-boundaries.md)
+for the enforced layer rules and batch-operation admission criteria.
 
 ## First MCP connection: user notice
 
