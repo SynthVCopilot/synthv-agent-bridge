@@ -867,9 +867,14 @@ callExpectError("set_note_phoneme_properties",'{"trackIndex":2,"groupIndex":1,"g
 assert(project.undo==undoBeforeInvalidPhoneme,"invalid phoneme edit must not create an undo record")
 phonemeStrengthWriteSupported=false
 local unsupportedPhonemeVoice=call("get_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'"}')
-assert(unsupportedPhonemeVoice:find('"strengthRetained":false',1,true),"phoneme capability probe did not report host clamping")
+assert(unsupportedPhonemeVoice:find('"strengthRetained":null',1,true),"phoneme capability read unexpectedly claimed a retained value")
+assert(unsupportedPhonemeVoice:find('"reason":"not_probed_write_verified"',1,true),"phoneme capability read did not report write-time verification")
+assert(unsupportedPhonemeVoice:find('"probed":false',1,true),"phoneme capability read performed an exploratory probe")
+local undoBeforeOutOfRangePhoneme=project.undo
+callExpectError("set_note_phoneme_properties",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","edits":[{"noteIndex":1,"fingerprint":"'..escape(phonemeFingerprint)..'","changes":{"phonemeAttributes":[{"strength":1.2},{"leftOffset":0.05,"activity":0.9}]}}]}',"INVALID_ARGUMENT")
+assert(project.undo==undoBeforeOutOfRangePhoneme,"out-of-range phoneme edit must fail before an undo record")
 local undoBeforeUnsupportedPhoneme=project.undo
-callExpectError("set_note_phoneme_properties",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","edits":[{"noteIndex":1,"fingerprint":"'..escape(phonemeFingerprint)..'","changes":{"phonemeAttributes":[{"strength":1.2},{"leftOffset":0.05,"activity":0.9}]}}]}',"HOST_POSTCONDITION_FAILED")
+callExpectError("set_note_phoneme_properties",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","edits":[{"noteIndex":1,"fingerprint":"'..escape(phonemeFingerprint)..'","changes":{"phonemeAttributes":[{"strength":0.9},{"leftOffset":0.05,"activity":0.9}]}}]}',"HOST_POSTCONDITION_FAILED")
 assert(project.undo==undoBeforeUnsupportedPhoneme,"unretained phoneme edit must fail before an undo record")
 assert(project.tracks[2].refs[1].group.notes[1].attrs.phonemes[1].strength==0.8,"failed phoneme preflight changed the project note")
 phonemeStrengthWriteSupported=true
@@ -1043,9 +1048,9 @@ local undoBeforeClampedUnrequestedMode=project.undo
 callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(legacyVoiceFingerprint)..'","vocalModes":[{"name":"Soft","pitch":25}]}',"HOST_POSTCONDITION_FAILED")
 assert(project.undo==undoBeforeClampedUnrequestedMode,"an update that clamps an unrequested Vocal Mode must not create an undo record")
 assert(project.tracks[2].refs[1].voice.vocalModeParams.Powerful.pitch==220,"an unrequested legacy Vocal Mode value was changed")
-local undoBeforeClampedVocalMode=project.undo
-callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(legacyVoiceFingerprint)..'","vocalModes":[{"name":"Powerful","pitch":220}]}',"HOST_POSTCONDITION_FAILED")
-assert(project.undo==undoBeforeClampedVocalMode,"host-clamped Vocal Mode must not create an undo record")
+local undoBeforeOutOfRangeVocalMode=project.undo
+callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(legacyVoiceFingerprint)..'","vocalModes":[{"name":"Powerful","pitch":220}]}',"INVALID_ARGUMENT")
+assert(project.undo==undoBeforeOutOfRangeVocalMode,"out-of-range Vocal Mode must fail before an undo record")
 callWrite("update_group",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","name":"Lead Main","voice":{"paramLoudness":-2}}')
 call("get_computed_group_data",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","pitchSample":{"absoluteStart":0,"interval":352800000,"frames":4}}')
 callWrite("clone_track",'{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Harmony -3st","transposeSemitones":-3}')
