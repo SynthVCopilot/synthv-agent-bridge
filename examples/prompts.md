@@ -2,6 +2,15 @@
 
 Before a write operation, ask the agent to read the current state and describe the intended change.
 
+## Guided demo
+
+- `Run the Twinkle Star demo.`
+- `运行《小星星》Demo。`
+
+The Agent creates only its isolated Demo Group, prints a short heading for each
+of the five stages, pauses once for Vocal and exact Vocal Mode onboarding, then
+automatically tunes, verifies, and loops the example.
+
 ## Inspect
 
 - Read the current SynthV project and summarize every track, group, voice, and note range.

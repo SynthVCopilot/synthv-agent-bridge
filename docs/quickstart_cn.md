@@ -128,6 +128,23 @@ npm run doctor -- --target "/Synthesizer V Studio 2/脚本目录"
 
 如果 Bridge 正常，但 MCP 心跳缺失，请重启或重新连接 Codex 任务。
 
+## 可选：运行引导式 Demo
+
+第一次连接正常后，Codex 会提供内置示例。输入：
+
+```text
+运行《小星星》Demo。
+```
+
+Codex 会打印五个简短阶段小标题，在现有工程内容之后创建一个包含 42 个
+音符的独立非主 Group，并且不修改已有音符。曲谱创建后，请选择这个 Demo
+Group，为它选择或分配 Vocal，再发送完整 Vocal Mode 面板截图，或准确输入
+面板中的全部唱法。由于官方 API 限制，这一次交接无法省略；之后的调音、
+音高曲线、回读验证和循环播放会自动完成。
+
+完整流程、安全规则、撤销边界和机器可读模板参阅
+[《小星星》引导式 Demo](twinkle-star-demo_cn.md)。
+
 ## 7. 完成第一次调音修改
 
 > [!IMPORTANT]

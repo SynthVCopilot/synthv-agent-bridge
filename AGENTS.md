@@ -66,6 +66,34 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
 - If an MCP v2 call returns `SYNTHV_SESSION_CHANGED`, do not retry its old
   `contextId` or Guard Tokens. The server has already cleared them; read the
   intended target again and build the write from the fresh context.
+- On the first successful MCP/Bridge connection notice in a conversation,
+  offer the optional bundled demo in one sentence: the user can reply
+  `Run the Twinkle Star demo.` or `运行《小星星》Demo。` The Agent must not
+  create anything until the user explicitly opts in, and it must not repeat
+  the offer later in the same conversation.
+- When the user starts that demo, read all of
+  `examples/twinkle-star-demo.json` before acting and use it as the score,
+  tuning, safety, and verification source of truth. Do not add a public MCP
+  tool or move its musical decisions into TypeScript or Lua. Before each stage,
+  print the matching short localized heading from `progressHeadings`, followed
+  by at most one concise status sentence; do not expose raw MCP payloads:
+  `Demo 1/5` checks the connection and safe location, `Demo 2/5` creates the
+  isolated Note Group, `Demo 3/5` pauses for Vocal and singing-style
+  onboarding, `Demo 4/5` applies full-song tuning and pitch curves, and
+  `Demo 5/5` rereads, verifies, and starts playback.
+- The demo may create and tune only its new non-main Group, positioned after
+  existing project content. It must not alter user-owned tracks, Groups,
+  notes, lyrics, geometry, automation, or mixer state. After score creation,
+  stop and ask the user to select the Demo Group, select or assign its Vocal,
+  and provide the complete Vocal Mode panel or every exact singing-style name.
+  Continue automatically only after that handoff. Use a fresh Demo-Group read,
+  passing the template's projection through the top-level `sv_read.include`
+  field so `automation` and `pitchAnalysis` Guards are retained; do not put
+  that projection only inside the internal action args. Use the current
+  Automation `definition.range` values, one
+  `apply_group_tuning` batch, an independent verification read, and loop
+  playback. Account for exactly the five declared inter-phrase gaps and no
+  within-phrase gap or overlap.
 - Before the first tuning write in a conversation, the Agent must ask the user
   to select the intended Note Group in SynthV, select or assign the intended
   Vocal (singer/voice database) for that Group, and then either attach a
@@ -82,9 +110,10 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
   note in one temporary non-main Note Group at a harmless location solely to
   make the singing-style parameters available. The user must then select that
   Note Group and select or assign its Vocal. This bootstrap edit is the only
-  exception to the no-tuning-write-before-onboarding rule. Stop after the
-  parameters appear and ask the user to screenshot the complete panel or type
-  every singing-style name before any further tuning write.
+  exception for an ordinary tuning request. Explicitly requested bundled Demo
+  score creation is a separate opt-in construction workflow, but it must also
+  stop after creating its isolated Group and ask the user to screenshot the
+  complete panel or type every singing-style name before any tuning write.
 - Before that first tuning write, present one concise **How to use** and one
   **Preflight checklist**. Cover saving a working copy, selecting the Vocal,
   providing its singing styles because of the official API limitation,

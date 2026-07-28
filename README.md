@@ -14,6 +14,13 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 > Node.js 安装、构建、SynthV 脚本安装、MCP 注册和诊断等大部分工作都可以
 > 交给 Codex 完成。
 
+> [!TIP]
+> First connection? Reply **`Run the Twinkle Star demo.`** Codex will explain
+> each stage with a short heading, create an isolated 42-note Demo Group, pause
+> once for you to select its Vocal and provide every exact Vocal Mode name,
+> then automatically tune, verify, and loop the song. Existing project material
+> is not modified. See the [guided Demo](docs/twinkle-star-demo.md).
+
 > [!IMPORTANT]
 > Because SynthV's official scripting API cannot read the current Vocal
 > identity or enumerate untouched default-only singing style (Vocal Mode) names
@@ -80,6 +87,10 @@ for the enforced layer rules and batch-operation admission criteria.
 On the first project-changing use in a conversation, the Agent must briefly
 tell the user:
 
+- An optional guided Demo is available. Reply `Run the Twinkle Star demo.` to
+  create and tune an isolated example without changing existing material. The
+  Agent prints five short progress headings and pauses once for Vocal/Vocal
+  Mode onboarding because of the official API limitation.
 - Save important work before AI editing and avoid changing the same target
   while a Bridge write is running.
 - After undoing or manually editing the notes, Group, Voice, or Vocal Modes
