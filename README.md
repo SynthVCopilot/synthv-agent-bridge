@@ -358,7 +358,7 @@ not registered as standalone MCP tools; request their current schemas through
 | `delete_track` | Destructive | Delete a fingerprint-verified non-final track. |
 | `update_group` | Write | Change vocal/instrumental reference state and supported vocal properties. |
 | `set_group_voice` | Write | Fingerprint-verified typed voice, Vocal Mode, and host-validated experimental Unison updates, with an optional current-Group guard. |
-| `apply_group_tuning` | Destructive | Atomically apply one same-Group Voice/Vocal Mode, note/phoneme, and multi-automation tuning pass in one undo record. |
+| `apply_group_tuning` | Destructive | Prevalidate and apply one same-Group Voice/Vocal Mode, note/phoneme, and multi-automation tuning pass in one undo record. Unexpected execution failures explicitly require one SynthV Undo before retrying. |
 | `delete_group_reference` | Destructive | Remove a non-main vocal or instrumental reference. |
 | `add_notes` | Write | Add notes to a target group. V2 defaults to `grouping=ensureNonMain`, creating a reusable non-main group/reference when the target is the track main group; use `grouping=target` to write to the exact group. |
 | `edit_notes` | Write | Edit fingerprint-verified notes. |
@@ -581,10 +581,11 @@ For a local installation and connection report, run:
 npm run doctor -- --target "/path/to/Synthesizer V Studio 2/scripts"
 ```
 
-The doctor checks source/installed versions and exact script contents, Bridge
-and MCP heartbeats, the resolved IPC directory, residual processing/control
-files, and Codex configuration. Add `--json` for machine-readable output. It
-never modifies the project or installed files.
+The doctor checks source/installed versions and exact script contents, compiled
+MCP freshness, the running MCP capability fingerprint, Bridge and MCP
+heartbeats, the resolved IPC directory, residual processing/control files, and
+Codex configuration. Add `--json` for machine-readable output. It never
+modifies the project or installed files.
 
 ## Current limitations
 

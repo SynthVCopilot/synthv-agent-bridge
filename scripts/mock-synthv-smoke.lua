@@ -205,6 +205,8 @@ local function makeNote()
     return n
 end
 
+local automationAddFailureParameter = nil
+
 local function makeAutomation(name)
     local a = attachScriptData({ name=name, points={} })
     local definitions = {
@@ -242,7 +244,15 @@ local function makeAutomation(name)
         end
     end
     function a:getLinear(b) return self:get(b) end
-    function a:add(b,v) local fresh=self.points[b]==nil; self.points[b]=v; return fresh end
+    function a:add(b,v)
+        if automationAddFailureParameter == self.name then
+            automationAddFailureParameter = nil
+            error("forced automation add failure")
+        end
+        local fresh=self.points[b]==nil
+        self.points[b]=v
+        return fresh
+    end
     function a:removeAll() self.points={} end
     function a:remove(beginPos,endPos)
         local changed=false
@@ -1336,8 +1346,56 @@ callWrite(
         escape(loudnessFingerprint)..'","beginPosition":0,"endPosition":1411200000,"startValue":-4,"endValue":0}'
 )
 
+local failureReference=project.tracks[1].refs[1]
+local failureVoiceBefore=deepCopy(failureReference.voice)
+local failureAutomation=failureReference.group:getParameter("loudness")
+local failureAutomationBefore=deepCopy(failureAutomation.points)
+local failureVoiceRead=call("get_group_voice",'{"trackIndex":1,"groupIndex":1}')
+local failureReferenceFingerprint=extractJsonString(failureVoiceRead,"referenceFingerprint")
+local failureAutomationRead=call(
+    "get_automation",
+    '{"trackIndex":1,"groupIndex":1,"parameter":"loudness"}'
+)
+local failureAutomationFingerprint=
+    extractJsonString(failureAutomationRead,"fingerprint")
+local failureUndoBefore=project.undo
+automationAddFailureParameter="loudness"
+local tuningFailure=callExpectError(
+    "apply_group_tuning",
+    '{"trackIndex":1,"groupIndex":1,"summary":"Forced execution failure",'..
+        '"referenceFingerprint":"'..escape(failureReferenceFingerprint)..'",'..
+        '"requireCurrentEditorGroup":false,'..
+        '"voice":{"parameters":{"tension":0.2}},'..
+        '"automations":[{"parameter":"loudness",'..
+            '"expectedFingerprint":"'..escape(failureAutomationFingerprint)..'",'..
+            '"clearMode":"all","points":[{"position":0,"value":0}]}]}',
+    "INTERNAL_ERROR"
+)
+assert(
+    tuningFailure:find('"undoRequired":true',1,true),
+    "execution failure did not require one SynthV Undo"
+)
+assert(
+    tuningFailure:find('"partialWritePossible":true',1,true),
+    "execution failure did not disclose partial-write risk"
+)
+assert(
+    project.undo==failureUndoBefore+1,
+    "execution failure did not preserve its single undo boundary"
+)
+assert(
+    failureReference.voice.paramTension==0.2,
+    "forced tuning failure did not occur after the voice write"
+)
+assert(
+    next(failureAutomation.points)==nil,
+    "forced tuning failure did not occur after clearing automation"
+)
+failureReference.voice=failureVoiceBefore
+failureAutomation.points=failureAutomationBefore
+
 local finalNotes=call("get_track_notes",'{"trackIndex":1,"offset":0,"limit":100}')
 local finalFingerprint=extractJsonString(finalNotes,"fingerprint")
 callWrite("delete_notes",'{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(finalFingerprint)..'"}]}')
-assert(project.undo==47,"expected 47 undo records, got "..project.undo)
+assert(project.undo==48,"expected 48 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

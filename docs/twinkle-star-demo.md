@@ -79,7 +79,8 @@ automatic.
 - Group Voice and exact user-supplied Vocal Mode names
 - computed-phoneme strength and timing work
 - loudness, tension, breathiness, pitch-deviation, and vibrato-envelope curves
-- guarded fresh reads, one atomic tuning batch, post-write verification, and
+- guarded fresh reads, one prevalidated tuning batch in a single undo record,
+  post-write verification, and
   loop playback
 
 The Demo intentionally uses the same eight MCP tools and internal actions as a

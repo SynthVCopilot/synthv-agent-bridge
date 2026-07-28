@@ -544,6 +544,20 @@ function stripDiagnostics(root: JsonRecord): void {
   }
 }
 
+function shouldStripDiagnostics(
+  action: string,
+  include: readonly V2IncludeValue[] | undefined,
+  debug: boolean,
+): boolean {
+  return (
+    !debug &&
+    !(
+      action === "get_phrase_context" &&
+      include?.includes("diagnostics") === true
+    )
+  );
+}
+
 function sameIncludeSelection(
   left: readonly V2IncludeValue[],
   right: readonly V2IncludeValue[],
@@ -917,6 +931,7 @@ export const v2Testing = {
   projectFields,
   projectIncludes,
   stripDiagnostics,
+  shouldStripDiagnostics,
   waitForSessionTokenChange,
 };
 
@@ -1356,7 +1371,7 @@ export function registerV2Surface(
           projectIncludes(root, include);
           compactPhraseNotes(root);
         }
-        if (!input.debug) {
+        if (shouldStripDiagnostics(input.action, include, input.debug)) {
           stripDiagnostics(root);
         }
         denseNotes(root, input.dense);
