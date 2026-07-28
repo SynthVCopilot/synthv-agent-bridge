@@ -3,12 +3,13 @@ local ipc = assert(os.getenv("SYNTHV_AGENT_BRIDGE_DIR"))
 local prefix = ipc .. "/synthv-agent-bridge"
 local requestFile = prefix .. ".request.json"
 local responseFile = prefix .. ".response.json"
+local statusFile = prefix .. ".status.json"
 local installFile = prefix .. ".install.json"
 
 do
     local scriptFile = assert(os.getenv("BRIDGE_SCRIPT")):gsub("\\","\\\\"):gsub('"','\\"')
     local file = assert(io.open(installFile, "wb"))
-    file:write('{"protocolVersion":1,"scriptFile":"'..scriptFile..'"}')
+    file:write('{"schemaVersion":1,"scriptFile":"'..scriptFile..'"}')
     file:close()
 end
 
@@ -750,6 +751,15 @@ function SV:showCustomDialog(form) return form end
 dofile(assert(os.getenv("BRIDGE_SCRIPT")))
 main()
 
+do
+    local file=assert(io.open(statusFile,"rb"))
+    local status=file:read("*a")
+    file:close()
+    assert(status:find('"protocolVersion":2',1,true),"heartbeat did not advertise protocol v2")
+    assert(status:find('"protocolVersions":[2]',1,true),"heartbeat advertised a non-v2 protocol")
+    assert(status:find('"preferredProtocolVersion":2',1,true),"heartbeat did not prefer protocol v2")
+end
+
 local seq=0
 local function escape(s) return s:gsub('\\','\\\\'):gsub('"','\\"') end
 local function extractJsonString(text,key)
@@ -776,7 +786,7 @@ local function callRaw(action,payload)
     seq=seq+1
     local id=string.format("00000000-0000-4000-8000-%012d",seq)
     local f=assert(io.open(requestFile,"wb"))
-    f:write('{"protocolVersion":1,"requestId":"'..id..'","action":"'..action..'","createdAt":"2026-07-26T00:00:00.000Z","payload":'..payload..'}')
+    f:write('{"v":2,"id":"'..id..'","a":"'..action..'","p":'..payload..'}')
     f:close()
     assert(scheduled,"bridge stopped unexpectedly")
     local callback=scheduled; scheduled=nil; callback()
@@ -786,7 +796,7 @@ end
 
 local function call(action,payload)
     local response=callRaw(action,payload)
-    assert(response:find('"ok":true',1,true),action.." failed: "..response)
+    assert(response:find('"r":',1,true),action.." failed: "..response)
     return response
 end
 
@@ -799,9 +809,21 @@ end
 
 local function callExpectError(action,payload,errorCode)
     local response=callRaw(action,payload)
-    assert(response:find('"ok":false',1,true),action.." unexpectedly succeeded: "..response)
+    assert(response:find('"e":',1,true),action.." unexpectedly succeeded: "..response)
     assert(response:find('"code":"'..errorCode..'"',1,true),action.." returned the wrong error: "..response)
     return response
+end
+
+do
+    local f=assert(io.open(requestFile,"wb"))
+    f:write('{"protocolVersion":1,"requestId":"00000000-0000-4000-8000-000000000000","action":"ping","createdAt":"2026-07-26T00:00:00.000Z","payload":{}}')
+    f:close()
+    assert(scheduled,"bridge stopped unexpectedly")
+    local callback=scheduled; scheduled=nil; callback()
+    local rf=assert(io.open(responseFile,"rb")); local response=rf:read("*a"); rf:close(); os.remove(responseFile)
+    assert(response:find('"v":2',1,true),"v1 rejection did not use the v2 response envelope")
+    assert(response:find('"id":"00000000-0000-4000-8000-000000000000"',1,true),"v1 rejection did not preserve request correlation")
+    assert(response:find('"code":"PROTOCOL_MISMATCH"',1,true),"legacy v1 request was not rejected")
 end
 
 local pingResponse=call("ping","{}")
@@ -1042,14 +1064,14 @@ local undoBeforeRejectedUnison=project.undo
 callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(updatedVoiceFingerprint)..'","experimentalUnison":{"singers":9}}',"INVALID_ARGUMENT")
 assert(project.undo==undoBeforeRejectedUnison,"host-rejected Unison must not create an undo record")
 project.tracks[2].refs[1].voice.vocalModeParams.Powerful={pitch=220,timbre=220,pronunciation=220}
-local legacyVoice=call("get_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'"}')
-local legacyVoiceFingerprint=extractJsonString(legacyVoice,"referenceFingerprint")
+local preexistingVoice=call("get_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'"}')
+local preexistingVoiceFingerprint=extractJsonString(preexistingVoice,"referenceFingerprint")
 local undoBeforeClampedUnrequestedMode=project.undo
-callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(legacyVoiceFingerprint)..'","vocalModes":[{"name":"Soft","pitch":25}]}',"HOST_POSTCONDITION_FAILED")
+callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(preexistingVoiceFingerprint)..'","vocalModes":[{"name":"Soft","pitch":25}]}',"HOST_POSTCONDITION_FAILED")
 assert(project.undo==undoBeforeClampedUnrequestedMode,"an update that clamps an unrequested Vocal Mode must not create an undo record")
-assert(project.tracks[2].refs[1].voice.vocalModeParams.Powerful.pitch==220,"an unrequested legacy Vocal Mode value was changed")
+assert(project.tracks[2].refs[1].voice.vocalModeParams.Powerful.pitch==220,"an unrequested pre-existing Vocal Mode value was changed")
 local undoBeforeOutOfRangeVocalMode=project.undo
-callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(legacyVoiceFingerprint)..'","vocalModes":[{"name":"Powerful","pitch":220}]}',"INVALID_ARGUMENT")
+callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(preexistingVoiceFingerprint)..'","vocalModes":[{"name":"Powerful","pitch":220}]}',"INVALID_ARGUMENT")
 assert(project.undo==undoBeforeOutOfRangeVocalMode,"out-of-range Vocal Mode must fail before an undo record")
 callWrite("update_group",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","name":"Lead Main","voice":{"paramLoudness":-2}}')
 call("get_computed_group_data",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","pitchSample":{"absoluteStart":0,"interval":352800000,"frames":4}}')

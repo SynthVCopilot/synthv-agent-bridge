@@ -479,7 +479,6 @@ export function createServer(config: BridgeConfig): McpServer {
   const client = new FileIpcClient(config);
   const guardTokens = new GuardTokenStore();
   const sidebar = new SidebarCoordinator(config, client);
-  const useV2Surface = (config.mcpSurface ?? "v2") === "v2";
   const server = new McpServer(
     {
       name: SERVER_NAME,
@@ -488,31 +487,27 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     {
       instructions:
-        useV2Surface
-          ? "Use sv_describe for unfamiliar actions. Read only the intended target before writes and batch changes with its contextId. Indices are 1-based. Writes stay fingerprint-guarded and create one SynthV undo record. Sidebar requests must be published as previews."
-          : "Control Synthesizer V Studio through the local bridge. Read only the intended target before writes, prefer compact workflows, reuse current guards, and keep protocol-boundary indices 1-based.",
+        "Use sv_describe for unfamiliar actions. Read only the intended target before writes and batch changes with its contextId. Indices are 1-based. Writes stay fingerprint-guarded and create one SynthV undo record. Sidebar requests must be published as previews.",
     },
   );
-  const capturedTools = new Map<string, RegisteredTool>();
-  const registerLegacyTool = server.registerTool.bind(server);
-  if (useV2Surface) {
-    server.registerTool = ((
-      name: string,
-      toolConfig: unknown,
-      handler: unknown,
-    ) => {
-      const registered = (
-        registerLegacyTool as unknown as (
-          toolName: string,
-          configValue: unknown,
-          callback: unknown,
-        ) => RegisteredTool
-      )(name, toolConfig, handler);
-      capturedTools.set(name, registered);
-      registered.disable();
-      return registered;
-    }) as McpServer["registerTool"];
-  }
+  const actionTools = new Map<string, RegisteredTool>();
+  const registerPublicTool = server.registerTool.bind(server);
+  server.registerTool = ((
+    name: string,
+    toolConfig: unknown,
+    handler: unknown,
+  ) => {
+    const registered = (
+      registerPublicTool as unknown as (
+        toolName: string,
+        configValue: unknown,
+        callback: unknown,
+      ) => RegisteredTool
+    )(name, toolConfig, handler);
+    actionTools.set(name, registered);
+    registered.disable();
+    return registered;
+  }) as McpServer["registerTool"];
   sidebar.start();
   server.server.onclose = () => sidebar.stop();
 
@@ -1170,7 +1165,7 @@ export function createServer(config: BridgeConfig): McpServer {
           .max(8)
           .optional()
           .describe(
-            "Optional v2 projection. Omit for the complete legacy phrase response.",
+            "Optional v2 projection. Omit for the complete phrase response.",
           ),
       },
       annotations: {
@@ -2332,14 +2327,12 @@ export function createServer(config: BridgeConfig): McpServer {
     async (input) => runTool(async () => client.send("playback", input)),
   );
 
-  if (useV2Surface) {
-    registerV2Surface(
-      registerLegacyTool,
-      capturedTools,
-      guardTokens,
-      async () => (await client.getStatus()).status?.sessionToken,
-    );
-  }
+  registerV2Surface(
+    registerPublicTool,
+    actionTools,
+    guardTokens,
+    async () => (await client.getStatus()).status?.sessionToken,
+  );
 
   return server;
 }

@@ -30,6 +30,16 @@ All notable changes will be documented in this file.
 
 ### Changed
 
+- File IPC now accepts only the compact protocol-v2 request/response envelope;
+  Lua rejects protocol-v1 requests with `PROTOCOL_MISMATCH`. The public MCP
+  server always exposes the eight compact v2 tools, and the removed
+  `SYNTHV_AGENT_BRIDGE_MCP_SURFACE=legacy` switch can no longer expose detailed
+  action handlers as standalone tools. `sv_describe` continues to return their
+  schemas just in time.
+- The installer manifest now uses the independent `schemaVersion` field instead
+  of overloading `protocolVersion`.
+- MCP-requested Bridge reloads now wait for the changed heartbeat session token
+  and clear Context/Guard caches before `sv_status` returns.
 - `get_group_voice` can resolve the current piano-roll Group from an empty
   payload. MCP v2 now projects only target indices, documented parameters,
   Vocal Modes, and `contextId` by default, avoiding a full selection read and
@@ -48,8 +58,8 @@ All notable changes will be documented in this file.
   after an editor change.
 - Phrase notes round seconds to 0.1 ms and omit repeated default-valued phoneme,
   detune, and selection fields while retaining every non-default override.
-- The default overlap behavior remains backward compatible. Faster onset-only
-  seeking and multi-range reads are explicit opt-ins; protocol v1 is unchanged.
+- The default overlap behavior remains unchanged. Faster onset-only seeking and
+  multi-range reads are explicit opt-ins.
 
 ### Fixed
 

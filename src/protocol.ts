@@ -1,7 +1,4 @@
-import {
-  CURRENT_PROTOCOL_VERSION,
-  PROTOCOL_VERSION,
-} from "./config.js";
+import { PROTOCOL_VERSION } from "./config.js";
 
 export const BRIDGE_ACTIONS = [
   "ping",
@@ -73,12 +70,9 @@ export const BRIDGE_ACTIONS = [
 export type BridgeAction = (typeof BRIDGE_ACTIONS)[number];
 
 export interface BridgeRequest {
-  readonly protocolVersion:
-    | typeof PROTOCOL_VERSION
-    | typeof CURRENT_PROTOCOL_VERSION;
+  readonly protocolVersion: typeof PROTOCOL_VERSION;
   readonly requestId: string;
   readonly action: BridgeAction;
-  readonly createdAt?: string;
   readonly payload: Record<string, unknown>;
 }
 
@@ -91,19 +85,15 @@ export interface BridgeRemoteErrorPayload {
 export type BridgeResponse =
   | {
       readonly protocolVersion:
-        | typeof PROTOCOL_VERSION
-        | typeof CURRENT_PROTOCOL_VERSION;
+        typeof PROTOCOL_VERSION;
       readonly requestId: string;
-      readonly completedAt?: string;
       readonly ok: true;
       readonly result: unknown;
     }
   | {
       readonly protocolVersion:
-        | typeof PROTOCOL_VERSION
-        | typeof CURRENT_PROTOCOL_VERSION;
+        typeof PROTOCOL_VERSION;
       readonly requestId: string;
-      readonly completedAt?: string;
       readonly ok: false;
       readonly error: BridgeRemoteErrorPayload;
     };
@@ -138,8 +128,6 @@ export class ProtocolValidationError extends Error {
   }
 }
 
-const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const ACTION_SET = new Set<string>(BRIDGE_ACTIONS);
 
 function fail(path: string, expectation: string): never {
@@ -160,15 +148,7 @@ function asString(value: unknown, path: string): string {
   return value;
 }
 
-function asUuid(value: unknown, path: string): string {
-  const result = asString(value, path);
-  if (!UUID_PATTERN.test(result)) {
-    fail(path, "must be a UUID");
-  }
-  return result;
-}
-
-function asV2RequestId(value: unknown, path: string): string {
+function asRequestId(value: unknown, path: string): string {
   const result = asString(value, path);
   if (!/^[A-Za-z0-9_-]{8,64}$/u.test(result)) {
     fail(path, "must be an 8-64 character base64url identifier");
@@ -183,46 +163,24 @@ function asFiniteNumber(value: unknown, path: string): number {
   return value;
 }
 
-function asIsoDateTime(value: unknown, path: string): string {
-  const result = asString(value, path);
-  if (!Number.isFinite(Date.parse(result))) {
-    fail(path, "must be an ISO date-time string");
-  }
-  return result;
-}
-
-function assertProtocolVersion(value: unknown): asserts value is typeof PROTOCOL_VERSION {
+function assertWireVersion(value: unknown, path = "v"): asserts value is typeof PROTOCOL_VERSION {
   if (value !== PROTOCOL_VERSION) {
-    fail("protocolVersion", `must equal ${PROTOCOL_VERSION}`);
+    fail(path, `must equal ${PROTOCOL_VERSION}`);
   }
 }
 
 export function parseBridgeRequest(value: unknown): BridgeRequest {
   const record = asRecord(value, "request");
-  if (record.v === CURRENT_PROTOCOL_VERSION) {
-    const action = asString(record.a, "a");
-    if (!ACTION_SET.has(action)) {
-      fail("a", "is not supported");
-    }
-    return {
-      protocolVersion: CURRENT_PROTOCOL_VERSION,
-      requestId: asV2RequestId(record.id, "id"),
-      action: action as BridgeAction,
-      payload: asRecord(record.p, "p"),
-    };
-  }
-  assertProtocolVersion(record.protocolVersion);
-  const action = asString(record.action, "action");
+  assertWireVersion(record.v);
+  const action = asString(record.a, "a");
   if (!ACTION_SET.has(action)) {
-    fail("action", "is not supported");
+    fail("a", "is not supported");
   }
-
   return {
     protocolVersion: PROTOCOL_VERSION,
-    requestId: asUuid(record.requestId, "requestId"),
+    requestId: asRequestId(record.id, "id"),
     action: action as BridgeAction,
-    createdAt: asIsoDateTime(record.createdAt, "createdAt"),
-    payload: asRecord(record.payload, "payload"),
+    payload: asRecord(record.p, "p"),
   };
 }
 
@@ -238,46 +196,18 @@ export function safeParseBridgeRequest(
 
 export function parseBridgeResponse(value: unknown): BridgeResponse {
   const record = asRecord(value, "response");
-  if (record.v === CURRENT_PROTOCOL_VERSION) {
-    const base = {
-      protocolVersion: CURRENT_PROTOCOL_VERSION,
-      requestId: asV2RequestId(record.id, "id"),
-    } as const;
-    if (Object.prototype.hasOwnProperty.call(record, "r")) {
-      if (Object.prototype.hasOwnProperty.call(record, "e")) {
-        fail("response", "must not contain both r and e");
-      }
-      return { ...base, ok: true, result: record.r };
-    }
-    const error = asRecord(record.e, "e");
-    const details = Object.prototype.hasOwnProperty.call(error, "details")
-      ? { details: error.details }
-      : {};
-    return {
-      ...base,
-      ok: false,
-      error: {
-        code: asString(error.code, "e.code"),
-        message: asString(error.message, "e.message"),
-        ...details,
-      },
-    };
-  }
-  assertProtocolVersion(record.protocolVersion);
+  assertWireVersion(record.v);
   const base = {
     protocolVersion: PROTOCOL_VERSION,
-    requestId: asUuid(record.requestId, "requestId"),
-    completedAt: asIsoDateTime(record.completedAt, "completedAt"),
+    requestId: asRequestId(record.id, "id"),
   } as const;
-
-  if (record.ok === true) {
-    return { ...base, ok: true, result: record.result };
+  if (Object.prototype.hasOwnProperty.call(record, "r")) {
+    if (Object.prototype.hasOwnProperty.call(record, "e")) {
+      fail("response", "must not contain both r and e");
+    }
+    return { ...base, ok: true, result: record.r };
   }
-  if (record.ok !== false) {
-    fail("ok", "must be a boolean");
-  }
-
-  const error = asRecord(record.error, "error");
+  const error = asRecord(record.e, "e");
   const details = Object.prototype.hasOwnProperty.call(error, "details")
     ? { details: error.details }
     : {};
@@ -285,8 +215,8 @@ export function parseBridgeResponse(value: unknown): BridgeResponse {
     ...base,
     ok: false,
     error: {
-      code: asString(error.code, "error.code"),
-      message: asString(error.message, "error.message"),
+      code: asString(error.code, "e.code"),
+      message: asString(error.message, "e.message"),
       ...details,
     },
   };
@@ -294,7 +224,7 @@ export function parseBridgeResponse(value: unknown): BridgeResponse {
 
 export function parseBridgeStatus(value: unknown): BridgeStatus {
   const record = asRecord(value, "status");
-  assertProtocolVersion(record.protocolVersion);
+  assertWireVersion(record.protocolVersion, "protocolVersion");
   const state = asString(record.state, "state");
   if (state !== "running" && state !== "stopped" && state !== "error") {
     fail("state", "must be running, stopped, or error");

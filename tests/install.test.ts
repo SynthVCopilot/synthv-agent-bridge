@@ -38,6 +38,14 @@ test("core-only installation omits the optional sidebar without deleting one", a
   const installedDirectory = path.join(target, "SynthV Agent Bridge");
   await access(path.join(installedDirectory, "SynthVAgentBridge.lua"));
   await access(path.join(installedDirectory, "StopSynthVAgentBridge.lua"));
+  const installManifest = JSON.parse(
+    await readFile(
+      path.join(ipcDirectory, "synthv-agent-bridge.install.json"),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+  assert.equal(installManifest.schemaVersion, 1);
+  assert.equal("protocolVersion" in installManifest, false);
   await assert.rejects(
     access(path.join(installedDirectory, "SynthVAgentSidebar.lua")),
     { code: "ENOENT" },
@@ -58,4 +66,28 @@ test("core-only installation omits the optional sidebar without deleting one", a
     "existing optional sidebar\n",
   );
   assert.doesNotMatch(second.stdout, /The Bridge runtime changed/u);
+});
+
+test("offline installation never claims that hot reload succeeded", async (context) => {
+  const fixture = await mkdtemp(path.join(os.tmpdir(), "synthv-install-test-"));
+  context.after(async () => rm(fixture, { recursive: true, force: true }));
+  const installer = fileURLToPath(
+    new URL("../../scripts/install-synthv-bridge.mjs", import.meta.url),
+  );
+  const result = spawnSync(
+    process.execPath,
+    [installer, "--target", path.join(fixture, "scripts")],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SYNTHV_AGENT_BRIDGE_DIR: path.join(fixture, "ipc"),
+      },
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Bridge is not currently connected/u);
+  assert.doesNotMatch(result.stdout, /Hot reload updated the current session/u);
+  assert.match(result.stdout, /Choose Scripts → Rescan/u);
 });

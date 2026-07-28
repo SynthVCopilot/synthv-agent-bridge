@@ -15,7 +15,7 @@ import {
 type JsonRecord = Record<string, unknown>;
 type RegisterTool = McpServer["registerTool"];
 
-export type V2ToolDefinitions = ReadonlyMap<string, RegisteredTool>;
+export type ActionToolDefinitions = ReadonlyMap<string, RegisteredTool>;
 
 const V2_INCLUDE_VALUES = [
   "notes",
@@ -223,15 +223,15 @@ function readJsonResult(result: CallToolResult): unknown {
   }
 }
 
-function parseToolInput(tool: RegisteredTool, args: JsonRecord): unknown {
+function parseActionInput(tool: RegisteredTool, args: JsonRecord): unknown {
   const schema = tool.inputSchema as
     | { parse?: (value: unknown) => unknown }
     | undefined;
   return typeof schema?.parse === "function" ? schema.parse(args) : args;
 }
 
-async function invokeTool(
-  definitions: V2ToolDefinitions,
+async function invokeActionTool(
+  definitions: ActionToolDefinitions,
   action: string,
   args: JsonRecord,
 ): Promise<CallToolResult> {
@@ -242,7 +242,7 @@ async function invokeTool(
   if (typeof tool.handler !== "function") {
     throw new BridgeProtocolError(`SynthV action ${action} is not directly callable`);
   }
-  const parsed = parseToolInput(tool, args);
+  const parsed = parseActionInput(tool, args);
   const handler = tool.handler as (
     input: unknown,
     extra?: unknown,
@@ -255,7 +255,7 @@ function isReadAction(tool: RegisteredTool): boolean {
 }
 
 function assertActionCategory(
-  definitions: V2ToolDefinitions,
+  definitions: ActionToolDefinitions,
   action: string,
   category: "read" | "edit" | "delete" | "ui" | "transaction",
 ): void {
@@ -861,6 +861,7 @@ export const v2Testing = {
   projectFields,
   projectIncludes,
   stripDiagnostics,
+  waitForSessionTokenChange,
 };
 
 function expandTransactionContexts(
@@ -942,7 +943,7 @@ function minimalWriteResult(
   return result;
 }
 
-function describeTool(name: string, tool: RegisteredTool): JsonRecord {
+function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
   const schema = tool.inputSchema;
   let inputSchema: unknown = {};
   if (schema !== undefined) {
@@ -988,7 +989,7 @@ function describeTool(name: string, tool: RegisteredTool): JsonRecord {
   };
 }
 
-function catalog(definitions: V2ToolDefinitions): JsonRecord {
+function catalog(definitions: ActionToolDefinitions): JsonRecord {
   const categories: Record<string, string[]> = {
     read: [],
     edit: [],
@@ -1027,12 +1028,12 @@ function catalog(definitions: V2ToolDefinitions): JsonRecord {
 }
 
 async function invokeV2(
-  definitions: V2ToolDefinitions,
+  definitions: ActionToolDefinitions,
   action: string,
   args: JsonRecord,
 ): Promise<CallToolResult> {
   try {
-    return await invokeTool(definitions, action, args);
+    return await invokeActionTool(definitions, action, args);
   } catch (error) {
     return errorResult(error);
   }
@@ -1066,22 +1067,51 @@ export class V2SessionTracker {
   }
 }
 
+async function waitForSessionTokenChange(
+  getSessionToken: () => Promise<string | undefined>,
+  previousSessionToken: string,
+  timeoutMs = 5_000,
+  pollIntervalMs = 25,
+): Promise<string | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const currentSessionToken = await getSessionToken();
+    if (
+      currentSessionToken !== undefined &&
+      currentSessionToken.length > 0 &&
+      currentSessionToken !== previousSessionToken
+    ) {
+      return currentSessionToken;
+    }
+    if (Date.now() >= deadline) {
+      return undefined;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, pollIntervalMs);
+    });
+  }
+}
+
 export function registerV2Surface(
   registerTool: RegisterTool,
-  definitions: V2ToolDefinitions,
+  definitions: ActionToolDefinitions,
   guardTokens: GuardTokenStore,
   getSessionToken?: () => Promise<string | undefined>,
 ): void {
   const contexts = new V2ContextStore();
   const sessionTracker = new V2SessionTracker();
-  const observeSession = async (): Promise<V2SessionChange | undefined> => {
-    const change = sessionTracker.observe(await getSessionToken?.());
+  const observeSessionToken = (
+    sessionToken: string | undefined,
+  ): V2SessionChange | undefined => {
+    const change = sessionTracker.observe(sessionToken);
     if (change !== undefined) {
       contexts.clear();
       guardTokens.clear();
     }
     return change;
   };
+  const observeSession = async (): Promise<V2SessionChange | undefined> =>
+    observeSessionToken(await getSessionToken?.());
   const sessionChangedError = (change: V2SessionChange): BridgeError =>
     new BridgeError(
       "SynthV was restarted or the Bridge was reloaded. Cached contexts and Guard Tokens were cleared; read the target again before writing.",
@@ -1126,8 +1156,42 @@ export function registerV2Surface(
         openWorldHint: false,
       },
     },
-    async (input) =>
-      invokeV2(definitions, STATUS_OPERATIONS[input.operation], {}),
+    async (input) => {
+      const reloadPreviousSessionToken =
+        input.operation === "reload" && getSessionToken !== undefined
+          ? await getSessionToken()
+          : undefined;
+      if (reloadPreviousSessionToken !== undefined) {
+        observeSessionToken(reloadPreviousSessionToken);
+      }
+      const result = await invokeV2(
+        definitions,
+        STATUS_OPERATIONS[input.operation],
+        {},
+      );
+      if (
+        input.operation !== "reload" ||
+        result.isError ||
+        getSessionToken === undefined ||
+        reloadPreviousSessionToken === undefined
+      ) {
+        return result;
+      }
+      const currentSessionToken = await waitForSessionTokenChange(
+        getSessionToken,
+        reloadPreviousSessionToken,
+      );
+      if (currentSessionToken === undefined) {
+        return result;
+      }
+      const change = observeSessionToken(currentSessionToken);
+      const root = asRecord(readJsonResult(result), "result");
+      root.previousSessionToken = reloadPreviousSessionToken;
+      root.sessionToken = currentSessionToken;
+      root.cachesCleared = change !== undefined;
+      root.sessionChangeObserved = true;
+      return jsonResult(root);
+    },
   );
 
   registerTool(
@@ -1155,7 +1219,7 @@ export function registerV2Surface(
             if (tool === undefined) {
               throw new BridgeProtocolError(`Unknown SynthV action: ${action}`);
             }
-            return describeTool(action, tool);
+            return describeActionTool(action, tool);
           }),
         });
       } catch (error) {
@@ -1223,7 +1287,7 @@ export function registerV2Surface(
         ) {
           args.responseMode = "compact";
         }
-        const result = await invokeTool(definitions, input.action, args);
+        const result = await invokeActionTool(definitions, input.action, args);
         if (result.isError) {
           return result;
         }
@@ -1295,7 +1359,7 @@ export function registerV2Surface(
           ) {
             args.responseMode = "compact";
           }
-          const result = await invokeTool(definitions, input.action, args);
+          const result = await invokeActionTool(definitions, input.action, args);
           if (result.isError || input.response === "full") {
             return result;
           }
@@ -1345,7 +1409,7 @@ export function registerV2Surface(
           input.action === "apply_transaction"
             ? expandTransactionContexts({ ...input.args }, contexts)
             : input.args;
-        const result = await invokeTool(definitions, input.action, args);
+        const result = await invokeActionTool(definitions, input.action, args);
         if (result.isError || input.response === "full") {
           return result;
         }
@@ -1388,7 +1452,7 @@ export function registerV2Surface(
         if (sessionChange !== undefined && input.contextId !== undefined) {
           throw sessionChangedError(sessionChange);
         }
-        const result = await invokeTool(
+        const result = await invokeActionTool(
           definitions,
           input.action,
           expandContext(
@@ -1459,7 +1523,7 @@ export function registerV2Surface(
             };
           }
         }
-        return await invokeTool(definitions, action, args);
+        return await invokeActionTool(definitions, action, args);
       } catch (error) {
         return errorResult(error);
       }

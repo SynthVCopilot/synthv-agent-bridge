@@ -55,7 +55,6 @@ test("loadConfig builds all IPC paths from a shared directory", () => {
   assert.equal(config.pollIntervalMs, 7);
   assert.equal(config.staleRequestMs, 4567);
   assert.equal(config.statusStaleMs, 890);
-  assert.equal(config.mcpSurface, "v2");
 });
 
 test("loadConfig rejects invalid positive integer settings", () => {
@@ -87,20 +86,10 @@ test("loadConfig uses the low-latency P1 response poll by default", () => {
   assert.equal(loadConfig({}, "/tmp").pollIntervalMs, 10);
 });
 
-test("loadConfig supports an isolated legacy MCP surface", () => {
-  assert.equal(
-    loadConfig(
-      { SYNTHV_AGENT_BRIDGE_MCP_SURFACE: "legacy" },
-      "/tmp",
-    ).mcpSurface,
-    "legacy",
+test("loadConfig ignores the removed legacy MCP-surface switch", () => {
+  const config = loadConfig(
+    { SYNTHV_AGENT_BRIDGE_MCP_SURFACE: "legacy" },
+    "/tmp",
   );
-  assert.throws(
-    () =>
-      loadConfig(
-        { SYNTHV_AGENT_BRIDGE_MCP_SURFACE: "unknown" },
-        "/tmp",
-      ),
-    /must be v2 or legacy/u,
-  );
+  assert.equal("mcpSurface" in config, false);
 });

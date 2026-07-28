@@ -9,28 +9,26 @@ import {
   ProtocolValidationError,
 } from "../src/protocol.js";
 
-const requestId = "550e8400-e29b-41d4-a716-446655440000";
+const requestId = "AbCdEfGh12345678";
 
-test("parseBridgeRequest accepts a valid request envelope", () => {
+test("parseBridgeRequest accepts the compact v2 request envelope", () => {
   const parsed = parseBridgeRequest({
-    protocolVersion: 1,
-    requestId,
-    action: "ping",
-    createdAt: "2026-07-26T00:00:00.000Z",
-    payload: {},
+    v: 2,
+    id: requestId,
+    a: "ping",
+    p: {},
   });
   assert.equal(parsed.action, "ping");
   assert.equal(parsed.requestId, requestId);
 });
 
-test("protocol v1 recognizes every registered bridge action", () => {
+test("protocol v2 recognizes every registered bridge action", () => {
   for (const action of BRIDGE_ACTIONS) {
     const parsed = parseBridgeRequest({
-      protocolVersion: 1,
-      requestId,
-      action,
-      createdAt: "2026-07-26T00:00:00.000Z",
-      payload: {},
+      v: 2,
+      id: requestId,
+      a: action,
+      p: {},
     });
     assert.equal(parsed.action, action);
   }
@@ -71,8 +69,29 @@ test("protocol parsers reject mismatched versions and request IDs", () => {
   assert.throws(
     () =>
       parseBridgeRequest({
-        protocolVersion: 3,
-        requestId,
+        v: 3,
+        id: requestId,
+        a: "ping",
+        p: {},
+      }),
+    /v must equal 2/u,
+  );
+
+  assert.throws(
+    () =>
+      parseBridgeResponse({
+        v: 2,
+        id: "short",
+        r: {},
+      }),
+    /base64url identifier/u,
+  );
+
+  assert.throws(
+    () =>
+      parseBridgeRequest({
+        protocolVersion: 1,
+        requestId: "550e8400-e29b-41d4-a716-446655440000",
         action: "ping",
         createdAt: "2026-07-26T00:00:00.000Z",
         payload: {},
@@ -84,18 +103,32 @@ test("protocol parsers reject mismatched versions and request IDs", () => {
     () =>
       parseBridgeResponse({
         protocolVersion: 1,
-        requestId: "not-a-uuid",
-        completedAt: "2026-07-26T00:00:00Z",
+        requestId: "550e8400-e29b-41d4-a716-446655440000",
+        completedAt: "2026-07-26T00:00:00.000Z",
         ok: true,
         result: {},
       }),
-    /UUID/,
+    ProtocolValidationError,
+  );
+
+  assert.throws(
+    () =>
+      parseBridgeStatus({
+        protocolVersion: 1,
+        state: "running",
+        updatedAtEpochMs: 1234,
+        bridgeVersion: "0.1.0",
+        host: {},
+        projectFile: "song.svp",
+        ipcDirectory: "C:\\Temp",
+      }),
+    /protocolVersion must equal 2/u,
   );
 });
 
 test("parseBridgeStatus preserves host extensions and validates heartbeat fields", () => {
   const parsed = parseBridgeStatus({
-    protocolVersion: 1,
+    protocolVersion: 2,
     state: "running",
     updatedAtEpochMs: 1234,
     bridgeVersion: "0.1.0",
@@ -112,7 +145,7 @@ test("parseBridgeStatus validates a present session token", () => {
   assert.throws(
     () =>
       parseBridgeStatus({
-        protocolVersion: 1,
+        protocolVersion: 2,
         state: "running",
         updatedAtEpochMs: 1234,
         bridgeVersion: "0.1.0",

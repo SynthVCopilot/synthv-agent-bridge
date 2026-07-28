@@ -1,10 +1,9 @@
-# File IPC protocols
+# File IPC protocol
 
-The Node client uses the compact protocol-v2 envelope by default. The Lua
-executor continues to accept protocol v1 for recovery tools and isolated legacy
-clients.
+The Node client and Lua executor use the compact protocol-v2 envelope
+exclusively. A protocol-v1 request is rejected with `PROTOCOL_MISMATCH`.
 
-## Compact protocol v2
+## Protocol v2
 
 Request:
 
@@ -29,53 +28,9 @@ per-request timestamps, the repeated long field names, and the explicit `ok`
 flag. Heartbeat and session files carry timing and supported-version
 diagnostics.
 
-## Legacy protocol v1
-
-The v0.1.4 side-panel handoff is not a new Bridge protocol version. It is a
-local, display-oriented sideband owned by the Node coordinator. Confirmed panel
-changes enter SynthV through the same preferred v2 channel as normal Node
-requests; the underlying actions remain available to v1 clients. See
-[sidebar.md](sidebar.md).
-
-### Request
-
-```json
-{
-  "protocolVersion": 1,
-  "requestId": "7b2fcf15-2cb1-4df2-86c6-d3a8d6c49f8f",
-  "action": "get_project_info",
-  "createdAt": "2026-07-26T00:00:00.000Z",
-  "payload": {}
-}
-```
-
-### Success response
-
-```json
-{
-  "protocolVersion": 1,
-  "requestId": "7b2fcf15-2cb1-4df2-86c6-d3a8d6c49f8f",
-  "completedAt": "2026-07-26T00:00:01Z",
-  "ok": true,
-  "result": {}
-}
-```
-
-### Error response
-
-```json
-{
-  "protocolVersion": 1,
-  "requestId": "7b2fcf15-2cb1-4df2-86c6-d3a8d6c49f8f",
-  "completedAt": "2026-07-26T00:00:01Z",
-  "ok": false,
-  "error": {
-    "code": "STALE_NOTE",
-    "message": "The note changed after it was read; read the group again before writing",
-    "details": {}
-  }
-}
-```
+The v0.1.4 side-panel handoff is an independent, local display sideband owned
+by the Node coordinator, not a second Bridge protocol. Confirmed panel changes
+enter SynthV through protocol v2. See [sidebar.md](sidebar.md).
 
 ## Indexing and coordinates
 
@@ -96,14 +51,13 @@ library `NoteGroup`, places one non-main reference on the same track, copies the
 main reference's Voice/Vocal Modes, and inserts all notes into that group in one
 undo record. Existing non-main targets are reused.
 
-Set `grouping=target` to write directly to the requested group. Protocol-v1
-requests that omit `grouping` retain this legacy behavior. `groupName` may be
-provided only when `ensureNonMain` actually creates a group.
+Set `grouping=target` to write directly to the requested group. `groupName` may
+be provided only when `ensureNonMain` actually creates a group.
 - Time-axis tempo positions are project-global blicks; time-signature positions are zero-based measure numbers.
 
 ## Optimistic-concurrency fields
 
-Protocol v1 keeps concurrency fields optional for backward compatibility. New clients should always echo the latest applicable values:
+Every write must echo the latest applicable concurrency values:
 
 - `groupUuid` for every Group write.
 - `referenceFingerprint` for reference updates/deletes, especially instrumental references without a Group UUID.
@@ -124,7 +78,7 @@ The bridge reports `STALE_GROUP`, `STALE_GROUP_REFERENCE`,
 `STALE_AUTOMATION`, or `STALE_TIME_AXIS` before creating an undo record when a
 supplied guard no longer matches.
 
-### Default MCP v2 surface
+### MCP v2 surface
 
 The model-facing MCP surface is versioned independently from this file
 envelope. By default it exposes `sv_status`, `sv_describe`, `sv_read`,
@@ -138,14 +92,11 @@ expand the handle before submitting an ordinary file-protocol request. A context
 does not bypass any Lua validation, does not survive MCP restart/eviction, and
 does not cache mutable musical state.
 
-`get_phrase_context.include` is an additive file-protocol projection used by
-the v2 surface. Omitted `include` retains the complete legacy response. When it
-is present, excluded voice, automation, analysis, recommendations, selection
-diagnostics, and computed-pitch summaries are not serialized and, where
-possible, are not computed.
-
-Set `SYNTHV_AGENT_BRIDGE_MCP_SURFACE=legacy` to expose the original
-one-tool-per-action MCP surface. This does not change the file protocol.
+`get_phrase_context.include` is a file-protocol projection used by the v2
+surface. Omitted `include` returns the complete response. When it is present,
+excluded voice, automation, analysis, recommendations, selection diagnostics,
+and computed-pitch summaries are not serialized and, where possible, are not
+computed.
 
 ## Serialization rules
 
@@ -153,20 +104,20 @@ one-tool-per-action MCP surface. This does not change the file protocol.
 - Request and response filenames are stable, but writes are published atomically through temporary files.
 - `requestId` correlates a response with its request.
 - A protocol-version mismatch fails closed.
-- New action names and optional payload fields may be added without changing the v1 envelope.
+- New action names and optional payload fields may be added without changing the v2 envelope.
 - Unknown fields may be added to read responses in minor releases; clients should ignore fields they do not recognize.
 
 ### Compact tuning responses
 
-The additive `responseMode` payload field accepts `full` or `compact`; `full`
-is the backward-compatible default. Compact phoneme reads may also provide
+The `responseMode` payload field accepts `full` or `compact`; `full` is the
+default. Compact phoneme reads may also provide
 `noteIndices` and/or an absolute `startSeconds`/`endSeconds` overlap range.
 Compact writes return counts and fresh fingerprints rather than complete
 serialized objects. At the MCP boundary those fingerprints are replaced by
 short Guard Tokens.
 
-`includeComputedPhonemes` defaults to `true` for backward compatibility. When
-false, the executor skips `SV:getPhonemesForGroup` and omits each note's
+`includeComputedPhonemes` defaults to `true`. When false, the executor skips
+`SV:getPhonemesForGroup` and omits each note's
 `computedPhonemes` field. Read responses report `computedPhonemesIncluded`,
 `scanMode`, and `scannedNoteCount`; these additive diagnostics let clients
 confirm whether an index, page, or time-range fast path was used.
@@ -198,7 +149,7 @@ Non-default values are never removed.
 The executor recomputes this context for each request. It intentionally does
 not cache note, selection, voice, or automation state across requests.
 
-P3 adds optional range controls without changing the v1 envelope:
+P3 adds optional range controls without changing the v2 envelope:
 
 - `rangeMatch` defaults to `overlap`. This scans from the Group front when
   necessary so notes sustained across a range start are included and reports
@@ -218,39 +169,37 @@ P3 adds optional range controls without changing the v1 envelope:
   pitch summaries. The union is bounded to 256 notes and pitch sampling is
   bounded to 256 total requested frames.
 
-These are additive payload and response fields. Existing clients that omit
-them retain complete overlap matching, numeric pagination, and protocol v1
-compatibility.
+Clients that omit these optional fields retain complete overlap matching and
+numeric pagination.
 
-### Additive v1 actions
+### Action catalog
 
-Protocol v1 permits new action names without changing the request/response
-envelope. The expanded action set includes reusable note-group library
+Protocol v2 permits new action names without changing the request/response
+envelope. The action set includes reusable note-group library
 operations, linked/deep group references, Smart Pitch CRUD, Bridge-tracked
 Retakes, automation sampling/simplification, full selection control, viewport
 navigation, host clipboard/dialog helpers, coordinate conversion, and
-namespaced script data. Later additive actions expose typed Group voice/Vocal
+namespaced script data. Other actions expose typed Group voice/Vocal
 Mode settings, host-validated experimental Unison fields, and dedicated
-per-note phoneme properties without changing the v1 envelope. Version 0.1.4
-also adds `apply_transaction`, `rollback_transaction`,
+per-note phoneme properties. The catalog also includes `apply_transaction`,
+`rollback_transaction`,
 `create_harmony_track`, `humanize_notes`, `apply_expression_preset`, and
-`fit_lyrics` as additive v1 actions. `get_phrase_context` later adds compact
-selected/ranged phrase analysis without changing the v1 envelope.
+`fit_lyrics`. `get_phrase_context` provides compact selected/ranged phrase
+analysis.
 
 `script_data` only exposes keys beginning with `synthv-agent-bridge.`. It never
 lists, clears, or overwrites another script's namespace.
 
 ### Guarded transactions
 
-`apply_transaction` uses the ordinary v1 envelope:
+`apply_transaction` uses the protocol-v2 envelope:
 
 ```json
 {
-  "protocolVersion": 1,
-  "requestId": "example",
-  "action": "apply_transaction",
-  "createdAt": "2026-07-26T00:00:00.000Z",
-  "payload": {
+  "v": 2,
+  "id": "AbCdEfGh12345678",
+  "a": "apply_transaction",
+  "p": {
     "summary": "Update two independent tracks",
     "steps": [
       {"action": "update_track", "payload": {"trackIndex": 1, "trackFingerprint": "...", "name": "Lead"}},
@@ -338,7 +287,7 @@ attach a screenshot that clearly shows the complete panel. The Agent should
 then retry all identified names in one batch and reuse them for that singer.
 
 The Bridge first tries a sparse nested update and verifies every previously
-visible Vocal Mode value, so an unrequested legacy value is never silently
+visible Vocal Mode value, so an unrequested pre-existing value is never silently
 clamped. A directly requested value must still survive
 `NoteGroupReference:setVoice()` on a cloned reference. The TypeScript and Lua
 bound prevents values above 150 from reaching that preflight.
@@ -417,17 +366,20 @@ the explicit numeric transform.
 new in-session Bridge instance. It does not call UI automation or inject hooks.
 The installer can request the same transition through the
 `synthv-agent-bridge.reload` marker, records the installed absolute path in a
-local `synthv-agent-bridge.install.json` manifest, and confirms that the
-session token changed. The manifest fallback is needed because SynthV 2.2.1
-does not expose the loaded script path to Lua. A Bridge version that predates
-this action must be restarted manually once before later installs can reload
-automatically.
+local `synthv-agent-bridge.install.json` manifest with `schemaVersion: 1`, and
+confirms that the session token changed. This manifest schema is independent
+from file IPC protocol v2. The fallback is needed because SynthV 2.2.1 does not
+expose the loaded script path to Lua. A Bridge version that predates this action
+must be restarted manually once before later installs can reload automatically.
 
 The MCP v2 surface tracks the heartbeat `sessionToken`. When SynthV restarts or
 the Bridge hot-reloads, the next v2 call automatically detects the changed
 token and clears every cached `contextId` and Guard Token. A write is rejected
 with `SYNTHV_SESSION_CHANGED` and `requiredAction=read_target_again`; a fresh
 read without an old context proceeds and includes `sessionReset` in its result.
+When `sv_status` requests the reload itself, it waits for the new heartbeat
+token and clears those caches before returning, so an immediate follow-up
+cannot enter the acknowledgement-to-heartbeat race window.
 This makes the reset explicit to the Agent without attempting to restart the
 SynthV application. Automatically restarting SynthV is intentionally out of
 scope because it can interrupt unsaved work; the safe automatic behavior is

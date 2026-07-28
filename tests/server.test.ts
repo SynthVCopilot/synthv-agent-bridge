@@ -22,7 +22,7 @@ test("track color schema accepts public RGB and native ARGB forms", () => {
   }
 });
 
-test("every protocol action is registered exactly once as an MCP tool", async () => {
+test("every protocol action has exactly one internal action definition", async () => {
   const compiledServer = await readFile(
     new URL("../src/server.js", import.meta.url),
     "utf8",
@@ -81,30 +81,6 @@ test("P4 exposes eight v2 tools under a 6 KB metadata budget", async () => {
       ],
     );
     assert.ok(JSON.stringify(tools.tools).length < 6_000);
-  } finally {
-    await client.close();
-    await server.close();
-  }
-});
-
-test("P4 keeps the complete legacy tool surface isolated behind configuration", async () => {
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const server = createServer(
-    loadConfig(
-      { SYNTHV_AGENT_BRIDGE_MCP_SURFACE: "legacy" },
-      "/tmp",
-    ),
-  );
-  const client = new Client({ name: "legacy-test", version: "1.0.0" });
-  await Promise.all([
-    server.connect(serverTransport),
-    client.connect(clientTransport),
-  ]);
-  try {
-    const tools = await client.listTools();
-    assert.equal(tools.tools.length, BRIDGE_ACTIONS.length + 4);
-    assert.equal(tools.tools.some((tool) => tool.name === "edit_notes"), true);
-    assert.equal(tools.tools.some((tool) => tool.name === "sv_edit"), false);
   } finally {
     await client.close();
     await server.close();
