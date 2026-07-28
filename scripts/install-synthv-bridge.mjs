@@ -57,7 +57,7 @@ async function requestHotReload() {
     console.log(
       "Use npm run doctor -- --target <SynthV scripts directory> for a full local diagnosis.",
     );
-    return;
+    return "offline";
   }
   if (ageMs > statusStaleMs) {
     console.log(
@@ -77,12 +77,13 @@ async function requestHotReload() {
       updated.sessionToken !== previousSessionToken
     ) {
       console.log("Running SynthV Agent Bridge hot-reloaded successfully.");
-      return;
+      return "reloaded";
     }
   }
   console.warn(
     "Hot reload was requested but not confirmed. If this Bridge predates hot-reload support, restart it manually once.",
   );
+  return "unconfirmed";
 }
 
 async function writeInstallManifest(scriptFile) {
@@ -98,7 +99,7 @@ async function writeInstallManifest(scriptFile) {
     installFile,
     `${JSON.stringify(
       {
-        protocolVersion: 1,
+        schemaVersion: 1,
         scriptFile,
         writtenAtEpochMs: Date.now(),
       },
@@ -175,12 +176,12 @@ if (!suppliedTarget) {
     path.join(destinationDirectory, "SynthVAgentBridge.lua"),
   );
   console.log(`Installed SynthV Agent Bridge scripts to ${destinationDirectory}`);
-  if (reloadEnabled) {
-    await requestHotReload();
-  }
+  const reloadResult = reloadEnabled
+    ? await requestHotReload()
+    : "disabled";
   if (bridgeChanged) {
     console.log(
-      reloadEnabled
+      reloadResult === "reloaded"
         ? "The Bridge runtime changed. Hot reload updated the current session, but SynthV may reuse cached menu-script code after a project or app restart. Before the next manual start, choose Scripts → Rescan, then start SynthV Agent Bridge once."
         : "The Bridge runtime changed. Choose Scripts → Rescan, then start SynthV Agent Bridge once so SynthV does not reuse cached menu-script code.",
     );

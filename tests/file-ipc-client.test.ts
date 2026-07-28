@@ -76,15 +76,7 @@ function successResponse(
   request: ReturnType<typeof parseBridgeRequest>,
   result: unknown,
 ): unknown {
-  return request.protocolVersion === 2
-    ? { v: 2, id: request.requestId, r: result }
-    : {
-        protocolVersion: 1,
-        requestId: request.requestId,
-        completedAt: new Date().toISOString(),
-        ok: true,
-        result,
-      };
+  return { v: 2, id: request.requestId, r: result };
 }
 
 function errorResponse(
@@ -92,15 +84,7 @@ function errorResponse(
   code: string,
   message: string,
 ): unknown {
-  return request.protocolVersion === 2
-    ? { v: 2, id: request.requestId, e: { code, message } }
-    : {
-        protocolVersion: 1,
-        requestId: request.requestId,
-        completedAt: new Date().toISOString(),
-        ok: false,
-        error: { code, message },
-      };
+  return { v: 2, id: request.requestId, e: { code, message } };
 }
 
 test("FileIpcClient performs a correlated request/response round trip", async (context) => {
@@ -200,7 +184,7 @@ test("getStatus distinguishes fresh and stale heartbeats", async (context) => {
   context.after(async () => fs.rm(fixture.directory, { recursive: true, force: true }));
 
   await writeJsonAtomically(fixture.config.paths.statusFile, {
-    protocolVersion: 1,
+    protocolVersion: 2,
     state: "running",
     updatedAtEpochMs: Date.now(),
     bridgeVersion: "0.1.0",
@@ -211,7 +195,7 @@ test("getStatus distinguishes fresh and stale heartbeats", async (context) => {
   assert.equal((await fixture.client.getStatus()).connected, true);
 
   await writeJsonAtomically(fixture.config.paths.statusFile, {
-    protocolVersion: 1,
+    protocolVersion: 2,
     state: "running",
     updatedAtEpochMs: Date.now() - 5000,
     bridgeVersion: "0.1.0",

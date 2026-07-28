@@ -12,7 +12,12 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
 - Require current fingerprints for note edits and deletes.
 - Do not parse or mutate `.svp` files directly.
 - Do not log project lyrics or note data to stderr unless explicitly requested for debugging.
-- Keep protocol v1 backward compatible; add a new protocol version for breaking envelope changes.
+- Keep file IPC protocol v2 as the sole request/response envelope. Reject
+  protocol v1 with `PROTOCOL_MISMATCH`; add a new version for any future
+  breaking envelope change.
+- Keep the public MCP surface limited to the eight compact v2 tools. Detailed
+  SynthV action handlers are internal definitions exposed just in time through
+  `sv_describe`; do not expose them as standalone MCP tools.
 - Keep the responsibility boundary enforceable in code:
   - The Agent and user own intent, lyric/emotion/style interpretation, target
     choice, Vocal/Vocal Mode onboarding, and the requested musical values.
@@ -43,6 +48,21 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
   repeating note indices. The Agent chooses the exact target scope and numeric
   transform; the Bridge only expands and verifies it. A seconds onset offset
   uses the fresh SynthV time axis and preserves note durations in blicks.
+- Keep consecutive notes inside one lyric phrase exactly connected unless the
+  user or the intended performance explicitly calls for a rest or detached
+  articulation: the earlier note's end must equal the following note's onset.
+  Never create tiny positive gaps to shape pronunciation or articulation,
+  because they can prevent SynthV from rendering usable vocals. Use phoneme
+  timing/strength and Voice or automation parameters for articulation instead.
+  After duration or onset edits, reread the phrase and account for every
+  remaining gap as an intentional phrase boundary or artistic rest.
+- Apply that automatic note-connection rule only to notes the Agent created in
+  the current task. Treat pre-existing notes, lyrics, onsets, durations, gaps,
+  and rests as user-owned score structure: preserve them unless the user
+  explicitly requests that specific structural change. If note provenance is
+  uncertain, treat the material as user-owned. A general request to tune a
+  performance authorizes the requested tuning parameters, not silent
+  normalization of the user's note geometry.
 - If an MCP v2 call returns `SYNTHV_SESSION_CHANGED`, do not retry its old
   `contextId` or Guard Tokens. The server has already cleared them; read the
   intended target again and build the write from the fresh context.

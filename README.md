@@ -268,7 +268,7 @@ Open an MCP-enabled conversation and ask it to call `sv_status`, followed by
 }
 ```
 
-## Default MCP v2 tools
+## MCP v2 tools
 
 The default MCP surface exposes eight stable tools. Individual SynthV actions
 and their full schemas are returned just in time by `sv_describe`, rather than
@@ -305,22 +305,13 @@ at least 24 notes use a column/row representation when `dense: "auto"`; use
 end positions and report `noteDefaults.absolutePitch: "pitch"` when equal
 absolute/local pitches were omitted.
 
-### Isolated legacy MCP surface
+### SynthV action catalog
 
-The file IPC executor accepts legacy v1 and uses the compact v2 envelope by
-default. To expose the original one-tool-per-action MCP catalog for diagnostics
-or older clients, set:
+These actions are routed internally through the eight MCP v2 tools. They are
+not registered as standalone MCP tools; request their current schemas through
+`sv_describe` only when needed.
 
-```text
-SYNTHV_AGENT_BRIDGE_MCP_SURFACE=legacy
-```
-
-The legacy catalog is not exposed by default and therefore does not consume
-the default tool-schema budget.
-
-### Legacy action catalog
-
-| Tool | Access | Purpose |
+| Action | Access | Purpose |
 |---|---:|---|
 | `bridge_status` | Read | Read the heartbeat without requiring a round trip. |
 | `sidebar_get_request` | Read | Read the latest instruction and selection summary queued by the native side panel. |
@@ -393,7 +384,7 @@ the default tool-schema budget.
 
 All track, group, and note indices are **1-based**, matching the SynthV Lua API. Note and automation coordinates are group-local blicks unless the returned field explicitly says `absolute`. Playback positions are seconds.
 
-### Legacy compact tuning responses
+### Compact tuning responses
 
 `get_note_phoneme_data`, `get_automation`, and `sample_automation` accept
 `responseMode: "compact"`. Full mode remains the default.
@@ -446,11 +437,13 @@ cached context and Guard Token. A write then returns
 `SYNTHV_SESSION_CHANGED`; read the target again and build the write from its
 fresh context. A fresh read can proceed immediately and reports
 `sessionReset`. Eviction or `UNKNOWN_GUARD_TOKEN` likewise requires a reread.
+An MCP-requested hot reload waits for the new session token and clears these
+caches before `sv_status` returns, closing the reload acknowledgement race.
 The server resolves each token to the original complete fingerprint before the
 request reaches SynthV, so existing stale-write protection is unchanged.
 
 Phoneme writes are verified on a detached clone before an undo record is
-created, then verified again on the project note. A host or legacy voice that
+created, then verified again on the project note. A host or older Voice that
 quantizes or ignores a requested value fails with
 `HOST_POSTCONDITION_FAILED`. Stable phoneme ranges are validated directly:
 position/activity `0..1`, strength `-1..1`, and finite-second `leftOffset`
@@ -540,7 +533,6 @@ The Node server and SynthV script must resolve the **same physical IPC directory
 | `SYNTHV_AGENT_BRIDGE_POLL_MS` | `10` | Node response polling interval. |
 | `SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS` | `30000` | Age at which abandoned request files and locks can be recovered. Must be greater than the response timeout. |
 | `SYNTHV_AGENT_BRIDGE_STATUS_STALE_MS` | `5000` | Maximum heartbeat age considered connected. |
-| `SYNTHV_AGENT_BRIDGE_MCP_SURFACE` | `v2` | `v2` exposes the eight-tool compact surface; `legacy` exposes the original one-tool-per-action catalog. |
 
 When a custom IPC directory is used, create it before starting the SynthV script. The Node process also creates the directory, but the documented startup order starts SynthV first.
 

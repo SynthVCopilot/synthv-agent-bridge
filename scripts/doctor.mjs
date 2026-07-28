@@ -8,6 +8,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const SERVER_NAME = "synthv-agent-bridge";
+const EXPECTED_PROTOCOL_VERSION = 2;
 const argumentsList = process.argv.slice(2);
 const jsonOutput = argumentsList.includes("--json");
 const targetFlagIndex = argumentsList.indexOf("--target");
@@ -95,6 +96,9 @@ const sourceSidebar = await readText(
 const sourceBridgeVersion = sourceBridge?.match(
   /BRIDGE_VERSION\s*=\s*"([^"]+)"/u,
 )?.[1];
+const sourceProtocolVersion = Number(
+  sourceBridge?.match(/PROTOCOL_VERSION\s*=\s*(\d+)/u)?.[1],
+);
 const sourceSidebarVersion = sourceSidebar?.match(
   /SIDEBAR_VERSION\s*=\s*"([^"]+)"/u,
 )?.[1];
@@ -107,6 +111,14 @@ record(
   `Source versions: Bridge ${sourceBridgeVersion ?? "missing"}, sidebar ${
     sourceSidebarVersion ?? "missing"
   }.`,
+);
+
+record(
+  "source-protocol",
+  sourceProtocolVersion === EXPECTED_PROTOCOL_VERSION ? "ok" : "error",
+  `Source file IPC protocol is ${
+    Number.isFinite(sourceProtocolVersion) ? sourceProtocolVersion : "missing"
+  }; expected ${EXPECTED_PROTOCOL_VERSION}.`,
 );
 
 const bridgeStatus = await readJson(`${prefix}.status.json`);
@@ -124,6 +136,34 @@ record(
     ? `Bridge ${bridgeStatus.bridgeVersion ?? "?"} heartbeat age ${bridgeAgeMs} ms.`
     : "Bridge is offline. Run Scripts > SynthV Agent Bridge > Start SynthV Agent Bridge.",
   { ipcDirectory },
+);
+
+const bridgeProtocolVersions = bridgeStatus?.protocolVersions;
+const bridgeProtocolMatches =
+  bridgeStatus?.protocolVersion === EXPECTED_PROTOCOL_VERSION &&
+  bridgeStatus?.preferredProtocolVersion === EXPECTED_PROTOCOL_VERSION &&
+  Array.isArray(bridgeProtocolVersions) &&
+  bridgeProtocolVersions.length === 1 &&
+  bridgeProtocolVersions[0] === EXPECTED_PROTOCOL_VERSION;
+record(
+  "bridge-protocol",
+  bridgeStatus === null
+    ? "warning"
+    : bridgeProtocolMatches
+      ? "ok"
+      : "error",
+  bridgeStatus === null
+    ? "Bridge protocol is unavailable until the Bridge is running."
+    : bridgeProtocolMatches
+      ? `Bridge advertises only file IPC protocol ${EXPECTED_PROTOCOL_VERSION}.`
+      : `Bridge protocol advertisement is incompatible; reinstall and restart the Bridge. Expected only ${EXPECTED_PROTOCOL_VERSION}.`,
+  bridgeStatus === null
+    ? undefined
+    : {
+        protocolVersion: bridgeStatus.protocolVersion,
+        protocolVersions: bridgeProtocolVersions,
+        preferredProtocolVersion: bridgeStatus.preferredProtocolVersion,
+      },
 );
 
 const clientStatus = await readText(`${prefix}.sidebar.client-status.txt`);

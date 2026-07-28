@@ -112,8 +112,8 @@ This collapses the normal selection, note, voice, automation, and pitch-analysis
 read sequence into one correlated IPC request while ensuring every result
 reflects the current SynthV project state.
 
-P3 keeps the same additive protocol-v1 envelope and adds three bounded read
-paths. `rangeMatch: "overlap"` remains the complete, backward-compatible path;
+P3 uses the compact protocol-v2 envelope and adds three bounded read paths.
+`rangeMatch: "overlap"` remains the complete path;
 `"onset"` uses binary search over SynthV's onset-sorted notes and explicitly
 reports that a sustain beginning before the range may be absent. Page cursors
 live only in the MCP process and bind the next index to the previous boundary

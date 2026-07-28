@@ -321,6 +321,25 @@ test("session changes clear context and Guard Token stores", () => {
   );
 });
 
+test("reload waiting observes a delayed SynthV session token", async () => {
+  const tokens = ["session-a", "session-a", "session-b"];
+  const changed = await v2Testing.waitForSessionTokenChange(
+    async () => tokens.shift(),
+    "session-a",
+    100,
+    1,
+  );
+  assert.equal(changed, "session-b");
+
+  const unchanged = await v2Testing.waitForSessionTokenChange(
+    async () => "session-a",
+    "session-a",
+    0,
+    1,
+  );
+  assert.equal(unchanged, undefined);
+});
+
 test("v2 phrase projection removes unused sections and redundant note fields", () => {
   const result = {
     notes: [

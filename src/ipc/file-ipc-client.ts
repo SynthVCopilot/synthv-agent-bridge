@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 
 import type { BridgeConfig } from "../config.js";
-import { CURRENT_PROTOCOL_VERSION } from "../config.js";
+import { PROTOCOL_VERSION } from "../config.js";
 import {
   BridgeBusyError,
   BridgeProtocolError,
@@ -131,7 +131,7 @@ export class FileIpcClient {
       await this.prepareChannel();
 
       const envelope = {
-        v: CURRENT_PROTOCOL_VERSION,
+        v: PROTOCOL_VERSION,
         id: requestId,
         a: action,
         p: payload,

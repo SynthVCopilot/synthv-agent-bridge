@@ -254,7 +254,7 @@ Apply 命令由 Node 协调器消费，并通过 MCP 工具使用的同一个串
 }
 ```
 
-## 默认 MCP v2 工具
+## MCP v2 工具
 
 默认 MCP 表面提供八个稳定工具。各个 SynthV 操作及其完整 Schema 由
 `sv_describe` 按需返回，而不是把所有操作 Schema 都放进模型上下文。
@@ -289,20 +289,12 @@ Apply 命令由 Node 协调器消费，并通过 MCP 工具使用的同一个串
 `dense: "never"`。V2 音符行会省略可推导的绝对结束位置；当绝对音高和
 局部音高相同时，会通过 `noteDefaults.absolutePitch: "pitch"` 表示省略。
 
-### 隔离的旧版 MCP 表面
+### SynthV 操作目录
 
-文件 IPC 执行器兼容旧版 v1，并默认使用紧凑 v2 信封。如果需要为诊断或
-旧客户端公开原始的“一项操作一个工具”MCP 目录，请设置：
+这些操作由八个 MCP v2 工具在内部路由，不会注册为独立 MCP 工具。仅在
+需要时通过 `sv_describe` 获取其当前 Schema。
 
-```text
-SYNTHV_AGENT_BRIDGE_MCP_SURFACE=legacy
-```
-
-旧版目录默认不公开，因此不会占用默认工具 Schema 预算。
-
-### 旧版操作目录
-
-| 工具 | 权限 | 用途 |
+| 操作 | 权限 | 用途 |
 |---|---:|---|
 | `bridge_status` | 读取 | 无需往返即可读取心跳。 |
 | `sidebar_get_request` | 读取 | 读取原生侧边栏排队的最新指令和选区摘要。 |
@@ -377,7 +369,7 @@ SYNTHV_AGENT_BRIDGE_MCP_SURFACE=legacy
 除非返回字段明确标记为 `absolute`，音符和自动化坐标均为 Group 局部 blick。
 播放位置使用秒。
 
-### 旧版紧凑调音响应
+### 紧凑调音响应
 
 `get_note_phoneme_data`、`get_automation` 和 `sample_automation` 接受
 `responseMode: "compact"`。完整模式仍为默认值。
@@ -422,10 +414,12 @@ Guard Token 是不透明的，并且只存在于当前 MCP 服务器进程。MCP
 Token。此后的写入会返回 `SYNTHV_SESSION_CHANGED`；请重新读取目标，并用
 新 Context 构建写入。无旧 Context 的新读取可以直接继续，并返回
 `sessionReset`。淘汰或 `UNKNOWN_GUARD_TOKEN` 同样需要重新读取。服务器会在
+MCP 发起热重载时等待新会话 Token，并在 `sv_status` 返回前清除这些缓存，
+从而关闭“先确认重载、后发布新心跳”的时序窗口。服务器会在
 请求到达 SynthV 前把 Token 解析为原始完整指纹，因此陈旧写入保护不变。
 
 音素写入会先在分离的克隆上验证，再创建撤销记录，之后还会在工程音符上
-再次验证。如果宿主或旧版 Voice 对请求值进行量化或忽略，会返回
+再次验证。如果宿主或较旧 Voice 对请求值进行量化或忽略，会返回
 `HOST_POSTCONDITION_FAILED`。稳定音素范围会直接校验：位置/活跃度
 `0..1`、强度 `-1..1`，`leftOffset` 为有限秒数且 Bridge 不额外设限。
 启动或首次使用时不再执行范围探测。
@@ -510,7 +504,6 @@ Node 服务器和 SynthV 脚本必须解析到**同一个物理 IPC 目录**。
 | `SYNTHV_AGENT_BRIDGE_POLL_MS` | `10` | Node 响应轮询间隔。 |
 | `SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS` | `30000` | 可恢复废弃请求文件和锁的时间阈值，必须大于响应超时。 |
 | `SYNTHV_AGENT_BRIDGE_STATUS_STALE_MS` | `5000` | 仍视为已连接的最大心跳年龄。 |
-| `SYNTHV_AGENT_BRIDGE_MCP_SURFACE` | `v2` | `v2` 提供八工具紧凑表面；`legacy` 提供原始的一操作一工具目录。 |
 
 使用自定义 IPC 目录时，请在启动 SynthV 脚本前创建它。Node 进程也会创建
 该目录，但文档规定的启动顺序会先启动 SynthV。

@@ -13,8 +13,7 @@ end
 
 local SCRIPT_NAME = "Start SynthV Agent Bridge"
 local BRIDGE_VERSION = "0.1.5"
-local PROTOCOL_VERSION = 1
-local CURRENT_PROTOCOL_VERSION = 2
+local PROTOCOL_VERSION = 2
 local MIN_EDITOR_VERSION = 131330 -- Synthesizer V Studio 2.1.2
 local POLL_INTERVAL_MS = 25
 local HEARTBEAT_EVERY_POLLS = 40
@@ -732,10 +731,9 @@ local function writeStatus(state, message)
     local status = {
         protocolVersion = PROTOCOL_VERSION,
         protocolVersions = json.array({
-            PROTOCOL_VERSION,
-            CURRENT_PROTOCOL_VERSION
+            PROTOCOL_VERSION
         }),
-        preferredProtocolVersion = CURRENT_PROTOCOL_VERSION,
+        preferredProtocolVersion = PROTOCOL_VERSION,
         state = state,
         updatedAtEpochMs = os.time() * 1000,
         bridgeVersion = BRIDGE_VERSION,
@@ -823,45 +821,20 @@ local function normalizeError(errorValue)
     }
 end
 
-local function writeResponse(requestId, ok, value, wireVersion)
-    if wireVersion == CURRENT_PROTOCOL_VERSION then
-        local response = {
-            v = CURRENT_PROTOCOL_VERSION,
-            id = requestId
-        }
-        if ok then
-            response.r = value == nil and JSON_NULL or value
-        else
-            response.e = {
-                code = value.code or "INTERNAL_ERROR",
-                message = value.message or "Unknown bridge error"
-            }
-            if value.details ~= nil then
-                response.e.details = value.details
-            end
-        end
-        local wrote, writeError = writeJsonAtomically(RESPONSE_FILE, response)
-        if not wrote then
-            writeStatus("error", "Unable to write response: " .. tostring(writeError))
-        end
-        return
-    end
-
+local function writeResponse(requestId, ok, value)
     local response = {
-        protocolVersion = PROTOCOL_VERSION,
-        requestId = requestId,
-        completedAt = isoTimestamp(),
-        ok = ok
+        v = PROTOCOL_VERSION,
+        id = requestId
     }
     if ok then
-        response.result = value
+        response.r = value == nil and JSON_NULL or value
     else
-        response.error = {
+        response.e = {
             code = value.code or "INTERNAL_ERROR",
             message = value.message or "Unknown bridge error"
         }
         if value.details ~= nil then
-            response.error.details = value.details
+            response.e.details = value.details
         end
     end
 
@@ -2951,7 +2924,9 @@ local reloadRequested = nil
 
 local function resolveReloadScriptFile()
     local install = readJson(INSTALL_FILE)
-    if isObject(install) and type(install.scriptFile) == "string" then
+    if isObject(install)
+        and install.schemaVersion == 1
+        and type(install.scriptFile) == "string" then
         local scriptFile = install.scriptFile
         if scriptFile:match("[/\\]SynthVAgentBridge%.lua$") and fileExists(scriptFile) then
             return scriptFile
@@ -7957,42 +7932,32 @@ end
 
 local function validateRequest(request)
     request = requireObject(request, "request")
-    if request.v == CURRENT_PROTOCOL_VERSION then
-        local requestId = requireString(request.id, "id", false)
-        if not requestId:match("^[A-Za-z0-9_-]+$")
-            or #requestId < 8
-            or #requestId > 64 then
-            raiseBridgeError(
-                "INVALID_ARGUMENT",
-                "id must be an 8-64 character base64url identifier"
-            )
+    if request.v ~= PROTOCOL_VERSION then
+        local actualVersion = request.v
+        if actualVersion == nil then
+            actualVersion = request.protocolVersion
         end
-        local action = requireString(request.a, "a", false)
-        local payload = requireObject(request.p, "p")
-        local handler = handlers[action]
-        if not handler then
-            raiseBridgeError(
-                "UNKNOWN_ACTION",
-                "Unsupported bridge action",
-                { action = action }
-            )
-        end
-        return requestId, handler, payload, action, CURRENT_PROTOCOL_VERSION
-    end
-    if request.protocolVersion ~= PROTOCOL_VERSION then
         raiseBridgeError("PROTOCOL_MISMATCH", "Unsupported bridge protocol version", {
             expected = PROTOCOL_VERSION,
-            actual = request.protocolVersion
+            actual = actualVersion
         })
     end
-    local requestId = requireString(request.requestId, "requestId", false)
-    local action = requireString(request.action, "action", false)
-    local payload = requireObject(request.payload, "payload")
+    local requestId = requireString(request.id, "id", false)
+    if not requestId:match("^[A-Za-z0-9_-]+$")
+        or #requestId < 8
+        or #requestId > 64 then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "id must be an 8-64 character base64url identifier"
+        )
+    end
+    local action = requireString(request.a, "a", false)
+    local payload = requireObject(request.p, "p")
     local handler = handlers[action]
     if not handler then
         raiseBridgeError("UNKNOWN_ACTION", "Unsupported bridge action", { action = action })
     end
-    return requestId, handler, payload, action, PROTOCOL_VERSION
+    return requestId, handler, payload, action
 end
 
 PROJECT_WRITE_ACTIONS = {
@@ -8050,7 +8015,6 @@ local function processRequestFile()
     end
 
     local requestId = "invalid-request"
-    local requestWireVersion = PROTOCOL_VERSION
     local processedAction = nil
     local processedPayload = nil
     local ok, resultOrError = xpcall(function()
@@ -8063,18 +8027,16 @@ local function processRequestFile()
             raiseBridgeError("INVALID_JSON", "Request is not valid JSON", { cause = tostring(requestOrError) })
         end
         if isObject(requestOrError) then
-            if requestOrError.v == CURRENT_PROTOCOL_VERSION
-                and type(requestOrError.id) == "string" then
+            if type(requestOrError.id) == "string" then
                 requestId = requestOrError.id
-                requestWireVersion = CURRENT_PROTOCOL_VERSION
-            elseif type(requestOrError.requestId) == "string" then
+            elseif requestOrError.protocolVersion ~= nil
+                and type(requestOrError.requestId) == "string" then
                 requestId = requestOrError.requestId
             end
         end
-        local validatedRequestId, handler, payload, action, wireVersion =
+        local validatedRequestId, handler, payload, action =
             validateRequest(requestOrError)
         requestId = validatedRequestId
-        requestWireVersion = wireVersion
         processedAction = action
         processedPayload = payload
         return handler(payload)
@@ -8089,9 +8051,9 @@ local function processRequestFile()
         then
             writeSidebarActivity(processedAction)
         end
-        writeResponse(requestId, true, resultOrError, requestWireVersion)
+        writeResponse(requestId, true, resultOrError)
     else
-        writeResponse(requestId, false, resultOrError, requestWireVersion)
+        writeResponse(requestId, false, resultOrError)
     end
     removeFile(PROCESSING_FILE)
     return true
