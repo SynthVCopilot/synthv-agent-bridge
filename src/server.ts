@@ -40,8 +40,6 @@ const groupUuidSchema = z.string().min(1);
 const responseModeSchema = z.enum(["full", "compact"]).default("full");
 export const TRACK_DISPLAY_COLOR_PATTERN =
   /^(?:#[0-9A-Fa-f]{6}|#?[0-9A-Fa-f]{8})$/;
-export const FIRST_USE_NOTICE =
-  "On the first project-changing use in a conversation, briefly tell the user once: save important work; do not edit the same target while a write is running; after undo or a manual edit to that target, compactly reread only that target. Explain that SynthV does not expose singer identity or default-only Vocal Mode names. If Vocal Modes may be edited, ask the user either to list every exact Vocal Mode name shown for the current singer (preserving spelling and capitalization) or attach a screenshot of that panel; reuse the identified list for the same singer, and ask once again only after the singer changes. Do not repeat this notice otherwise.";
 const displayColorSchema = z
   .string()
   .regex(TRACK_DISPLAY_COLOR_PATTERN)
@@ -392,8 +390,8 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       instructions:
         useV2Surface
-          ? `Use sv_describe for unfamiliar actions. Read only the intended target before writes and batch changes with its contextId. Indices are 1-based. Writes stay fingerprint-guarded and create one SynthV undo record. Sidebar requests must be published as previews. ${FIRST_USE_NOTICE}`
-          : `Control Synthesizer V Studio through the local bridge. Read only the intended target before writes, prefer compact workflows, reuse current guards, and keep protocol-boundary indices 1-based. ${FIRST_USE_NOTICE}`,
+          ? "Use sv_describe for unfamiliar actions. Read only the intended target before writes and batch changes with its contextId. Indices are 1-based. Writes stay fingerprint-guarded and create one SynthV undo record. Sidebar requests must be published as previews."
+          : "Control Synthesizer V Studio through the local bridge. Read only the intended target before writes, prefer compact workflows, reuse current guards, and keep protocol-boundary indices 1-based.",
     },
   );
   const capturedTools = new Map<string, RegisteredTool>();

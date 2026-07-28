@@ -9,7 +9,6 @@ import { loadConfig } from "../src/config.js";
 import { BRIDGE_ACTIONS } from "../src/protocol.js";
 import {
   createServer,
-  FIRST_USE_NOTICE,
   TRACK_DISPLAY_COLOR_PATTERN,
 } from "../src/server.js";
 
@@ -56,16 +55,6 @@ test("MCP tool text results use compact JSON", async () => {
     compiledServer,
     /JSON\.stringify\(value,\s*null,\s*2\)/,
   );
-});
-
-test("MCP first-use instructions explain Vocal Mode onboarding once", () => {
-  assert.match(FIRST_USE_NOTICE, /first project-changing use/u);
-  assert.match(FIRST_USE_NOTICE, /every exact Vocal Mode name/u);
-  assert.match(FIRST_USE_NOTICE, /attach a screenshot/u);
-  assert.match(FIRST_USE_NOTICE, /same singer/u);
-  assert.match(FIRST_USE_NOTICE, /only after the singer changes/u);
-  assert.match(FIRST_USE_NOTICE, /compactly reread only that target/u);
-  assert.match(FIRST_USE_NOTICE, /Do not repeat/u);
 });
 
 test("P4 exposes eight v2 tools under a 6 KB metadata budget", async () => {

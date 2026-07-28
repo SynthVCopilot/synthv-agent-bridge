@@ -6,8 +6,26 @@ A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server 
 
 The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse or rewrite `.svp` files, open a network port, or call an AI API by itself.
 
-> New here? Follow the [Quickstart](docs/quickstart.md).
-> 中文用户请参阅[中文快速开始](docs/quickstart_cn.md)。
+> New here? Follow the [Quickstart](docs/quickstart.md). Codex can handle most
+> setup steps for you, including environment checks, Node.js installation when
+> permitted, dependency installation, the build, SynthV script installation,
+> MCP registration, and diagnostics.
+> 中文用户请参阅[中文快速开始](docs/quickstart_cn.md)；环境检查、依赖与
+> Node.js 安装、构建、SynthV 脚本安装、MCP 注册和诊断等大部分工作都可以
+> 交给 Codex 完成。
+
+> [!IMPORTANT]
+> Because SynthV's official scripting API cannot read the current Vocal
+> identity or enumerate untouched default-only singing style (Vocal Mode) names
+> and parameters, first select a Note Group, then select or assign the Vocal you
+> want to use for that Group. Only then attach a screenshot of its complete
+> singing-style panel or type every style exactly as shown; the names cannot
+> appear before a singer is selected. If no suitable Note Group exists or the
+> Vocal Modes are not visible, first create—or ask the Agent to create—one
+> temporary note in one temporary non-main Note Group at a harmless location,
+> select that Group and its Vocal, then capture the complete panel. After
+> changing Vocals, capture the new Vocal's complete panel or type all of its
+> singing-style names again; do not reuse the previous Vocal's list.
 
 > Status: **v0.1.5 pre-release**. The protocol, safety guards, broad official
 > scripting-API coverage, an optional native side-panel workflow, guarded transactions,
@@ -16,27 +34,17 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 
 ## What it can do
 
-- Read project metadata, the complete tempo/time-signature map, playback state, tracks, library groups, notes, complete selection state, computed phonemes/pitch, Smart Pitch objects, automation curves, editor viewports, and mixer state.
-- Create, clone, reuse, update, or delete library note groups and vocal/instrumental Group references.
-- Clone an existing track to inherit its singer/database, optionally clearing or transposing cloned notes.
-- Add notes and edit per-note language, sing/rap type, pitch-auto mode, rap accent, timing, pitch, lyrics, phonemes, detune, and attributes. V2 automatically places notes inserted through a track's main group into a reusable non-main group so Group Voice and Vocal Modes remain editable.
-- Read and safely update typed group voice defaults, Vocal Mode pitch/timbre/pronunciation axes, and host-returned experimental Unison fields. Empty Vocal Mode maps can be initialized from the user's exact names in one clone-validated batch without per-mode discovery calls.
-- Read computed and user phonemes together, and safely edit phoneset overrides, syllable timing, and per-phoneme timing/strength attributes.
-- Add, edit, and delete point or curve Smart Pitch controls with stale-write protection.
-- Generate, activate, and delete Bridge-tracked AI Retakes.
-- Safely edit or delete notes using fresh note fingerprints.
-- Convert between seconds, quarter notes, and blicks, and edit tempo/time-signature marks.
-- Add, replace, sample, simplify, or clear automation curves such as pitch deviation, loudness, tension, breathiness, voicing, gender, and Vocal Mode.
-- Read and change selection and viewport state, use grid snapping and coordinate conversion, and exchange text through SynthV's host clipboard.
-- Control gain, pan, mute, solo, play, pause, stop, seek, and loop.
-- Preflight up to 32 independent writes and apply the complete transaction in
-  one SynthV undo record, with optional in-session guarded rollback.
-- Create range-constrained harmony tracks, humanize note timing, fit lyrics to
-  notes, and apply scoop, falloff, vibrato, crescendo, or breathiness presets.
-- Put each successful write call or transaction into one SynthV undo record.
-- Optionally use a native SynthV side panel to inspect connection/current-selection context,
-  queue an instruction, review a structured guarded write or transaction,
-  apply/dismiss/cancel it, inspect diagnostics, and see recent activity.
+| Area | Capabilities |
+|---|---|
+| Project inspection | Read project metadata, tracks, library Groups, notes, selections, tempo/time-signature maps, computed phonemes and pitch, automation, mixer state, and editor context. |
+| Notes and lyrics | Add, edit, delete, clone, transpose, or humanize guarded notes; fit lyrics and edit language, singing/rap type, timing, detune, and note attributes. |
+| Voice and phonemes | Read and edit Group Voice, Vocal Mode axes, experimental Unison fields, phoneset overrides, syllable timing, pronunciation, and per-phoneme timing or strength. |
+| Pitch and expression | Adjust pitch transitions and pitch curves; manage Smart Pitch controls and AI Retakes; apply scoop, falloff, vibrato, crescendo, or breathiness presets. |
+| Automation | Read, add, replace, sample, simplify, or clear pitch deviation, loudness, tension, breathiness, voicing, gender, and Vocal Mode curves. |
+| Tracks, Groups, and harmony | Create, clone, reuse, update, or delete library Groups, Group references, and tracks; inherit an existing singer and create range-constrained harmony tracks. |
+| Timing, editor, and playback | Convert seconds, quarter notes, and blicks; edit tempo/time signatures; control selection, viewport, clipboard, grid snapping, coordinates, mixer, and playback. |
+| Safe editing | Protect writes with fresh fingerprints and Guard Tokens; preflight up to 32 independent steps; create one SynthV undo record and optionally retain a guarded rollback plan. |
+| Review and local privacy | Review, apply, dismiss, or cancel guarded previews in the optional native side panel. File IPC stays local: the Bridge does not parse `.svp` files, open a network port, or call an AI API. |
 
 ## First MCP connection: user notice
 
@@ -49,11 +57,27 @@ tell the user:
   that the Agent is about to change, the Agent will compactly reread only that
   target. Unrelated edits do not require a reread.
 - SynthV's scripting API does not expose the current singer identity or
-  enumerate default-only Vocal Mode names. Before Vocal Mode editing, the user
-  should either list every exact name shown for the current singer, preserving
-  spelling and capitalization, or attach a screenshot of the Vocal Mode panel.
-- The identified names are reused for the same singer. The user only needs to
-  tell the Agent again after changing singers.
+  enumerate untouched default-only Vocal Mode names and parameters. Before the
+  first tuning write, the Agent must ask the user to select the intended Note
+  Group, select or assign its intended Vocal, and then either list every exact
+  singing style (Vocal Mode), preserving spelling and capitalization, or attach
+  a screenshot of the complete Vocal Mode panel. Without a selected singer,
+  its singing-style names cannot appear.
+- The Agent must not perform a tuning write until this information is provided.
+  If no suitable Note Group exists or the Vocal Modes are not visible, the only
+  permitted bootstrap write is one temporary note in one temporary non-main
+  Note Group, created solely to make the singing-style parameters available.
+  The user then selects that Group and its Vocal. The Agent must stop and
+  request the complete panel screenshot or exact style names. The identified
+  styles are reused only for the same Vocal. After the Vocal changes, the Agent
+  requires a new complete-panel screenshot or every exact style name for the
+  new Vocal.
+- Before the first tuning write, the Agent must present one concise
+  **How to use** and one preflight checklist covering save/backup, Vocal and
+  singing-style onboarding, target phrase, intended style and preserved
+  content, fresh-read/plan/review behavior, phrase-level style before word-level
+  tuning, concurrent-edit safety, and undo. It must not show another checklist
+  after publishing the preview.
 
 The Agent must give this notice once, not before every edit. A concise prompt
 from the user is sufficient:

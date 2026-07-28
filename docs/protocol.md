@@ -297,10 +297,12 @@ the MCP v2 surface, the default projection contains only `trackIndex`,
 Callers can request additional fields explicitly for diagnostics.
 
 The MCP server instructions require one first-use notice per conversation,
-not one notice per edit. Before Vocal Mode work, the Agent asks the user either
-for the exact current singer mode names or for a screenshot of that panel.
-The Agent reuses that list until the user reports changing singer. Undo or a
-manual edit only requires a compact reread when it touched the same target.
+not one notice per edit. Before Vocal Mode work, the Agent asks the user to
+select the intended Note Group, select or assign its singer, and then provide
+either the exact current singer mode names or a screenshot of that panel.
+Vocal Mode names cannot appear before a singer is selected. The Agent reuses
+that list until the user reports changing singer. Undo or a manual edit only
+requires a compact reread when it touched the same target.
 
 ### Optional host capabilities
 
@@ -330,7 +332,8 @@ If clone validation returns `VOCAL_MODE_NOT_FOUND`, its details contain
 `requiredUserInput.kind=vocal_mode_names`, the attempted names, any names
 already visible in the Group, and an instruction to stop guessing. The Agent
 must tell the user that the scripting API cannot enumerate the current
-singer's default-only modes and ask for the exact names displayed in SynthV's
+singer's default-only modes and ask the user to select the intended Note Group,
+select or assign its singer, and provide the exact names displayed in SynthV's
 Vocal Mode panel, preserving spelling and capitalization. The user may instead
 attach a screenshot that clearly shows the complete panel. The Agent should
 then retry all identified names in one batch and reuse them for that singer.

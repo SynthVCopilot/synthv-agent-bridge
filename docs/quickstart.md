@@ -133,8 +133,58 @@ the Codex task.
 
 ## 7. Make the first tuning edit
 
-Save important work before the first AI edit. In SynthV, select a short phrase,
-such as two to eight bars, and start with a read-only request:
+> [!IMPORTANT]
+> Because SynthV's official scripting API cannot read the current Vocal
+> identity or enumerate untouched default-only singing style (Vocal Mode) names
+> and parameters, first select a Note Group, then select or assign the Vocal you
+> want to use for that Group. Only then attach a screenshot of its complete
+> singing-style panel or type every style exactly as shown; the names cannot
+> appear before a singer is selected. If no suitable Note Group exists or the
+> Vocal Modes are not visible, first create—or ask the Agent to create—one
+> temporary note in one temporary non-main Note Group at a harmless location,
+> select that Group and its Vocal, then capture the complete panel. After
+> changing Vocals, capture the new Vocal's complete panel or type all of its
+> singing-style names again; do not reuse the previous Vocal's list.
+
+Before the first tuning write in a conversation, the Agent presents this
+onboarding once.
+
+### How to use
+
+1. Save the project or create a working copy.
+2. Select the intended Note Group in SynthV, then select or assign its intended
+   Vocal and provide that Vocal's singing styles as described above. If no
+   suitable Note Group exists or the Vocal Modes are hidden, create—or ask the
+   Agent to create—the temporary note and Note Group described above, select
+   that Group and its Vocal, then send the complete panel screenshot or exact
+   style names.
+3. Select a short lyric phrase, typically two to eight bars, and state the
+   intended style and anything that must remain unchanged.
+4. Let the Agent read fresh state and show a small, reviewable plan.
+5. Apply and listen to the phrase-level style before asking for word-level
+   pronunciation, timing, pitch-transition, pitch-curve, and expression work.
+6. Do not edit the same target while a Bridge write is running. To undo, focus
+   the main editor and press **Ctrl+Z**, or choose **Edit → Undo**.
+
+### Preflight checklist
+
+- [ ] The project is saved or a working copy exists.
+- [ ] The intended Note Group is selected in SynthV.
+- [ ] The intended Vocal is selected or assigned for that Note Group.
+- [ ] Because of the official API limitation, the complete singing-style panel
+      screenshot or every exact singing-style name has been provided; if the
+      Vocal Modes were hidden, a temporary note and Note Group were created
+      first, then that Group and its Vocal were selected to make the parameters
+      appear.
+- [ ] If the Vocal changed, the new Vocal's complete panel or exact
+      singing-style names were provided again.
+- [ ] A short lyric phrase or note range is selected.
+- [ ] The intended style and content that must remain unchanged are stated.
+- [ ] The same target will not be edited manually while the Bridge writes.
+
+The Agent does not display a second checklist after publishing the preview.
+
+After the checklist is complete, start with a read-only request:
 
 ```text
 Read the currently selected notes. Summarize their lyrics, pitches, timing, and
@@ -185,7 +235,9 @@ Vocal Mode result therefore does not mean that the singer has no Vocal Modes;
 it means the Bridge cannot discover those default-only names and parameters
 through the official API.
 
-Before the first Vocal Mode edit for a singer, either:
+Before the first Vocal Mode edit, select the intended Note Group and select or
+assign its singer. The mode names cannot appear before a singer is selected.
+Then either:
 
 - tell Codex every exact Vocal Mode name shown in the panel, preserving spelling
   and capitalization; or
@@ -202,8 +254,9 @@ For later sessions:
 1. Open the SynthV project and save a working copy.
 2. Start **SynthV Agent Bridge**.
 3. Open or reconnect a Codex task that has the MCP server enabled.
-4. If this is the first Vocal Mode edit for the current singer, attach a
-   screenshot of the complete Vocal Mode panel or type every exact mode name.
+4. Select the intended Note Group and its singer. If this is the first Vocal
+   Mode edit for that singer, attach a screenshot of the complete Vocal Mode
+   panel or type every exact mode name.
 5. Select one lyric phrase and ask Codex to establish its overall singing style
    with the identified Vocal Modes. Review the preview, apply it, and listen
    before continuing.
