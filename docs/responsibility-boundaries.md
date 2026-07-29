@@ -18,8 +18,10 @@ result, and the user makes the final listening decision.
 | Decide whether to tune a short phrase or a larger scope | Agent | Depends on the goal, review cost, and token budget |
 | Convert terms such as warm, restrained, or bright into explicit parameters | Agent | The Bridge must not interpret artistic language |
 | Choose a fresh target scope and explicit numeric batch transform | Agent | Target selection and musical values belong to the current task |
+| Choose a legal local score file and confirm the right to use it | Agent + user | The Bridge cannot determine copyright or license authority |
 | Provide current Group, note, Voice, and automation data | Lua Bridge | SynthV's live object model is authoritative |
-| Cache and expand `contextId` and Guard data | TypeScript MCP | Avoids repeating large fingerprints while preserving stale-write protection |
+| Cache and expand typed, scope-bound `contextId` and Guard data | TypeScript MCP | Avoids repeating large fingerprints while failing closed on incompatible or conflicting scope |
+| Inspect and convert an explicitly supplied local MusicXML/MIDI lane | TypeScript MCP | Local parsing does not belong in SynthV or imply permission to use the file |
 | Project compact reads and minimal write acknowledgements | TypeScript MCP | Keeps irrelevant host data out of the model context |
 | Detect SynthV restart or Bridge reload | TypeScript MCP | Old Context and Guard data must be invalidated before another write |
 | Validate request structure, routing, indices, and stable protocol ranges | TypeScript MCP | Rejects malformed work before file IPC |
@@ -37,6 +39,10 @@ The Agent may analyze lyrics, propose phrasing, choose exact note/phoneme/
 automation targets, and provide explicit values. It must not guess a Vocal or
 untouched Vocal Mode names. It reads only the intended target, prefers one
 related batch, and rereads after stale-state or session-change errors.
+Before score import it asks the user to identify an authorized local source,
+inspects the selectable lane and overlap diagnostics, and requests import only
+after explicit rights confirmation. It must not treat search results, an online
+URL, or file availability as permission.
 The bundled Twinkle Star Demo remains Agent-owned orchestration: its explicit
 score and tuning recipe live in `examples/twinkle-star-demo.json`, while the
 MCP and Lua layers continue to validate and execute only supplied values.
@@ -45,28 +51,45 @@ MCP and Lua layers continue to validate and execute only supplied values.
 
 The MCP layer owns schemas, action categories, compact projections,
 `contextId`/Guard expansion, session invalidation, and minimal acknowledgements.
-It does not choose notes, infer emotion, generate Vocal Mode names, or silently
-adjust requested musical values.
+Each Context is bound to a target kind and source scope; incompatible reuse and
+conflicting explicit locators/guards fail closed. The Node layer also performs
+bounded, network-free parsing of an explicitly supplied local MusicXML/MIDI
+file, binds import to the inspected SHA-256, rejects unsafe/ambiguous/polyphonic
+input, and converts one selected lane to notes. It does not choose notes, infer
+emotion, generate Vocal Mode names, determine legal rights, apply source tempo,
+or silently adjust requested musical values.
 
 ### Lua executor
 
 The Lua layer reads authoritative SynthV objects, uses current host capability
 data, expands deterministic operations, validates every target and resulting
-value, and reaches `Project:newUndoRecord()` only after complete preflight.
+value, and reaches `Project:newUndoRecord()` only after complete preflight of
+ordinary writes and independent transaction steps.
 Automation point writes fail closed if the same fresh read does not expose a
 valid `definition.range`. The executor verifies supported postconditions after
-the write.
+the write. It also rejects a shared Note Group content edit unless the caller
+explicitly chooses all references and provides the matching fresh reference
+count. For transactions it fully preflights independent steps; a step whose
+locator comes from an earlier `$result` is resolved and preflighted immediately
+before that dependent step executes.
 
 ### SynthV and user
 
 SynthV is the project-state authority. The user selects the intended Group and
 Vocal, provides otherwise unreadable Vocal Mode names, listens to previews,
-decides whether the result fits the song, and uses SynthV Undo when needed.
+decides whether the result fits the song, confirms the right to import a local
+score, manually reviews non-main Vocals after a detached track clone, and uses
+SynthV Undo when needed. A transaction's single undo record is a recovery
+boundary, not an automatic rollback promise.
 
 ## Batch-operation rule
 
 Add a batch action only when its behavior is mechanical, deterministic,
-bounded, previewable, and completely validatable before one undo record.
+bounded, and previewable. Its independent inputs must be completely validatable
+before one undo record. A transaction step that explicitly depends on an
+earlier `$result` is the narrow exception: it is validated just in time, and
+failure can require one user Undo because earlier steps may already have
+written.
 `transform_notes` qualifies because it applies explicit numeric onset,
 duration, and semitone operations. Commands such as `make_emotional` or
 `tune_whole_song` do not qualify: they hide artistic decisions and make

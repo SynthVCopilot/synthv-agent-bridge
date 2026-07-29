@@ -20,8 +20,8 @@
   recent summaries, diagnostics, and native Ctrl+Z guidance.
 - MCP tools for reading queued requests, publishing guarded previews, and
   inspecting panel diagnostics.
-- Complete preflight of up to 32 independent write steps followed by one undo
-  record, plus in-session guarded rollback.
+- Complete preflight of independent write steps followed by one undo record,
+  plus in-session guarded rollback.
 - Range-constrained harmony tracks, deterministic note humanization, expression
   presets, and lyrics-to-note fitting.
 - A read-only doctor for installed versions, heartbeats, IPC state, and Codex
@@ -57,6 +57,25 @@
   for newly inserted notes.
 - Deterministic guarded note transforms apply one explicit onset, duration, or
   semitone operation to an entire fresh Context without repeating note guards.
+- Shared Note Group content writes fail closed by default. An intentional edit
+  of every linked occurrence requires `allowAllReferences` plus a fresh expected
+  reference count.
+- Track cloning rejects non-main vocal Groups by default. Explicit detachment
+  makes Group content independent while reporting that non-main Vocal identity
+  needs manual review. `clone_track_shell` provides a verified-empty,
+  host-cloned main-Vocal template workflow.
+- Context handles are target-typed and scope-bound. Incompatible actions,
+  conflicting explicit locators/guards, and locator-only attempts to mint
+  write Contexts fail closed.
+- Forward transaction steps can consume earlier `$result` fields. Independent
+  steps are fully preflighted, dependent steps are preflighted just in time,
+  and `atomicity: "singleUndoRecord"` describes a one-Undo recovery boundary
+  rather than automatic rollback.
+- Network-free local MusicXML/MIDI inspection and rights-confirmed monophonic
+  import use SHA-256 file guards, reject unsafe/ambiguous/polyphonic sources,
+  cap one import at 512 notes, and leave project tempo unchanged.
+- UI controls return the selection, navigation, or playback state observed
+  from SynthV after the request rather than only echoing requested values.
 - Agent, TypeScript MCP, Lua executor, SynthV, and user responsibility
   boundaries are explicit and enforced by the write architecture.
 - The complete default MCP tool catalog is kept below 12 KB; the current build
@@ -66,10 +85,8 @@ The native side panel remains an optional compact review console. Future work
 is limited to stability, compatibility, and interaction fixes; it is not a
 performance roadmap or a second SynthV editing interface.
 
-## Next — transaction depth and advanced music analysis
+## Next — durable recovery and advanced music analysis
 
-- Dependency-aware transactions that can safely pass newly created object
-  locators into later forward steps.
 - Durable rollback metadata with explicit project-revision checks.
 - Shared-value/override compression and richer cross-object batch operations.
 - Harmony voicing beyond fixed intervals, pronunciation diagnostics, and

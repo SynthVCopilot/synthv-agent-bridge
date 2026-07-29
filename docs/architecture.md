@@ -7,7 +7,10 @@ MCP client (Codex / compatible local stdio host)
                  │ stdio MCP
                  ▼
        TypeScript MCP server
-                 │ request/response JSON files
+          ┌──────┴──────┐
+          │             │ explicit local MusicXML/MIDI
+          │             └─ bounded Node inspection/conversion
+          │ request/response JSON files
                  ▼
   SynthVAgentBridge.lua (persistent script)
                  │ Synthesizer V scripting API
@@ -19,7 +22,12 @@ MCP client (Codex / compatible local stdio host)
                  └──────── TypeScript sidebar coordinator
 ```
 
-The TypeScript process never parses or rewrites `.svp` files. All project mutations run inside Synthesizer V through its public scripting object model.
+The TypeScript process never parses or rewrites `.svp` files. Its optional local
+score reader parses only an absolute path explicitly supplied for
+`inspect_score_file` or `import_monophonic_score`; it never fetches a URL.
+Converted notes still enter SynthV through the ordinary guarded `add_notes`
+path. All project mutations run inside Synthesizer V through its public
+scripting object model.
 
 ## Why file IPC
 
@@ -57,17 +65,30 @@ The Node side serializes calls and owns the lock. It writes requests using a tem
 
 ## Compact MCP boundary
 
-P4 makes the compact surface the default. Sixty-three file-protocol actions are
-kept behind eight MCP tools and a just-in-time schema catalog. This keeps action
-validation and the Lua executor unchanged while reducing the default serialized
-tool metadata from roughly 72 KB to under 6 KB.
+P4 makes the compact surface the default. The action catalog is kept behind
+eight MCP tools and a just-in-time schema catalog. This keeps detailed action
+schemas out of the default model context while preserving the validated Lua
+executor and Node-local actions.
 
-`sv_read` can issue one opaque `contextId` for the returned scope. The bounded
-Node entry contains only locators and complete note, Smart Pitch, automation,
-track, reference, library, or time-axis guards. A later v2 call expands that
-handle back into the ordinary action payload before file IPC. Manual edits are
-therefore detected by the existing Lua fingerprint checks; contexts do not
-cache or claim that musical state is current.
+`sv_read` can issue one opaque `contextId` for a guarded returned scope. The
+bounded Node entry contains only locators and complete note, Smart Pitch,
+automation, track, reference, library, or time-axis guards, plus its source
+action and target kind. Locator-only results do not mint write-capable Contexts.
+A later v2 call must be compatible with that kind and scope. Conflicting
+explicit locators or guards produce `CONTEXT_SCOPE_MISMATCH`; incompatible
+action/target reuse produces `CONTEXT_INCOMPATIBLE`. The server never silently
+retargets the call. After expansion, ordinary Lua fingerprint checks still
+detect manual edits; Contexts do not cache or claim that musical state is
+current.
+
+`inspect_score_file` and `import_monophonic_score` are Node-local catalog
+actions, not new public MCP tools and not file-IPC action names. The bounded
+reader accepts local `.xml`, `.musicxml`, `.mxl`, `.mid`, and `.midi` files,
+rejects URLs, `.svp`, XML `DOCTYPE`/`ENTITY`, unsafe containers, ambiguity, and
+polyphony, and binds import to the inspected bytes with SHA-256. Import also
+requires `rightsConfirmed: true` and caps the one-undo write at 512 notes.
+Source tempo is returned as review data and is never silently written to the
+SynthV time axis.
 
 Phrase projections are also applied inside the Lua executor. Voice,
 automation, analysis, recommendations, selection diagnostics, and computed
@@ -139,20 +160,26 @@ The complete responsibility table and batch-design rules are documented in
 ## Transaction layer
 
 `apply_transaction` accepts up to 32 existing project-write actions. Before
-creating an undo record, the Lua executor runs every step in validation mode.
-A shared undo-record helper intercepts each step at its normal
+creating an undo record, the Lua executor runs every independent step in
+validation mode. A shared undo-record helper intercepts each step at its normal
 `Project:newUndoRecord()` boundary while keeping the real SynthV `Project`
 object intact. This occurs after that handler has completed its input,
-fingerprint, clone, and host-capability checks. If every step passes, the
-executor creates one real undo record and reruns the steps while suppressing
-their nested undo calls.
+fingerprint, clone, and host-capability checks.
 
-The generic engine conservatively rejects multiple forward steps that mutate
-the same guarded scope. This avoids making a later step's preflight depend on
-an earlier mutation. Index-shifting track and library-group deletes are
-exclusive single-step transactions. Common dependent operations are
-implemented as dedicated single-write actions such as
-`create_harmony_track`.
+A field in a later forward step may be exactly
+`{"$result":{"step":1,"path":["field"]}}`, where `step` names an earlier
+1-based result. Such a dependent target does not exist during the initial
+preflight, so the executor resolves it from the actual result and runs that
+step's validation immediately before execution. The generic engine still
+rejects conflicting writes to the same guarded scope. Index-shifting track and
+library-group deletes are exclusive single-step transactions.
+
+Execution creates one real undo record and suppresses nested undo calls.
+`singleUndoRecord` is a recovery boundary, not an automatic rollback
+guarantee: a dependent validation or unexpected host failure can occur after
+earlier writes. The error reports the failed step, whether a partial write is
+possible, and whether the user must invoke SynthV Undo once before rereading or
+retrying.
 
 Optional reverse steps are resolved from forward results and retained only in
 Bridge memory, associated with the current project/session. A later
@@ -172,14 +199,37 @@ automation, and time-axis operations use optimistic concurrency:
 5. If any target changed, the complete request is rejected with the applicable
    `STALE_*` error.
 
-All inputs are validated before an undo record is created. Each successful
-write tool or transaction creates one SynthV undo record, so the user can undo
-the operation in the editor. If an unexpected host exception occurs only after
-transaction execution begins, the single undo record is the recovery boundary;
-the Bridge reports the failure and directs the user to **Edit > Undo**.
+Note Group content is shared by every `NoteGroupReference` that targets the
+same Group. The Lua executor therefore rejects content edits when the fresh
+reference count is greater than one. An intentional all-reference edit must
+provide both `sharedGroupPolicy=allowAllReferences` and the matching fresh
+`expectedReferenceCount`; a changed count fails before the undo boundary.
+Reference-local properties such as offset or mute remain reference-local.
+
+`clone_track` rejects tracks with non-main vocal Groups by default. Explicit
+`nonMainGroupPolicy=detach` builds independent Group content and verifies UUID
+separation, but the official API cannot read or assign those non-main Vocal
+database identities, so they require manual review. `clone_track_shell` uses a
+host track clone to carry the source main Vocal context into one verified-empty
+track while removing all non-main Groups, notes, pitch controls, known
+automation, and—unless requested—mixer state. It reports that the Vocal
+identity is unreadable instead of inventing a singer name.
+
+Every ordinary write and independent transaction step is validated before an
+undo record is created. A forward step whose target explicitly depends on an
+earlier result is validated immediately before that step mutates the project.
+Each successful write tool or transaction creates one SynthV undo record, so
+the user can undo the operation in the editor. If dependent validation or an
+unexpected host exception fails after transaction execution begins, the single
+undo record is the recovery boundary; the Bridge reports the failure and
+directs the user to **Edit > Undo** when required.
 
 Selection, viewport, clipboard, dialog, and playback controls change host UI
 state rather than project model data and therefore do not create undo records.
+Selection writes reread `get_selection`, viewport writes serialize the
+resulting navigation object, and playback commands return the host's current
+status/playhead. These responses describe observed host state rather than only
+echoing the requested values.
 Bridge metadata is restricted to the `synthv-agent-bridge.` script-data
 namespace so other scripts' stored data is never enumerated or cleared.
 

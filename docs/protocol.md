@@ -53,6 +53,15 @@ undo record. Existing non-main targets are reused.
 
 Set `grouping=target` to write directly to the requested group. `groupName` may
 be provided only when `ensureNonMain` actually creates a group.
+
+Group content belongs to the underlying `NoteGroup`, not to one reference.
+Content-mutating actions therefore default to `sharedGroupPolicy=reject`. When
+the same Group has more than one reference, the caller must intentionally set
+`sharedGroupPolicy=allowAllReferences` and supply the fresh
+`expectedReferenceCount`; otherwise the Bridge returns `SHARED_GROUP_WRITE`.
+A changed count returns `STALE_GROUP_REFERENCE_COUNT`. Reference-local fields
+such as time/pitch offset and mute do not require this all-reference opt-in.
+
 - Time-axis tempo positions are project-global blicks; time-signature positions are zero-based measure numbers.
 
 ## Optimistic-concurrency fields
@@ -85,12 +94,16 @@ envelope. By default it exposes `sv_status`, `sv_describe`, `sv_read`,
 `sv_edit`, `sv_delete`, `sv_transaction`, `sv_ui`, and `sv_sidebar`.
 `sv_describe` returns the existing action schemas only when requested.
 
-V2 reads may return an opaque `contextId`. The MCP server binds it to the
-complete locators and fingerprints already returned by the underlying action,
-then removes those verbose values from the model-facing result. V2 writes
-expand the handle before submitting an ordinary file-protocol request. A context
-does not bypass any Lua validation, does not survive MCP restart/eviction, and
-does not cache mutable musical state.
+Guarded V2 reads may return an opaque `contextId`. The MCP server binds it to
+the complete locators and fingerprints already returned by the underlying
+action, plus the source action and target kind, then removes those verbose
+values from the model-facing result. Locator-only reads do not mint a
+write-capable Context. V2 calls expand a handle only for compatible targets:
+an incompatible action fails with `CONTEXT_INCOMPATIBLE`, while any explicit
+locator or guard that conflicts with the Context fails with
+`CONTEXT_SCOPE_MISMATCH`. The server never silently overwrites caller-supplied
+scope. A Context does not bypass Lua validation, survive MCP
+restart/eviction, or cache mutable musical state.
 
 `get_phrase_context.include` is a file-protocol projection used by the v2
 surface. Omitted `include` returns the complete response. When it is present,
@@ -174,8 +187,10 @@ numeric pagination.
 
 ### Action catalog
 
-Protocol v2 permits new action names without changing the request/response
-envelope. The action set includes reusable note-group library
+Protocol v2 permits new file-IPC action names without changing the
+request/response envelope. The catalog also contains bounded Node-local actions
+that are routed through the compact MCP surface but never sent over file IPC.
+The action set includes reusable note-group library
 operations, linked/deep group references, Smart Pitch CRUD, Bridge-tracked
 Retakes, automation sampling/simplification, full selection control, viewport
 navigation, host clipboard/dialog helpers, coordinate conversion, and
@@ -186,6 +201,13 @@ per-note phoneme properties. The catalog also includes `apply_transaction`,
 `create_harmony_track`, `humanize_notes`, `apply_expression_preset`, and
 `fit_lyrics`. `get_phrase_context` provides compact selected/ranged phrase
 analysis.
+
+`clone_track` defaults to `nonMainGroupPolicy=reject` when the source contains
+non-main vocal Groups. Explicit `detach` creates independent Group content, but
+the official API cannot verify or assign those non-main Vocal database
+identities, so the result requires manual Vocal review. `clone_track_shell`
+host-clones only the source main Vocal context into one verified-empty track and
+reports `vocalIdentityReadable=false`; it does not claim a readable singer name.
 
 `script_data` only exposes keys beginning with `synthv-agent-bridge.`. It never
 lists, clears, or overwrites another script's namespace.
@@ -200,27 +222,65 @@ lists, clears, or overwrites another script's namespace.
   "id": "AbCdEfGh12345678",
   "a": "apply_transaction",
   "p": {
-    "summary": "Update two independent tracks",
+    "summary": "Create and then rename a track",
     "steps": [
-      {"action": "update_track", "payload": {"trackIndex": 1, "trackFingerprint": "...", "name": "Lead"}},
-      {"action": "set_track_mixer", "payload": {"trackIndex": 2, "trackFingerprint": "...", "gainDecibel": -3}}
+      {"action": "add_track", "payload": {"name": "Draft"}},
+      {
+        "action": "update_track",
+        "payload": {
+          "trackIndex": {"$result": {"step": 1, "path": ["trackIndex"]}},
+          "trackFingerprint": {"$result": {"step": 1, "path": ["fingerprint"]}},
+          "name": "Lead"
+        }
+      }
     ]
   }
 }
 ```
 
 The batch contains 1–32 non-transaction project-write steps. The Bridge
-preflights every step before one undo record is created. Validation failure
-leaves the project unchanged. Steps that mutate the same guarded scope are
-rejected because their validation would be order-dependent. Track and
+fully preflights every independent step before one undo record is created.
+Independent validation failure leaves the project unchanged. A complete field
+value in a later step may use
+`{"$result":{"step":1,"path":["trackIndex"]}}` to read an earlier 1-based
+forward result; it cannot refer to the current or a future step. Dependent
+steps are resolved from actual results and preflighted immediately before they
+execute, because their targets do not yet exist during the initial pass.
+Conflicting steps that mutate the same guarded scope are rejected. Track and
 library-group deletes, which shift later indices, must be the only step.
 
-Optional `rollbackSteps` may refer to a forward result with a value shaped as
-`{"$result":{"step":1,"path":["fingerprint"]}}`; `step` is 1-based and `path`
-walks fields in that result. Resolved reverse steps are stored only in the
-current Bridge session. `rollback_transaction` accepts the returned
-`transactionId`, revalidates current fingerprints, and creates one new undo
-record.
+All forward writes share one native undo record. This is reported as
+`atomicity: "singleUndoRecord"`; it is not an automatic rollback guarantee. A
+dependent validation or unexpected host error may happen after earlier steps
+have written. `TRANSACTION_EXECUTION_FAILED` identifies the failed step and
+reports `partialWritePossible` and `undoRequired`; when Undo is required, the
+caller must ask the user to invoke SynthV Undo once before rereading or
+retrying.
+
+Optional `rollbackSteps` may also refer to a forward result. Resolved reverse
+steps are stored only in the current Bridge session.
+`rollback_transaction` accepts the returned `transactionId`, revalidates
+current fingerprints, and creates one new undo record.
+
+### Local MusicXML and MIDI import
+
+`inspect_score_file` and `import_monophonic_score` are Node-local catalog
+actions rather than file-IPC actions. Both accept only an absolute local path
+ending in `.xml`, `.musicxml`, `.mxl`, `.mid`, or `.midi`. URLs, `.svp`, XML
+`DOCTYPE`/`ENTITY`, unsafe or ambiguous `.mxl` containers, and malformed input
+are rejected. Inspection makes no SynthV write and returns:
+
+- a SHA-256 `fileFingerprint` over the exact source bytes;
+- 1-based MusicXML part/voice/staff or MIDI track/channel choices;
+- overlap/polyphony diagnostics and a bounded converted-note preview; and
+- the source tempo map as review-only metadata.
+
+Import requires the fresh hash as `expectedFileFingerprint` and the literal
+`rightsConfirmed: true`. The selected lane must be unambiguous and monophonic,
+and the SynthV write is capped at 512 notes. The Node process converts the lane
+to Group-local blick notes, then calls the same guarded `add_notes` path and
+shared-Group firewall as an ordinary edit. It never applies the source tempo to
+the project automatically.
 
 ### Track color compatibility
 
@@ -399,3 +459,9 @@ selected. These guards are opt-in because official object setters operate on
 explicit Group UUIDs, note indices, and fingerprints without requiring UI
 selection. This keeps batch automation available while allowing
 selection-sensitive user requests to fail safely with `SELECTION_MISMATCH`.
+
+UI write responses report observed host state. `set_selection` rereads and
+returns `get_selection`; `set_editor_view` serializes the resulting navigation
+state in addition to the requested fields; and `playback` returns the current
+SynthV status and playhead after the command. Callers should use those observed
+fields instead of assuming the host retained every requested value exactly.

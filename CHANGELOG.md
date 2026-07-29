@@ -6,6 +6,21 @@ All notable changes will be documented in this file.
 
 ### Added
 
+- Node-local `inspect_score_file` and `import_monophonic_score` actions for
+  explicitly supplied local MusicXML (`.xml`, `.musicxml`, `.mxl`) and SMF MIDI
+  (`.mid`, `.midi`) files. Inspection returns selectable lanes, overlap
+  diagnostics, a bounded preview, source tempo, and a SHA-256 guard without
+  editing SynthV. Import requires `rightsConfirmed: true`, rejects changed
+  files, ambiguity/polyphony, unsafe XML, URLs, `.svp`, and more than 512 notes,
+  then uses the ordinary guarded `add_notes` path without applying source tempo.
+- `clone_track_shell`, which uses a host track clone to carry the source main
+  Vocal context into one verified-empty track while removing non-main Groups,
+  notes, Smart Pitch controls, known automation, and—by default—mixer state.
+  The result explicitly reports that the official API cannot read or name the
+  inherited Vocal identity.
+- Forward transaction `$result` references to earlier 1-based step results.
+  Independent steps retain full preflight; result-dependent steps are resolved
+  and validated just in time inside one native undo boundary.
 - A bundled, machine-readable Mandarin Twinkle Star guided Demo. The Agent
   offers it once after the first healthy connection, prints five concise stage
   headings, creates only an isolated 42-note non-main Group, pauses for the
@@ -35,6 +50,24 @@ All notable changes will be documented in this file.
 
 ### Changed
 
+- Note Group content writes now reject multiply referenced Groups by default.
+  An intentional all-reference edit must set
+  `sharedGroupPolicy=allowAllReferences` and provide a matching fresh
+  `expectedReferenceCount`; reference-local fields remain independently
+  editable.
+- `clone_track` now rejects sources with non-main vocal Groups unless
+  `nonMainGroupPolicy=detach` is explicit. Detach verifies independent Group
+  content but does not claim that the unreadable non-main Vocal identities were
+  preserved; callers must review those Vocals manually.
+- MCP v2 Contexts are target-typed and source-scope-bound. Locator-only reads
+  no longer mint write-capable Contexts, and incompatible actions or conflicting
+  explicit locators/guards fail closed instead of silently changing scope.
+- Transaction results describe `atomicity: "singleUndoRecord"` as a recovery
+  boundary, not automatic rollback. A dependent validation or host execution
+  failure reports the failed step, partial-write possibility, and whether the
+  user must invoke SynthV Undo once before retrying.
+- Selection, viewport, and playback controls return the state observed from
+  SynthV after the request instead of only echoing requested values.
 - MCP v2 now promotes `get_phrase_context` projections supplied only through
   `args.include` into the canonical top-level `sv_read.include` selection
   before Guard capture. Supplying different projections in both locations
@@ -73,6 +106,9 @@ All notable changes will be documented in this file.
 
 ### Fixed
 
+- `get_track_notes` Context projection now retains its track locator for nested
+  Group Contexts, while Context expansion rejects kind/scope mismatches and
+  conflicting guarded-array fingerprints.
 - Empty `vocalModeParams` maps are no longer mistaken for an unsupported
   singer. `set_group_voice` can initialize multiple previously omitted modes
   in one request, clone-probes the complete batch, retains all requested values,

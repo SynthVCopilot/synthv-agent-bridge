@@ -10,6 +10,8 @@ const GROUP_UUID = "8ab8ba75-f776-402b-a8bb-ee1f64bcf95e";
 test("v2 context expands one scope guard across a batch note edit", () => {
   const contexts = new V2ContextStore();
   const contextId = contexts.issue({
+    sourceAction: "get_track_notes",
+    targetKind: "group",
     trackIndex: 2,
     groupIndex: 3,
     groupUuid: GROUP_UUID,
@@ -46,6 +48,8 @@ test("v2 context expands one scope guard across a batch note edit", () => {
 test("v2 context refuses a note missing from the original read", () => {
   const contexts = new V2ContextStore();
   const contextId = contexts.issue({
+    sourceAction: "get_track_notes",
+    targetKind: "group",
     trackIndex: 1,
     groupUuid: GROUP_UUID,
     noteFingerprints: new Map([[1, "note-1"]]),
@@ -68,6 +72,8 @@ test("v2 context refuses a note missing from the original read", () => {
 test("v2 context expands one same-Group tuning batch", () => {
   const contexts = new V2ContextStore();
   const contextId = contexts.issue({
+    sourceAction: "get_phrase_context",
+    targetKind: "group",
     trackIndex: 2,
     groupIndex: 3,
     groupUuid: GROUP_UUID,
@@ -134,6 +140,8 @@ test("v2 context expands one same-Group tuning batch", () => {
 test("v2 expands every guarded context note for one deterministic transform", () => {
   const contexts = new V2ContextStore();
   const contextId = contexts.issue({
+    sourceAction: "get_track_notes",
+    targetKind: "group",
     trackIndex: 2,
     groupIndex: 3,
     groupUuid: GROUP_UUID,
@@ -169,6 +177,8 @@ test("v2 expands every guarded context note for one deterministic transform", ()
 test("v2 context-note transforms reject ambiguous or missing context targets", () => {
   const contexts = new V2ContextStore();
   const contextId = contexts.issue({
+    sourceAction: "get_track_notes",
+    targetKind: "group",
     trackIndex: 1,
     groupUuid: GROUP_UUID,
     noteFingerprints: new Map([[1, "note-1"]]),
@@ -224,9 +234,302 @@ test("v2 note insertion ensures an editable non-main group by default", () => {
     undefined,
     contexts,
   );
+  const scoreImport = v2Testing.expandContext(
+    "import_monophonic_score",
+    {
+      trackIndex: 1,
+      groupIndex: 1,
+      filePath: "D:\\scores\\lead.musicxml",
+      expectedFileFingerprint: `sha256:${"a".repeat(64)}`,
+      rightsConfirmed: true,
+    },
+    undefined,
+    contexts,
+  );
 
   assert.equal(automatic.grouping, "ensureNonMain");
   assert.equal(explicitTarget.grouping, "target");
+  assert.equal(scoreImport.grouping, "ensureNonMain");
+});
+
+test("v2 score import inherits only the target Group locator from context", () => {
+  const contexts = new V2ContextStore();
+  const contextId = contexts.issue({
+    sourceAction: "get_track_notes",
+    targetKind: "group",
+    trackIndex: 2,
+    groupIndex: 3,
+    groupUuid: GROUP_UUID,
+    noteFingerprints: new Map(),
+    pitchControlFingerprints: new Map(),
+    automationFingerprints: new Map(),
+  });
+
+  const expanded = v2Testing.expandContext(
+    "import_monophonic_score",
+    {
+      filePath: "D:\\scores\\lead.mid",
+      expectedFileFingerprint: `sha256:${"b".repeat(64)}`,
+      rightsConfirmed: true,
+    },
+    contextId,
+    contexts,
+  );
+
+  assert.equal(expanded.trackIndex, 2);
+  assert.equal(expanded.groupIndex, 3);
+  assert.equal(expanded.groupUuid, GROUP_UUID);
+  assert.equal(expanded.grouping, "ensureNonMain");
+});
+
+test("get_track_notes nested Group contexts retain the parent track locator", () => {
+  const contexts = new V2ContextStore();
+  const guards = new GuardTokenStore();
+  const result: Record<string, unknown> = {
+    track: {
+      trackIndex: 4,
+      fingerprint: "main-group:track-main",
+      mainGroupUuid: "track-main",
+    },
+    groups: [
+      {
+        groupIndex: 2,
+        groupUuid: GROUP_UUID,
+        referenceFingerprint: "reference",
+        notes: [{ noteIndex: 7, fingerprint: "note-7" }],
+      },
+    ],
+  };
+
+  v2Testing.addNestedContexts(
+    "get_track_notes",
+    result,
+    contexts,
+    guards,
+  );
+
+  const group = (result.groups as Array<Record<string, unknown>>)[0];
+  assert.ok(group);
+  assert.equal(group.trackIndex, 4);
+  assert.equal(typeof group.contextId, "string");
+  const context = contexts.resolve(group.contextId as string);
+  assert.equal(context.sourceAction, "get_track_notes");
+  assert.equal(context.targetKind, "group");
+  assert.equal(context.trackIndex, 4);
+  assert.equal(context.groupIndex, 2);
+  assert.equal(context.groupUuid, GROUP_UUID);
+  assert.equal(context.noteFingerprints.get(7), "note-7");
+});
+
+test("locator-only reads do not mint write-capable contexts", () => {
+  const contexts = new V2ContextStore();
+  const result: Record<string, unknown> = {
+    trackIndex: 2,
+    trackName: "Lead",
+    gainDecibel: 0,
+  };
+
+  v2Testing.addNestedContexts(
+    "get_track_mixer",
+    result,
+    contexts,
+    new GuardTokenStore(),
+  );
+
+  assert.equal(result.contextId, undefined);
+});
+
+test("contextId rejects explicit scope conflicts and incompatible targets", () => {
+  const contexts = new V2ContextStore();
+  const groupContextId = contexts.issue({
+    sourceAction: "get_track_notes",
+    targetKind: "group",
+    trackIndex: 2,
+    groupIndex: 3,
+    groupUuid: GROUP_UUID,
+    noteFingerprints: new Map([[1, "note-1"]]),
+    pitchControlFingerprints: new Map(),
+    automationFingerprints: new Map(),
+  });
+
+  assert.throws(
+    () =>
+      v2Testing.expandContext(
+        "edit_notes",
+        {
+          trackIndex: 9,
+          edits: [{ noteIndex: 1, changes: { pitch: 61 } }],
+        },
+        groupContextId,
+        contexts,
+      ),
+    /trackIndex conflicts/u,
+  );
+
+  const trackContextId = contexts.issue({
+    sourceAction: "list_tracks",
+    targetKind: "track",
+    trackIndex: 2,
+    trackFingerprint: "track",
+    noteFingerprints: new Map(),
+    pitchControlFingerprints: new Map(),
+    automationFingerprints: new Map(),
+  });
+  assert.throws(
+    () =>
+      v2Testing.expandContext(
+        "edit_notes",
+        { edits: [{ noteIndex: 1, fingerprint: "note", changes: { pitch: 61 } }] },
+        trackContextId,
+        contexts,
+      ),
+    /cannot target edit_notes/u,
+  );
+});
+
+test("set_selection consumes only a compatible piano-roll Group context", () => {
+  const contexts = new V2ContextStore();
+  const contextId = contexts.issue({
+    sourceAction: "get_track_notes",
+    targetKind: "group",
+    trackIndex: 2,
+    groupIndex: 3,
+    groupUuid: GROUP_UUID,
+    noteFingerprints: new Map([[1, "note-1"]]),
+    pitchControlFingerprints: new Map(),
+    automationFingerprints: new Map(),
+  });
+
+  assert.deepEqual(
+    v2Testing.expandContext(
+      "set_selection",
+      {
+        scope: "pianoRoll",
+        operation: "replace",
+        kind: "notes",
+        notes: [{ noteIndex: 1 }],
+      },
+      contextId,
+      contexts,
+    ),
+    {
+      scope: "pianoRoll",
+      operation: "replace",
+      kind: "notes",
+      notes: [{ noteIndex: 1 }],
+      trackIndex: 2,
+      groupIndex: 3,
+      groupUuid: GROUP_UUID,
+    },
+  );
+
+  assert.throws(
+    () =>
+      v2Testing.expandContext(
+        "set_selection",
+        {
+          scope: "pianoRoll",
+          operation: "replace",
+          kind: "notes",
+          trackIndex: 9,
+          notes: [{ noteIndex: 1 }],
+        },
+        contextId,
+        contexts,
+      ),
+    /trackIndex conflicts/u,
+  );
+});
+
+test("contextId fails closed for UI operations that do not consume it", () => {
+  const contexts = new V2ContextStore();
+  const contextId = contexts.issue({
+    sourceAction: "get_track_notes",
+    targetKind: "group",
+    trackIndex: 2,
+    groupIndex: 3,
+    groupUuid: GROUP_UUID,
+    noteFingerprints: new Map(),
+    pitchControlFingerprints: new Map(),
+    automationFingerprints: new Map(),
+  });
+
+  assert.throws(
+    () =>
+      v2Testing.expandContext(
+        "playback",
+        { operation: "status" },
+        contextId,
+        contexts,
+      ),
+    /cannot target playback/u,
+  );
+  assert.throws(
+    () =>
+      v2Testing.expandContext(
+        "set_selection",
+        {
+          scope: "arrangement",
+          operation: "replace",
+          kind: "groups",
+          groups: [{ trackIndex: 2, groupIndex: 3 }],
+        },
+        contextId,
+        contexts,
+      ),
+    /cannot target set_selection/u,
+  );
+  assert.throws(
+    () =>
+      v2Testing.expandContext(
+        "set_selection",
+        { scope: "pianoRoll", operation: "clear", kind: "notes" },
+        contextId,
+        contexts,
+      ),
+    /cannot target set_selection/u,
+  );
+});
+
+test("untyped contexts fail closed even for otherwise compatible actions", () => {
+  const contexts = new V2ContextStore();
+  const contextId = contexts.issue({
+    trackIndex: 2,
+    groupIndex: 3,
+    groupUuid: GROUP_UUID,
+    noteFingerprints: new Map([[1, "note-1"]]),
+    pitchControlFingerprints: new Map(),
+    automationFingerprints: new Map(),
+  });
+
+  assert.throws(
+    () =>
+      v2Testing.expandContext(
+        "edit_notes",
+        { edits: [{ noteIndex: 1, changes: { pitch: 61 } }] },
+        contextId,
+        contexts,
+      ),
+    /cannot target edit_notes/u,
+  );
+});
+
+test("track contexts locate track reads without becoming Group contexts", () => {
+  const contexts = new V2ContextStore();
+  const contextId = contexts.issue({
+    sourceAction: "list_tracks",
+    targetKind: "track",
+    trackIndex: 5,
+    trackFingerprint: "track-5",
+    noteFingerprints: new Map(),
+    pitchControlFingerprints: new Map(),
+    automationFingerprints: new Map(),
+  });
+
+  assert.deepEqual(
+    v2Testing.expandContext("get_track_notes", {}, contextId, contexts),
+    { trackIndex: 5 },
+  );
 });
 
 test("v2 Group Voice refresh defaults to a compact write-ready projection", () => {

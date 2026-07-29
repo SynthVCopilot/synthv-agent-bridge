@@ -30,6 +30,7 @@ export const TRANSACTION_STEP_ACTIONS = [
   "add_track",
   "update_track",
   "clone_track",
+  "clone_track_shell",
   "delete_track",
   "update_group",
   "set_group_voice",

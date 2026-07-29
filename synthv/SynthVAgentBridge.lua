@@ -1141,7 +1141,7 @@ local function makeTrackFingerprint(track)
 end
 
 local function validateTrackFingerprint(track, expectedFingerprint, trackIndex)
-    if transactionMode == "execute" or not expectedFingerprint then
+    if not expectedFingerprint then
         return
     end
     local actual = makeTrackFingerprint(track)
@@ -1275,6 +1275,141 @@ local function countGroupReferences(project, group)
         end
     end
     return count
+end
+
+local GROUP_CONTENT_WRITE_ACTIONS = {
+    activate_note_retake = true,
+    add_notes = true,
+    add_pitch_controls = true,
+    apply_expression_preset = true,
+    apply_group_tuning = true,
+    clear_automation = true,
+    delete_note_retake = true,
+    delete_notes = true,
+    delete_pitch_controls = true,
+    edit_notes = true,
+    edit_pitch_controls = true,
+    fit_lyrics = true,
+    generate_note_retake = true,
+    humanize_notes = true,
+    set_automation_points = true,
+    set_note_phoneme_properties = true,
+    simplify_automation = true,
+    transform_notes = true
+}
+
+local function actionMutatesGroupContent(action, payload, reference)
+    if GROUP_CONTENT_WRITE_ACTIONS[action] then
+        if action == "add_notes"
+            and payload.grouping == "ensureNonMain"
+            and reference:isMain() then
+            return false
+        end
+        if action == "apply_group_tuning" then
+            return isProvided(payload.noteEdits) or isProvided(payload.automations)
+        end
+        return true
+    end
+    if action == "update_group" then
+        return isProvided(payload.name)
+    end
+    if action == "script_data" then
+        if payload.operation ~= "set" and payload.operation ~= "remove" then
+            return false
+        end
+        return payload.objectType == "group"
+            or payload.objectType == "note"
+            or payload.objectType == "retakes"
+            or payload.objectType == "automation"
+            or payload.objectType == "pitchControl"
+    end
+    return false
+end
+
+local function validateSharedGroupWriteSafety(action, payload)
+    if not GROUP_CONTENT_WRITE_ACTIONS[action]
+        and action ~= "update_group"
+        and action ~= "script_data" then
+        return
+    end
+    if action == "update_group" and not isProvided(payload.name) then
+        return
+    end
+    if action == "script_data"
+        and (payload.operation ~= "set" and payload.operation ~= "remove"
+            or (payload.objectType ~= "group"
+                and payload.objectType ~= "note"
+                and payload.objectType ~= "retakes"
+                and payload.objectType ~= "automation"
+                and payload.objectType ~= "pitchControl")) then
+        return
+    end
+
+    local project, _track, trackIndex, reference, group, groupIndex =
+        resolveGroup(payload)
+    if not actionMutatesGroupContent(action, payload, reference) then
+        return
+    end
+
+    local policy =
+        optionalString(payload.sharedGroupPolicy, "sharedGroupPolicy", false)
+            or "reject"
+    if policy ~= "reject" and policy ~= "allowAllReferences" then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "sharedGroupPolicy must be reject or allowAllReferences",
+            { sharedGroupPolicy = policy }
+        )
+    end
+
+    local referenceCount = countGroupReferences(project, group)
+    local expectedReferenceCount = optionalInteger(
+        payload.expectedReferenceCount,
+        "expectedReferenceCount",
+        1
+    )
+    if expectedReferenceCount ~= nil and expectedReferenceCount ~= referenceCount then
+        raiseBridgeError(
+            "STALE_GROUP_REFERENCE_COUNT",
+            "The Note Group reference count changed after it was read",
+            {
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = group:getUUID(),
+                expectedReferenceCount = expectedReferenceCount,
+                actualReferenceCount = referenceCount
+            }
+        )
+    end
+
+    if referenceCount <= 1 then
+        return
+    end
+    if policy ~= "allowAllReferences" then
+        raiseBridgeError(
+            "SHARED_GROUP_WRITE",
+            "This Note Group is referenced more than once; the requested content edit would affect every reference",
+            {
+                action = action,
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = group:getUUID(),
+                referenceCount = referenceCount,
+                requiredPolicy = "allowAllReferences",
+                requiredExpectedReferenceCount = referenceCount
+            }
+        )
+    end
+    if expectedReferenceCount == nil then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "expectedReferenceCount is required when sharedGroupPolicy=allowAllReferences",
+            {
+                groupUuid = group:getUUID(),
+                referenceCount = referenceCount
+            }
+        )
+    end
 end
 
 local function serializeLibraryGroup(project, group, libraryIndex)
@@ -1926,7 +2061,7 @@ local function serializeTimeAxis(timeAxis)
 end
 
 local function validateExpectedFingerprint(actual, expected, staleCode, message)
-    if transactionMode ~= "execute" and expected and actual ~= expected then
+    if expected and actual ~= expected then
         raiseBridgeError(staleCode, message, {
             expected = expected,
             actual = actual
@@ -1935,7 +2070,7 @@ local function validateExpectedFingerprint(actual, expected, staleCode, message)
 end
 
 local function validateReferenceFingerprint(reference, expected, trackIndex, groupIndex)
-    if transactionMode == "execute" or not expected then
+    if not expected then
         return
     end
     local actual = makeReferenceFingerprint(reference)
@@ -2156,9 +2291,6 @@ local function validateFingerprint(group, noteIndex, expectedFingerprint)
     local noteCount = group:getNumNotes()
     requireInteger(noteIndex, "noteIndex", 1, noteCount)
     local note = group:getNote(noteIndex)
-    if transactionMode == "execute" then
-        return note
-    end
     local actual = makeNoteFingerprint(group:getUUID(), noteIndex, note)
     if actual ~= expectedFingerprint then
         raiseBridgeError("STALE_NOTE", "The note changed after it was read; read the group again before writing", {
@@ -3704,6 +3836,7 @@ function handlers.get_track_notes(payload)
     end
     return {
         projectFile = project:getFileName() or "",
+        trackIndex = trackIndex,
         track = serializeTrackSummary(track, trackIndex),
         groups = groups
     }
@@ -5465,6 +5598,40 @@ function handlers.update_track(payload)
     return serializeTrackSummary(track, trackIndex)
 end
 
+local function copyReferenceScriptData(sourceReference, targetReference)
+    local keys = safeCall(function()
+        return sourceReference:getScriptDataKeys()
+    end, {})
+    for index = 1, #keys do
+        local key = keys[index]
+        safeCall(function()
+            targetReference:setScriptData(
+                key,
+                sanitizeForJson(sourceReference:getScriptData(key))
+            )
+        end)
+    end
+end
+
+local function cloneReferenceWithIndependentTarget(sourceReference, targetGroup)
+    local reference = SV:create("NoteGroupReference")
+    reference:setTarget(targetGroup)
+    reference:setTimeOffset(sourceReference:getTimeOffset())
+    reference:setPitchOffset(sourceReference:getPitchOffset())
+    safeCall(function()
+        reference:setMuted(sourceReference:isMuted())
+    end)
+    reference:setVoice(sourceReference:getVoice())
+    local duration = sourceReference:getDuration()
+    if duration > 0 then
+        safeCall(function()
+            reference:setTimeRange(sourceReference:getOnset(), duration)
+        end)
+    end
+    copyReferenceScriptData(sourceReference, reference)
+    return reference
+end
+
 function handlers.clone_track(payload)
     payload = requireObject(payload, "payload")
     local project, sourceTrack, sourceTrackIndex = resolveTrack(payload)
@@ -5502,6 +5669,34 @@ function handlers.clone_track(payload)
     end
     local gainDecibel = optionalNumber(payload.gainDecibel, "gainDecibel", -24, 24)
     local pan = optionalNumber(payload.pan, "pan", -1, 1)
+    local nonMainGroupPolicy =
+        optionalString(payload.nonMainGroupPolicy, "nonMainGroupPolicy", false)
+            or "reject"
+    if nonMainGroupPolicy ~= "reject" and nonMainGroupPolicy ~= "detach" then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "nonMainGroupPolicy must be reject or detach"
+        )
+    end
+    local nonMainVocalGroupCount = 0
+    for groupIndex = 2, sourceTrack:getNumGroups() do
+        local sourceReference = sourceTrack:getGroupReference(groupIndex)
+        if sourceReference and not sourceReference:isInstrumental() then
+            nonMainVocalGroupCount = nonMainVocalGroupCount + 1
+        end
+    end
+    if nonMainVocalGroupCount > 0 and nonMainGroupPolicy ~= "detach" then
+        raiseBridgeError(
+            "NON_MAIN_GROUP_CLONE_REQUIRES_POLICY",
+            "The source track has non-main vocal Groups. Their content can be detached, but SynthV's scripting API cannot verify or assign each Group's Vocal database identity",
+            {
+                sourceTrackIndex = sourceTrackIndex,
+                nonMainVocalGroupCount = nonMainVocalGroupCount,
+                requiredPolicy = "detach",
+                vocalReviewRequired = true
+            }
+        )
+    end
 
     local clonedTrack = sourceTrack:clone()
     if name ~= nil then
@@ -5514,54 +5709,86 @@ function handlers.clone_track(payload)
         clonedTrack:setBounced(bounced)
     end
 
-    local affectedNoteCount = 0
-    local seenGroups = {}
-    for groupIndex = 1, clonedTrack:getNumGroups() do
-        local clonedReference = clonedTrack:getGroupReference(groupIndex)
+    local sourceMainGroup = sourceTrack:getGroupReference(1):getTarget()
+    local clonedMainGroup = clonedTrack:getGroupReference(1):getTarget()
+    if clonedMainGroup:getUUID() == sourceMainGroup:getUUID() then
+        raiseBridgeError(
+            "SHARED_MAIN_GROUP_CLONE",
+            "SynthV did not create an independent main group for the cloned track"
+        )
+    end
+
+    -- Track:clone() deep-copies the main group, but NoteGroupReference:clone()
+    -- explicitly does not copy a non-main target. Rebuild every vocal non-main
+    -- reference around one cloned library group per source UUID.
+    local detachedGroupsBySourceUuid = {}
+    local detachedGroups = {}
+    local replacementReferences = {}
+    local removeIndices = {}
+    for groupIndex = 2, sourceTrack:getNumGroups() do
         local sourceReference = sourceTrack:getGroupReference(groupIndex)
-        if clonedReference and not clonedReference:isInstrumental() then
-            local clonedGroup = clonedReference:getTarget()
-            local sourceGroup = sourceReference and not sourceReference:isInstrumental()
-                and sourceReference:getTarget() or nil
-            if clonedGroup and not seenGroups[clonedGroup] then
-                seenGroups[clonedGroup] = true
-                if (clearNotes or transposeSemitones ~= 0) and clonedGroup == sourceGroup then
+        if sourceReference and not sourceReference:isInstrumental() then
+            local sourceGroup = sourceReference:getTarget()
+            local sourceUuid = sourceGroup:getUUID()
+            local detachedGroup = detachedGroupsBySourceUuid[sourceUuid]
+            if detachedGroup == nil then
+                detachedGroup = sourceGroup:clone()
+                if detachedGroup:getUUID() == sourceUuid then
                     raiseBridgeError(
                         "SHARED_GROUP_CLONE",
-                        "SynthV kept a cloned non-main reference linked to the source library group; refusing to mutate the source",
-                        { groupIndex = groupIndex }
+                        "SynthV did not assign a new UUID to a cloned library Note Group",
+                        { groupIndex = groupIndex, groupUuid = sourceUuid }
                     )
                 end
+                detachedGroupsBySourceUuid[sourceUuid] = detachedGroup
+                detachedGroups[#detachedGroups + 1] = detachedGroup
+            end
+            replacementReferences[#replacementReferences + 1] =
+                cloneReferenceWithIndependentTarget(sourceReference, detachedGroup)
+            removeIndices[#removeIndices + 1] = groupIndex
+        end
+    end
+    for index = #removeIndices, 1, -1 do
+        clonedTrack:removeGroupReference(removeIndices[index])
+    end
+    for index = 1, #replacementReferences do
+        clonedTrack:addGroupReference(replacementReferences[index])
+    end
 
-                if clearNotes then
-                    affectedNoteCount = affectedNoteCount + clonedGroup:getNumNotes()
-                    for noteIndex = clonedGroup:getNumNotes(), 1, -1 do
-                        clonedGroup:removeNote(noteIndex)
-                    end
-                elseif transposeSemitones ~= 0 then
-                    for noteIndex = 1, clonedGroup:getNumNotes() do
-                        local note = clonedGroup:getNote(noteIndex)
-                        local newPitch = note:getPitch() + transposeSemitones
-                        if rangePolicy == "octave" then
-                            while newPitch < minimumPitch do newPitch = newPitch + 12 end
-                            while newPitch > maximumPitch do newPitch = newPitch - 12 end
-                        end
-                        if newPitch < minimumPitch or newPitch > maximumPitch
-                            or newPitch < 0 or newPitch > 127 then
-                            raiseBridgeError("PITCH_OUT_OF_RANGE", "A cloned note would leave MIDI range 0..127", {
-                                groupIndex = groupIndex,
-                                noteIndex = noteIndex,
-                                originalPitch = note:getPitch(),
-                                requestedPitch = newPitch,
-                                minimumPitch = minimumPitch,
-                                maximumPitch = maximumPitch,
-                                rangePolicy = rangePolicy
-                            })
-                        end
-                        note:setPitch(newPitch)
-                        affectedNoteCount = affectedNoteCount + 1
-                    end
+    local targetGroups = { clonedMainGroup }
+    for index = 1, #detachedGroups do
+        targetGroups[#targetGroups + 1] = detachedGroups[index]
+    end
+    local affectedNoteCount = 0
+    for targetIndex = 1, #targetGroups do
+        local clonedGroup = targetGroups[targetIndex]
+        if clearNotes then
+            affectedNoteCount = affectedNoteCount + clonedGroup:getNumNotes()
+            for noteIndex = clonedGroup:getNumNotes(), 1, -1 do
+                clonedGroup:removeNote(noteIndex)
+            end
+        elseif transposeSemitones ~= 0 then
+            for noteIndex = 1, clonedGroup:getNumNotes() do
+                local note = clonedGroup:getNote(noteIndex)
+                local newPitch = note:getPitch() + transposeSemitones
+                if rangePolicy == "octave" then
+                    while newPitch < minimumPitch do newPitch = newPitch + 12 end
+                    while newPitch > maximumPitch do newPitch = newPitch - 12 end
                 end
+                if newPitch < minimumPitch or newPitch > maximumPitch
+                    or newPitch < 0 or newPitch > 127 then
+                    raiseBridgeError("PITCH_OUT_OF_RANGE", "A cloned note would leave MIDI range 0..127", {
+                        targetGroupIndex = targetIndex,
+                        noteIndex = noteIndex,
+                        originalPitch = note:getPitch(),
+                        requestedPitch = newPitch,
+                        minimumPitch = minimumPitch,
+                        maximumPitch = maximumPitch,
+                        rangePolicy = rangePolicy
+                    })
+                end
+                note:setPitch(newPitch)
+                affectedNoteCount = affectedNoteCount + 1
             end
         end
     end
@@ -5571,6 +5798,9 @@ function handlers.clone_track(payload)
     if pan ~= nil then clonedMixer:setPan(pan) end
 
     createUndoRecord(project)
+    for index = 1, #detachedGroups do
+        project:addNoteGroup(detachedGroups[index])
+    end
     local trackIndex = project:addTrack(clonedTrack)
     if type(trackIndex) ~= "number" then
         trackIndex = project:getNumTracks()
@@ -5583,7 +5813,164 @@ function handlers.clone_track(payload)
     result.affectedNoteCount = affectedNoteCount
     result.voiceRange = { minimumPitch = minimumPitch, maximumPitch = maximumPitch }
     result.rangePolicy = rangePolicy
+    result.nonMainGroupPolicy = nonMainGroupPolicy
+    result.detachedGroupCount = #detachedGroups
+    result.independentGroupsVerified = true
+    result.nonMainVocalReviewRequired = #detachedGroups > 0
     result.mixer = serializeMixer(clonedTrack)
+    return result
+end
+
+local TRACK_SHELL_AUTOMATION_PARAMETERS = {
+    "pitchDelta",
+    "vibratoEnv",
+    "loudness",
+    "tension",
+    "breathiness",
+    "voicing",
+    "gender"
+}
+
+function handlers.clone_track_shell(payload)
+    payload = requireObject(payload, "payload")
+    local project, sourceTrack, sourceTrackIndex = resolveTrack(payload)
+    validateTrackFingerprint(
+        sourceTrack,
+        optionalString(payload.trackFingerprint, "trackFingerprint", false),
+        sourceTrackIndex
+    )
+
+    local name = optionalString(payload.name, "name", false)
+        or (sourceTrack:getName() .. " Vocal Shell")
+    local groupName = optionalString(payload.groupName, "groupName", false)
+        or name
+    local displayColor = optionalString(payload.displayColor, "displayColor", false)
+    if displayColor then
+        displayColor = normalizeDisplayColor(displayColor, "displayColor")
+    end
+    local bounced = optionalBoolean(payload.bounced, "bounced")
+    if bounced == nil then bounced = false end
+    local copyMixer = optionalBoolean(payload.copyMixer, "copyMixer")
+    if copyMixer == nil then copyMixer = false end
+
+    local sourceMainReference = sourceTrack:getGroupReference(1)
+    local sourceMainGroup = sourceMainReference:getTarget()
+    local sourceVoiceSnapshot = json.encode(sanitizeForJson(sourceMainReference:getVoice()))
+    local clonedTrack = sourceTrack:clone()
+    clonedTrack:setName(name)
+    clonedTrack:setBounced(bounced)
+    if displayColor then
+        setDisplayColorVerified(clonedTrack, displayColor, "displayColor")
+    end
+
+    local removedGroupReferenceCount = clonedTrack:getNumGroups() - 1
+    for groupIndex = clonedTrack:getNumGroups(), 2, -1 do
+        clonedTrack:removeGroupReference(groupIndex)
+    end
+
+    local mainReference = clonedTrack:getGroupReference(1)
+    local mainGroup = mainReference:getTarget()
+    if mainGroup:getUUID() == sourceMainGroup:getUUID() then
+        raiseBridgeError(
+            "SHARED_MAIN_GROUP_CLONE",
+            "SynthV did not create an independent main Group for the Vocal template track"
+        )
+    end
+    mainGroup:setName(groupName)
+
+    local clearedNoteCount = mainGroup:getNumNotes()
+    for noteIndex = mainGroup:getNumNotes(), 1, -1 do
+        mainGroup:removeNote(noteIndex)
+    end
+    local clearedPitchControlCount = safeCall(function()
+        return mainGroup:getNumPitchControls()
+    end, 0)
+    for pitchControlIndex = clearedPitchControlCount, 1, -1 do
+        mainGroup:removePitchControl(pitchControlIndex)
+    end
+
+    local automationNames = {}
+    local seenAutomationNames = {}
+    local function addAutomationName(parameter)
+        if not seenAutomationNames[parameter] then
+            seenAutomationNames[parameter] = true
+            automationNames[#automationNames + 1] = parameter
+        end
+    end
+    for index = 1, #TRACK_SHELL_AUTOMATION_PARAMETERS do
+        addAutomationName(TRACK_SHELL_AUTOMATION_PARAMETERS[index])
+    end
+    local sourceVoice = safeCall(function()
+        return sourceMainReference:getVoice()
+    end, {})
+    if type(sourceVoice.vocalModeParams) == "table" then
+        for vocalModeName, _value in pairs(sourceVoice.vocalModeParams) do
+            addAutomationName("vocalMode_" .. tostring(vocalModeName))
+        end
+    end
+    local clearedAutomationPointCount = 0
+    local clearedAutomationParameters = json.array()
+    for index = 1, #automationNames do
+        local parameter = automationNames[index]
+        local automation = safeCall(function()
+            return mainGroup:getParameter(parameter)
+        end, nil)
+        if automation then
+            local points = safeCall(function()
+                return automation:getAllPoints()
+            end, {})
+            clearedAutomationPointCount =
+                clearedAutomationPointCount + #points
+            automation:removeAll()
+            clearedAutomationParameters[#clearedAutomationParameters + 1] =
+                parameter
+        end
+    end
+
+    local mixer = clonedTrack:getMixer()
+    if not copyMixer then
+        mixer:setGainDecibel(0)
+        mixer:setPan(0)
+        mixer:setMuted(false)
+        mixer:setSolo(false)
+    end
+
+    createUndoRecord(project)
+    local trackIndex = project:addTrack(clonedTrack)
+    if type(trackIndex) ~= "number" then
+        trackIndex = project:getNumTracks()
+    end
+
+    local clonedVoiceSnapshot =
+        json.encode(sanitizeForJson(mainReference:getVoice()))
+    if mainGroup:getNumNotes() ~= 0
+        or safeCall(function()
+            return mainGroup:getNumPitchControls()
+        end, 0) ~= 0
+        or clonedTrack:getNumGroups() ~= 1 then
+        raiseBridgeError(
+            "HOST_POSTCONDITION_FAILED",
+            "The Vocal template track was created but its score shell was not empty",
+            {
+                trackIndex = trackIndex,
+                undoRequired = true
+            }
+        )
+    end
+
+    local result = serializeTrackSummary(clonedTrack, trackIndex)
+    result.mainGroup = serializeMainGroupLocator(clonedTrack, trackIndex)
+    result.sourceTrackIndex = sourceTrackIndex
+    result.vocalInheritance = "hostTrackClone-unverifiedIdentity"
+    result.voicePropertiesMatched = clonedVoiceSnapshot == sourceVoiceSnapshot
+    result.vocalIdentityReadable = false
+    result.removedGroupReferenceCount = removedGroupReferenceCount
+    result.clearedNoteCount = clearedNoteCount
+    result.clearedPitchControlCount = clearedPitchControlCount
+    result.clearedAutomationPointCount = clearedAutomationPointCount
+    result.clearedAutomationParameters = clearedAutomationParameters
+    result.copyMixer = copyMixer
+    result.verifiedEmptyShell = true
     return result
 end
 
@@ -5608,6 +5995,9 @@ function handlers.create_harmony_track(payload)
         minimumPitch = optionalInteger(payload.minimumPitch, "minimumPitch", 0, 127, 0),
         maximumPitch = optionalInteger(payload.maximumPitch, "maximumPitch", 0, 127, 127),
         rangePolicy = optionalString(payload.rangePolicy, "rangePolicy", false) or "octave",
+        nonMainGroupPolicy =
+            optionalString(payload.nonMainGroupPolicy, "nonMainGroupPolicy", false)
+                or "reject",
         gainDecibel = optionalNumber(payload.gainDecibel, "gainDecibel", -24, 24),
         pan = optionalNumber(payload.pan, "pan", -1, 1)
     })
@@ -7650,13 +8040,49 @@ function handlers.playback(payload)
     }
 end
 
+local function invokeActionHandler(action, payload)
+    validateSharedGroupWriteSafety(action, payload)
+    return handlers[action](payload)
+end
+
 local function transactionScopeKey(action, payload)
     if action == "set_time_axis" then
         return "time-axis"
     end
     if action == "create_note_group" or action == "add_track"
-        or action == "clone_track" or action == "create_harmony_track" then
+        or action == "clone_track" or action == "clone_track_shell"
+        or action == "create_harmony_track" then
         return nil
+    end
+    local groupContentWrite = GROUP_CONTENT_WRITE_ACTIONS[action]
+        or (action == "update_group" and isProvided(payload.name))
+        or (action == "script_data"
+            and (payload.operation == "set" or payload.operation == "remove")
+            and (payload.objectType == "group"
+                or payload.objectType == "note"
+                or payload.objectType == "retakes"
+                or payload.objectType == "automation"
+                or payload.objectType == "pitchControl"))
+    if groupContentWrite then
+        if isProvided(payload.groupUuid) then
+            return "group-content:" .. tostring(payload.groupUuid)
+        end
+        if isProvided(payload.trackIndex) then
+            return table.concat({
+                "group-location",
+                tostring(payload.trackIndex),
+                tostring(payload.groupIndex or 1)
+            }, ":")
+        end
+    end
+    if (action == "update_group" or action == "set_group_voice"
+            or action == "delete_group_reference")
+        and isProvided(payload.trackIndex) then
+        return table.concat({
+            "group-reference",
+            tostring(payload.trackIndex),
+            tostring(payload.groupIndex or 1)
+        }, ":")
     end
     if isProvided(payload.trackIndex) then
         return "track:" .. tostring(payload.trackIndex)
@@ -7676,7 +8102,87 @@ local function transactionScopeKey(action, payload)
     return action
 end
 
-local function validateTransactionSteps(value, path)
+local function inspectForwardResultReferences(value, currentStepIndex, path)
+    if value == JSON_NULL or type(value) ~= "table" then
+        return 0
+    end
+    if isObject(value) and isProvided(value["$result"]) then
+        local keyCount = 0
+        for _key, _nested in pairs(value) do keyCount = keyCount + 1 end
+        if keyCount ~= 1 then
+            raiseBridgeError(
+                "INVALID_TRANSACTION_REFERENCE",
+                "$result must be the only field in a result-reference object",
+                { stepIndex = currentStepIndex, path = path }
+            )
+        end
+        local reference = requireObject(value["$result"], path .. ".$result")
+        if currentStepIndex <= 1 then
+            raiseBridgeError(
+                "INVALID_TRANSACTION_REFERENCE",
+                "The first transaction step cannot reference a prior result",
+                { stepIndex = currentStepIndex, path = path }
+            )
+        end
+        if type(reference.step) ~= "number"
+            or reference.step % 1 ~= 0
+            or reference.step < 1
+            or reference.step >= currentStepIndex then
+            raiseBridgeError(
+                "INVALID_TRANSACTION_REFERENCE",
+                "A forward result reference must point to an earlier transaction step",
+                {
+                    stepIndex = currentStepIndex,
+                    referencedStep = reference.step or JSON_NULL,
+                    path = path
+                }
+            )
+        end
+        local segments = requireArray(
+            reference.path,
+            path .. ".$result.path",
+            0,
+            16
+        )
+        for segmentIndex = 1, #segments do
+            local segment = segments[segmentIndex]
+            if type(segment) ~= "string"
+                and (type(segment) ~= "number" or segment % 1 ~= 0) then
+                raiseBridgeError(
+                    "INVALID_TRANSACTION_REFERENCE",
+                    "A result-reference path segment must be a string or integer",
+                    {
+                        stepIndex = currentStepIndex,
+                        path = path,
+                        pathIndex = segmentIndex
+                    }
+                )
+            end
+        end
+        return 1
+    end
+    local count = 0
+    if isSequentialArray(value) then
+        for index = 1, #value do
+            count = count + inspectForwardResultReferences(
+                value[index],
+                currentStepIndex,
+                path .. "[" .. index .. "]"
+            )
+        end
+        return count
+    end
+    for key, nested in pairs(value) do
+        count = count + inspectForwardResultReferences(
+            nested,
+            currentStepIndex,
+            path .. "." .. tostring(key)
+        )
+    end
+    return count
+end
+
+local function validateTransactionSteps(value, path, inspectDependencies)
     local rawSteps = requireArray(value, path, 1, 32)
     local steps = {}
     for index = 1, #rawSteps do
@@ -7691,21 +8197,55 @@ local function validateTransactionSteps(value, path)
                 { stepIndex = index, action = action }
             )
         end
+        local stepPayload =
+            requireObject(rawStep.payload, stepPath .. ".payload")
+        local dependencyCount = 0
+        if inspectDependencies then
+            dependencyCount = inspectForwardResultReferences(
+                stepPayload,
+                index,
+                stepPath .. ".payload"
+            )
+        end
         steps[#steps + 1] = {
             action = action,
-            payload = requireObject(rawStep.payload, stepPath .. ".payload")
+            payload = stepPayload,
+            dependencyCount = dependencyCount
         }
     end
     return steps
 end
 
+local function validateTransactionStepAtUndoBoundary(step, stepIndex)
+    local previousMode = transactionMode
+    transactionMode = "validate"
+    local ok, resultOrError = pcall(
+        invokeActionHandler,
+        step.action,
+        step.payload
+    )
+    transactionMode = previousMode
+    if ok then
+        raiseBridgeError(
+            "TRANSACTION_PREFLIGHT_INCOMPLETE",
+            "A transaction step did not reach its validated undo boundary",
+            { stepIndex = stepIndex, action = step.action }
+        )
+    end
+    if resultOrError ~= TRANSACTION_VALIDATION_SENTINEL then
+        error(resultOrError, 0)
+    end
+end
+
 local function preflightTransaction(steps)
     local scopes = {}
+    local dependentStepCount = 0
     for index = 1, #steps do
         local step = steps[index]
         if #steps > 1
             and (step.action == "delete_track"
-                or step.action == "delete_note_group") then
+                or step.action == "delete_note_group"
+                or step.action == "delete_group_reference") then
             raiseBridgeError(
                 "TRANSACTION_SCOPE_CONFLICT",
                 "Index-shifting deletes must be the only step in a generic transaction",
@@ -7715,97 +8255,74 @@ local function preflightTransaction(steps)
                 }
             )
         end
-        local scope = transactionScopeKey(step.action, step.payload)
-        if scope and scopes[scope] then
-            raiseBridgeError(
-                "TRANSACTION_SCOPE_CONFLICT",
-                "Transaction steps may not mutate the same guarded scope twice",
-                {
-                    scope = scope,
-                    firstStepIndex = scopes[scope],
-                    stepIndex = index,
-                    action = step.action
-                }
-            )
-        end
-        if scope then scopes[scope] = index end
-
-        transactionMode = "validate"
-        local ok, resultOrError = pcall(handlers[step.action], step.payload)
-        transactionMode = nil
-        if ok then
-            raiseBridgeError(
-                "TRANSACTION_PREFLIGHT_INCOMPLETE",
-                "A transaction step did not reach its validated undo boundary",
-                { stepIndex = index, action = step.action }
-            )
-        end
-        if resultOrError ~= TRANSACTION_VALIDATION_SENTINEL then
-            if type(resultOrError) == "table"
-                and getmetatable(resultOrError) == BRIDGE_ERROR_MT then
+        if step.dependencyCount > 0 then
+            dependentStepCount = dependentStepCount + 1
+        else
+            local scope = transactionScopeKey(step.action, step.payload)
+            if scope and scopes[scope] then
                 raiseBridgeError(
-                    resultOrError.code or "TRANSACTION_PREFLIGHT_FAILED",
-                    resultOrError.message or "Transaction preflight failed",
+                    "TRANSACTION_SCOPE_CONFLICT",
+                    "Independent transaction steps may not mutate the same guarded scope twice",
                     {
+                        scope = scope,
+                        firstStepIndex = scopes[scope],
                         stepIndex = index,
-                        action = step.action,
-                        causeDetails = resultOrError.details or JSON_NULL
+                        action = step.action
                     }
                 )
             end
-            raiseBridgeError(
-                "TRANSACTION_PREFLIGHT_FAILED",
-                "Transaction preflight failed before any project change",
-                {
-                    stepIndex = index,
-                    action = step.action,
-                    cause = tostring(resultOrError)
-                }
+            if scope then scopes[scope] = index end
+
+            local ok, resultOrError = pcall(
+                validateTransactionStepAtUndoBoundary,
+                step,
+                index
             )
+            if not ok then
+                if type(resultOrError) == "table"
+                    and getmetatable(resultOrError) == BRIDGE_ERROR_MT then
+                    raiseBridgeError(
+                        resultOrError.code or "TRANSACTION_PREFLIGHT_FAILED",
+                        resultOrError.message or "Transaction preflight failed",
+                        {
+                            stepIndex = index,
+                            action = step.action,
+                            causeDetails = resultOrError.details or JSON_NULL
+                        }
+                    )
+                end
+                raiseBridgeError(
+                    "TRANSACTION_PREFLIGHT_FAILED",
+                    "Transaction preflight failed before any project change",
+                    {
+                        stepIndex = index,
+                        action = step.action,
+                        cause = tostring(resultOrError)
+                    }
+                )
+            end
         end
     end
+    return {
+        dependentStepCount = dependentStepCount,
+        fullyPreflightedBeforeWrite = dependentStepCount == 0
+    }
 end
 
-local function executeTransactionSteps(steps)
-    preflightTransaction(steps)
-    local project = SV:getProject()
-    if not project then
-        raiseBridgeError("PROJECT_UNAVAILABLE", "No Synthesizer V project is open")
-    end
-    createUndoRecord(project)
-    local results = json.array()
-    transactionMode = "execute"
-    local ok, resultOrError = xpcall(function()
-        for index = 1, #steps do
-            results[#results + 1] = handlers[steps[index].action](steps[index].payload)
-        end
-        return results
-    end, function(errorValue)
-        return errorValue
-    end)
-    transactionMode = nil
-    if not ok then
-        if type(resultOrError) == "table"
-            and getmetatable(resultOrError) == BRIDGE_ERROR_MT then
-            error(resultOrError, 0)
-        end
-        raiseBridgeError(
-            "TRANSACTION_EXECUTION_FAILED",
-            "SynthV rejected a prevalidated transaction during execution",
-            {
-                cause = tostring(resultOrError),
-                undoGuidance = "Use SynthV Edit > Undo to revert the transaction."
-            }
-        )
-    end
-    return results
-end
-
-local function resolveResultReferences(value, results, path)
+local function resolveResultReferences(value, results, path, errorCode)
     if value == JSON_NULL or type(value) ~= "table" then
         return value
     end
     if isObject(value) and isProvided(value["$result"]) then
+        local keyCount = 0
+        for _key, _nested in pairs(value) do keyCount = keyCount + 1 end
+        if keyCount ~= 1 then
+            raiseBridgeError(
+                errorCode or "INVALID_TRANSACTION_REFERENCE",
+                "$result must be the only field in a result-reference object",
+                { path = path }
+            )
+        end
         local reference = requireObject(value["$result"], path .. ".$result")
         local stepIndex = requireInteger(
             reference.step,
@@ -7825,14 +8342,14 @@ local function resolveResultReferences(value, results, path)
             if type(segment) ~= "string"
                 and (type(segment) ~= "number" or segment % 1 ~= 0) then
                 raiseBridgeError(
-                    "INVALID_ROLLBACK_REFERENCE",
-                    "A rollback result-reference path segment must be a string or integer"
+                    errorCode or "INVALID_TRANSACTION_REFERENCE",
+                    "A result-reference path segment must be a string or integer"
                 )
             end
             if type(current) ~= "table" or current[segment] == nil then
                 raiseBridgeError(
-                    "INVALID_ROLLBACK_REFERENCE",
-                    "A rollback result-reference path does not exist",
+                    errorCode or "INVALID_TRANSACTION_REFERENCE",
+                    "A result-reference path does not exist",
                     {
                         stepIndex = stepIndex,
                         pathIndex = segmentIndex,
@@ -7850,7 +8367,8 @@ local function resolveResultReferences(value, results, path)
             result[index] = resolveResultReferences(
                 value[index],
                 results,
-                path .. "[" .. index .. "]"
+                path .. "[" .. index .. "]",
+                errorCode
             )
         end
         return result
@@ -7860,24 +8378,105 @@ local function resolveResultReferences(value, results, path)
         result[key] = resolveResultReferences(
             nested,
             results,
-            path .. "." .. tostring(key)
+            path .. "." .. tostring(key),
+            errorCode
         )
     end
     return result
 end
 
+local function executeTransactionSteps(steps)
+    local preflight = preflightTransaction(steps)
+    local project = SV:getProject()
+    if not project then
+        raiseBridgeError("PROJECT_UNAVAILABLE", "No Synthesizer V project is open")
+    end
+    createUndoRecord(project)
+    local results = json.array()
+    local completedStepCount = 0
+    local failedStepIndex = nil
+    local failedAction = nil
+    local failurePhase = nil
+    transactionMode = "execute"
+    local ok, resultOrError = xpcall(function()
+        for index = 1, #steps do
+            local rawStep = steps[index]
+            failedStepIndex = index
+            failedAction = rawStep.action
+            local step = rawStep
+            if rawStep.dependencyCount > 0 then
+                failurePhase = "resolveDependencies"
+                step = {
+                    action = rawStep.action,
+                    payload = resolveResultReferences(
+                        rawStep.payload,
+                        results,
+                        "steps[" .. index .. "].payload",
+                        "INVALID_TRANSACTION_REFERENCE"
+                    ),
+                    dependencyCount = rawStep.dependencyCount
+                }
+                failurePhase = "dependentPreflight"
+                validateTransactionStepAtUndoBoundary(step, index)
+            end
+            failurePhase = "execute"
+            transactionMode = "execute"
+            results[#results + 1] =
+                invokeActionHandler(step.action, step.payload)
+            completedStepCount = index
+        end
+        return results
+    end, function(errorValue)
+        return errorValue
+    end)
+    transactionMode = nil
+    if not ok then
+        local originalCode = nil
+        local originalMessage = tostring(resultOrError)
+        local originalDetails = JSON_NULL
+        if type(resultOrError) == "table"
+            and getmetatable(resultOrError) == BRIDGE_ERROR_MT then
+            originalCode = resultOrError.code
+            originalMessage = resultOrError.message or originalMessage
+            originalDetails = resultOrError.details or JSON_NULL
+        end
+        local partialWritePossible =
+            completedStepCount > 0 or failurePhase == "execute"
+        raiseBridgeError(
+            "TRANSACTION_EXECUTION_FAILED",
+            "A single-Undo transaction failed after execution began",
+            {
+                failedStepIndex = failedStepIndex or JSON_NULL,
+                failedAction = failedAction or JSON_NULL,
+                failurePhase = failurePhase or JSON_NULL,
+                completedStepCount = completedStepCount,
+                originalCode = originalCode or JSON_NULL,
+                originalMessage = originalMessage,
+                originalDetails = originalDetails,
+                partialWritePossible = partialWritePossible,
+                undoRequired = partialWritePossible,
+                undoGuidance = partialWritePossible
+                    and "Use SynthV Edit > Undo once to revert this transaction."
+                    or JSON_NULL
+            }
+        )
+    end
+    return results, preflight
+end
+
 function handlers.apply_transaction(payload)
     payload = requireObject(payload, "payload")
     local summary = requireString(payload.summary, "summary", false)
-    local steps = validateTransactionSteps(payload.steps, "steps")
+    local steps = validateTransactionSteps(payload.steps, "steps", true)
     local rawRollbackSteps = nil
     if isProvided(payload.rollbackSteps) then
         rawRollbackSteps = validateTransactionSteps(
             payload.rollbackSteps,
-            "rollbackSteps"
+            "rollbackSteps",
+            false
         )
     end
-    local results = executeTransactionSteps(steps)
+    local results, execution = executeTransactionSteps(steps)
     runtimeState.transactionRevision = runtimeState.transactionRevision + 1
     local transactionId =
         SESSION_TOKEN .. "-tx-" .. tostring(runtimeState.transactionRevision)
@@ -7892,7 +8491,8 @@ function handlers.apply_transaction(payload)
                     payload = resolveResultReferences(
                         rawRollbackSteps[index].payload,
                         results,
-                        "rollbackSteps[" .. index .. "].payload"
+                        "rollbackSteps[" .. index .. "].payload",
+                        "INVALID_ROLLBACK_REFERENCE"
                     )
                 }
             end
@@ -7916,7 +8516,10 @@ function handlers.apply_transaction(payload)
         results = results,
         rollbackAvailable = rollbackAvailable,
         rollbackError = rollbackError or JSON_NULL,
-        undoRecordCount = 1
+        undoRecordCount = 1,
+        atomicity = "singleUndoRecord",
+        dependentStepCount = execution.dependentStepCount,
+        fullyPreflightedBeforeWrite = execution.fullyPreflightedBeforeWrite
     }
 end
 
@@ -7945,8 +8548,12 @@ function handlers.rollback_transaction(payload)
             }
         )
     end
-    local steps = validateTransactionSteps(stored.steps, "storedRollbackSteps")
-    local results = executeTransactionSteps(steps)
+    local steps = validateTransactionSteps(
+        stored.steps,
+        "storedRollbackSteps",
+        false
+    )
+    local results, execution = executeTransactionSteps(steps)
     runtimeState.rollbackTransactions[transactionId] = nil
     return {
         transactionId = transactionId,
@@ -7954,7 +8561,10 @@ function handlers.rollback_transaction(payload)
         originalSummary = stored.summary,
         stepCount = #steps,
         results = results,
-        undoRecordCount = 1
+        undoRecordCount = 1,
+        atomicity = "singleUndoRecord",
+        dependentStepCount = execution.dependentStepCount,
+        fullyPreflightedBeforeWrite = execution.fullyPreflightedBeforeWrite
     }
 end
 
@@ -7998,6 +8608,7 @@ PROJECT_WRITE_ACTIONS = {
     add_track = true,
     update_track = true,
     clone_track = true,
+    clone_track_shell = true,
     delete_track = true,
     update_group = true,
     set_group_voice = true,
@@ -8067,6 +8678,7 @@ local function processRequestFile()
         requestId = validatedRequestId
         processedAction = action
         processedPayload = payload
+        validateSharedGroupWriteSafety(action, payload)
         return handler(payload)
     end, normalizeError)
 
