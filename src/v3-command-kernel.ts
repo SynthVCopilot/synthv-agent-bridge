@@ -36,6 +36,7 @@ const TRACE_METADATA_KEYS = new Set([
   "tool",
   "requestBytes",
   "responseBytes",
+  "responseCharacters",
   "durationMs",
   "luaTotalMs",
   "cache",
@@ -46,6 +47,9 @@ const TRACE_METADATA_KEYS = new Set([
   "comparedItemCount",
   "differenceCount",
   "privateFieldCount",
+  "budgetExceeded",
+  "budgetClass",
+  "projectionStrategy",
 ]);
 const MAX_TRACE_STAGES = 64;
 

@@ -624,6 +624,17 @@ local function responseMode(payload)
     return mode
 end
 
+local function pageArray(values, offset, limit)
+    local page = json.array()
+    local totalCount = #values
+    local firstIndex = math.min(totalCount + 1, offset + 1)
+    local lastIndex = math.min(totalCount, offset + limit)
+    for index = firstIndex, lastIndex do
+        page[#page + 1] = values[index]
+    end
+    return page, #page, lastIndex < totalCount
+end
+
 local function safeCall(callback, fallback)
     local ok, result = pcall(callback)
     if ok then
@@ -3471,9 +3482,39 @@ function handlers.get_project_info(_payload)
     return result
 end
 
-function handlers.get_time_axis(_payload)
+function handlers.get_time_axis(payload)
+    payload = requireObject(payload or {}, "payload")
     local project = getProject()
     local result = serializeTimeAxis(project:getTimeAxis())
+    local tempoOffset = optionalInteger(payload.tempoOffset, "tempoOffset", 0, nil, 0)
+    local tempoLimit = optionalInteger(payload.tempoLimit, "tempoLimit", 1, 1000, 128)
+    local measureOffset = optionalInteger(payload.measureOffset, "measureOffset", 0, nil, 0)
+    local measureLimit = optionalInteger(payload.measureLimit, "measureLimit", 1, 1000, 128)
+    local tempoMarks, returnedTempoMarkCount, tempoHasMore =
+        pageArray(result.tempoMarks, tempoOffset, tempoLimit)
+    local measureMarks, returnedMeasureMarkCount, measureHasMore =
+        pageArray(result.measureMarks, measureOffset, measureLimit)
+    result.tempoMarks = tempoMarks
+    result.measureMarks = measureMarks
+    result.returnedTempoMarkOffset = tempoOffset
+    result.returnedTempoMarkCount = returnedTempoMarkCount
+    result.returnedMeasureMarkOffset = measureOffset
+    result.returnedMeasureMarkCount = returnedMeasureMarkCount
+    result.hasMore = tempoHasMore or measureHasMore
+    result.page = {
+        tempoOffset = tempoOffset,
+        tempoLimit = tempoLimit,
+        returnedTempoMarkCount = returnedTempoMarkCount,
+        nextTempoOffset = tempoHasMore
+            and tempoOffset + returnedTempoMarkCount
+            or JSON_NULL,
+        measureOffset = measureOffset,
+        measureLimit = measureLimit,
+        returnedMeasureMarkCount = returnedMeasureMarkCount,
+        nextMeasureOffset = measureHasMore
+            and measureOffset + returnedMeasureMarkCount
+            or JSON_NULL
+    }
     result.projectFile = project:getFileName() or ""
     result.projectDurationBlicks = project:getDuration()
     result.projectDurationSeconds = project:getTimeAxis():getSecondsFromBlick(project:getDuration())
@@ -3761,28 +3802,62 @@ function handlers.set_time_axis(payload)
     return result
 end
 
-function handlers.list_tracks(_payload)
+function handlers.list_tracks(payload)
+    payload = requireObject(payload or {}, "payload")
     local project = getProject()
+    local offset = optionalInteger(payload.offset, "offset", 0, nil, 0)
+    local limit = optionalInteger(payload.limit, "limit", 1, 1000, 128)
+    local trackCount = project:getNumTracks()
     local tracks = json.array()
-    for trackIndex = 1, project:getNumTracks() do
+    local firstIndex = math.min(trackCount + 1, offset + 1)
+    local lastIndex = math.min(trackCount, offset + limit)
+    for trackIndex = firstIndex, lastIndex do
         tracks[#tracks + 1] = serializeTrackSummary(project:getTrack(trackIndex), trackIndex)
     end
     return {
-        trackCount = #tracks,
-        tracks = tracks
+        trackCount = trackCount,
+        tracks = tracks,
+        returnedTrackOffset = offset,
+        returnedTrackCount = #tracks,
+        hasMore = lastIndex < trackCount,
+        page = {
+            offset = offset,
+            limit = limit,
+            returnedCount = #tracks,
+            nextOffset = lastIndex < trackCount
+                and offset + #tracks
+                or JSON_NULL
+        }
     }
 end
 
-function handlers.list_note_groups(_payload)
+function handlers.list_note_groups(payload)
+    payload = requireObject(payload or {}, "payload")
     local project = getProject()
+    local offset = optionalInteger(payload.offset, "offset", 0, nil, 0)
+    local limit = optionalInteger(payload.limit, "limit", 1, 1000, 128)
+    local groupCount = project:getNumNoteGroupsInLibrary()
     local groups = json.array()
-    for libraryIndex = 1, project:getNumNoteGroupsInLibrary() do
+    local firstIndex = math.min(groupCount + 1, offset + 1)
+    local lastIndex = math.min(groupCount, offset + limit)
+    for libraryIndex = firstIndex, lastIndex do
         groups[#groups + 1] =
             serializeLibraryGroup(project, project:getNoteGroup(libraryIndex), libraryIndex)
     end
     return {
-        groupCount = #groups,
-        groups = groups
+        groupCount = groupCount,
+        groups = groups,
+        returnedGroupOffset = offset,
+        returnedGroupCount = #groups,
+        hasMore = lastIndex < groupCount,
+        page = {
+            offset = offset,
+            limit = limit,
+            returnedCount = #groups,
+            nextOffset = lastIndex < groupCount
+                and offset + #groups
+                or JSON_NULL
+        }
     }
 end
 
@@ -3989,16 +4064,48 @@ end
 function handlers.get_track_notes(payload)
     requireObject(payload, "payload")
     local project, track, trackIndex = resolveTrack(payload)
+    local groupCount = track:getNumGroups()
+    local groupOffset = optionalInteger(payload.groupOffset, "groupOffset", 0, nil, 0)
+    local groupLimit = optionalInteger(payload.groupLimit, "groupLimit", 1, 128, 1)
     local offset = optionalInteger(payload.offset, "offset", 0, nil, 0)
-    local limit = optionalInteger(payload.limit, "limit", 1, 5000, 1000)
+    local limit = optionalInteger(payload.limit, "limit", 1, 5000, 64)
+    local requestedGroupIndex = optionalInteger(
+        payload.groupIndex,
+        "groupIndex",
+        1,
+        groupCount
+    )
     local groups = json.array()
-    for groupIndex = 1, track:getNumGroups() do
+    local firstGroupIndex = requestedGroupIndex
+        or math.min(groupCount + 1, groupOffset + 1)
+    local lastGroupIndex = requestedGroupIndex
+        or math.min(groupCount, groupOffset + groupLimit)
+    for groupIndex = firstGroupIndex, lastGroupIndex do
         groups[#groups + 1] = serializeGroup(track:getGroupReference(groupIndex), groupIndex, offset, limit)
     end
+    local groupHasMore = requestedGroupIndex == nil and lastGroupIndex < groupCount
     return {
         projectFile = project:getFileName() or "",
         trackIndex = trackIndex,
         track = serializeTrackSummary(track, trackIndex),
+        groupCount = groupCount,
+        returnedGroupOffset = requestedGroupIndex
+            and requestedGroupIndex - 1
+            or groupOffset,
+        returnedGroupCount = #groups,
+        hasMore = groupHasMore,
+        page = {
+            groupOffset = requestedGroupIndex
+                and requestedGroupIndex - 1
+                or groupOffset,
+            groupLimit = requestedGroupIndex and 1 or groupLimit,
+            returnedGroupCount = #groups,
+            nextGroupOffset = groupHasMore
+                and groupOffset + #groups
+                or JSON_NULL,
+            noteOffset = offset,
+            noteLimit = limit
+        },
         groups = groups
     }
 end
@@ -4077,7 +4184,7 @@ function handlers.get_note_phoneme_data(payload)
     local mode = responseMode(payload)
     local project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
     local offset = optionalInteger(payload.offset, "offset", 0, nil, 0)
-    local limit = optionalInteger(payload.limit, "limit", 1, 1000, 1000)
+    local limit = optionalInteger(payload.limit, "limit", 1, 1000, 64)
     local includeComputedPhonemes = optionalBoolean(
         payload.includeComputedPhonemes,
         "includeComputedPhonemes"
@@ -5045,7 +5152,7 @@ function handlers.get_phrase_context(payload)
         "limit",
         1,
         256,
-        128
+        64
     )
     if hasMultipleRanges then
         phrasePayload.noteIndices = multiRange.noteIndices
@@ -5633,6 +5740,12 @@ end
 function handlers.get_computed_group_data(payload)
     payload = requireObject(payload, "payload")
     local _project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
+    local offset = optionalInteger(payload.offset, "offset", 0, nil, 0)
+    local limit = optionalInteger(payload.limit, "limit", 1, 1000, 64)
+    local noteCount = group:getNumNotes()
+    local firstIndex = math.min(noteCount + 1, offset + 1)
+    local lastIndex = math.min(noteCount, offset + limit)
+    local requestedNoteCount = math.max(0, lastIndex - firstIndex + 1)
     local includeAttributes = optionalBoolean(payload.includeAttributes, "includeAttributes")
     if includeAttributes == nil then
         includeAttributes = true
@@ -5641,25 +5754,59 @@ function handlers.get_computed_group_data(payload)
     local result = {
         trackIndex = trackIndex,
         groupIndex = groupIndex,
-        groupUuid = group:getUUID()
+        groupUuid = group:getUUID(),
+        noteCount = noteCount,
+        returnedNoteOffset = offset,
+        requestedNoteCount = requestedNoteCount
     }
 
+    local derivedPending = false
+    local returnedNoteCount = requestedNoteCount
     if includeAttributes then
         local rawPhonemes = SV:getPhonemesForGroup(reference)
         local computedPhonemes = json.array()
-        for index = 1, #rawPhonemes do
+        for index = firstIndex, math.min(lastIndex, #rawPhonemes) do
             computedPhonemes[#computedPhonemes + 1] = rawPhonemes[index]
         end
         local rawAttributes = SV:getComputedAttributesForGroup(reference)
         local computedAttributes = json.array()
-        for index = 1, #rawAttributes do
+        for index = firstIndex, math.min(lastIndex, #rawAttributes) do
             computedAttributes[#computedAttributes + 1] = sanitizeForJson(rawAttributes[index])
         end
         result.computedPhonemes = computedPhonemes
-        result.phonemesPending = group:getNumNotes() > 0 and #computedPhonemes == 0
+        result.phonemesPending =
+            requestedNoteCount > 0 and #rawPhonemes < lastIndex
         result.computedAttributes = computedAttributes
-        result.attributesPending = group:getNumNotes() > 0 and #computedAttributes == 0
+        result.attributesPending =
+            requestedNoteCount > 0 and #rawAttributes < lastIndex
+        result.returnedPhonemeCount = #computedPhonemes
+        result.returnedAttributeCount = #computedAttributes
+        derivedPending = result.phonemesPending or result.attributesPending
+        if derivedPending then
+            returnedNoteCount = 0
+        else
+            returnedNoteCount = math.min(
+                requestedNoteCount,
+                #computedPhonemes,
+                #computedAttributes
+            )
+        end
     end
+
+    result.returnedNoteCount = returnedNoteCount
+    result.hasMore = not derivedPending and lastIndex < noteCount
+    result.page = {
+        offset = offset,
+        limit = limit,
+        requestedCount = requestedNoteCount,
+        returnedCount = returnedNoteCount,
+        nextOffset = derivedPending
+            and offset
+            or (lastIndex < noteCount
+                and offset + returnedNoteCount
+                or JSON_NULL),
+        retryOffset = derivedPending and offset or JSON_NULL
+    }
 
     if isProvided(payload.pitchSample) then
         local sample = requireObject(payload.pitchSample, "pitchSample")
@@ -7233,7 +7380,23 @@ end
 function handlers.get_pitch_controls(payload)
     payload = requireObject(payload, "payload")
     local _project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
-    local controls = serializePitchControls(group)
+    local offset = optionalInteger(payload.offset, "offset", 0, nil, 0)
+    local limit = optionalInteger(payload.limit, "limit", 1, 1000, 64)
+    local pitchControlCount = safeCall(function()
+        return group:getNumPitchControls()
+    end, 0)
+    local controls = json.array()
+    local firstIndex = math.min(pitchControlCount + 1, offset + 1)
+    local lastIndex = math.min(pitchControlCount, offset + limit)
+    for controlIndex = firstIndex, lastIndex do
+        controls[#controls + 1] = serializePitchControl(
+            group,
+            group:getPitchControl(controlIndex),
+            controlIndex
+        )
+    end
+    local returnedPitchControlCount = #controls
+    local hasMore = lastIndex < pitchControlCount
     if isProvided(payload.sampleOffsets) then
         local rawOffsets = requireArray(payload.sampleOffsets, "sampleOffsets", 1, 10000)
         local offsets = {}
@@ -7243,7 +7406,8 @@ function handlers.get_pitch_controls(payload)
         end
         for controlIndex = 1, #controls do
             if controls[controlIndex].kind == "curve" then
-                local control = group:getPitchControl(controlIndex)
+                local control =
+                    group:getPitchControl(controls[controlIndex].pitchControlIndex)
                 local samples = json.array()
                 for offsetIndex = 1, #offsets do
                     samples[#samples + 1] = {
@@ -7259,7 +7423,18 @@ function handlers.get_pitch_controls(payload)
         trackIndex = trackIndex,
         groupIndex = groupIndex,
         groupUuid = group:getUUID(),
-        pitchControlCount = #controls,
+        pitchControlCount = pitchControlCount,
+        returnedPitchControlOffset = offset,
+        returnedPitchControlCount = returnedPitchControlCount,
+        hasMore = hasMore,
+        page = {
+            offset = offset,
+            limit = limit,
+            returnedCount = returnedPitchControlCount,
+            nextOffset = hasMore
+                and offset + returnedPitchControlCount
+                or JSON_NULL
+        },
         pitchControls = controls
     }
 end
@@ -7408,6 +7583,7 @@ end
 
 function handlers.get_automation(payload)
     payload = requireObject(payload, "payload")
+    local mode = responseMode(payload)
     local _project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
     local parameterName = requireString(payload.parameter, "parameter", false)
     local automation, serialized = serializeAutomation(group, parameterName)
@@ -7434,6 +7610,8 @@ function handlers.get_automation(payload)
             beginPosition = rangeBegin,
             endPosition = rangeEnd
         }
+    elseif mode == "compact" then
+        serialized.points = nil
     end
     serialized.trackIndex = trackIndex
     serialized.groupIndex = groupIndex

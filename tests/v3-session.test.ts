@@ -94,7 +94,6 @@ test("v3 rejects an old write context through the public MCP path after session 
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "synthv-v3-session-test-"),
   );
-  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
   const config = loadConfig(
     {
       SYNTHV_AGENT_BRIDGE_DIR: directory,
@@ -117,6 +116,7 @@ test("v3 rejects an old write context through the public MCP path after session 
   context.after(async () => {
     await client.close();
     await server.close();
+    await fs.rm(directory, { recursive: true, force: true });
   });
 
   const bridge = serveTrackList(config);
@@ -158,7 +158,6 @@ test("v3 public command blocks a mismatched active executor before project IPC",
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "synthv-v3-build-test-"),
   );
-  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
   const config = loadConfig(
     {
       SYNTHV_AGENT_BRIDGE_DIR: directory,
@@ -186,6 +185,7 @@ test("v3 public command blocks a mismatched active executor before project IPC",
   context.after(async () => {
     await client.close();
     await server.close();
+    await fs.rm(directory, { recursive: true, force: true });
   });
 
   const commandResult = await client.callTool({

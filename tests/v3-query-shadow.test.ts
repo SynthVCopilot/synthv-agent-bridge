@@ -12,7 +12,14 @@ import { EXECUTOR_BUILD_ID } from "../src/build-info.js";
 import { loadConfig, type BridgeConfig } from "../src/config.js";
 import { parseBridgeRequest } from "../src/protocol.js";
 import { createServer } from "../src/server.js";
-import { shadowQueryProjection } from "../src/v3-query-projector.js";
+import {
+  enforceQueryResponseBudget,
+  prepareQueryArguments,
+  projectQueryResult,
+  queryProjectionActionNames,
+  queryProjectionPolicy,
+  shadowQueryProjection,
+} from "../src/v3-query-projector.js";
 
 const sleep = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -46,6 +53,7 @@ async function serveRead(
   config: BridgeConfig,
   expectedAction: string,
   result: Record<string, unknown>,
+  inspectPayload?: (payload: Record<string, unknown>) => void,
 ): Promise<number> {
   while (true) {
     try {
@@ -62,6 +70,7 @@ async function serveRead(
     JSON.parse(await fs.readFile(config.paths.processingFile, "utf8")),
   );
   assert.equal(request.action, expectedAction);
+  inspectPayload?.(request.payload);
   await writeJsonAtomically(config.paths.responseFile, {
     v: 3,
     id: request.requestId,
@@ -169,6 +178,426 @@ function toolJson(result: unknown): Record<string, unknown> {
   return JSON.parse(text as string) as Record<string, unknown>;
 }
 
+const EXPECTED_QUERY_ACTIONS = [
+  "convert_pitch",
+  "get_project_info",
+  "inspect_score_file",
+  "get_time_axis",
+  "convert_time",
+  "list_tracks",
+  "list_note_groups",
+  "get_track_notes",
+  "get_group_voice",
+  "get_note_phoneme_data",
+  "get_phrase_context",
+  "get_computed_group_data",
+  "get_note_retakes",
+  "get_pitch_controls",
+  "get_automation",
+  "sample_automation",
+  "get_track_mixer",
+] as const;
+
+test("v3 Query policy classifies every public read Action", () => {
+  assert.deepEqual(
+    [...queryProjectionActionNames()].sort(),
+    [...EXPECTED_QUERY_ACTIONS].sort(),
+  );
+  assert.equal(queryProjectionPolicy("convert_pitch").strategy, "fixed");
+  assert.equal(queryProjectionPolicy("list_tracks").strategy, "offsetPage");
+  assert.equal(queryProjectionPolicy("get_phrase_context").strategy, "cursorPage");
+  assert.equal(queryProjectionPolicy("get_automation").strategy, "rangeSummary");
+  assert.equal(
+    queryProjectionPolicy("sample_automation").strategy,
+    "explicitBounded",
+  );
+  assert.throws(
+    () => queryProjectionPolicy("unknown_read"),
+    /No v3 Query projection policy/u,
+  );
+});
+
+test("v3 Query policy registry exactly matches the live sv_describe read catalog", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "synthv-v3-query-policy-catalog-"),
+  );
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const server = createServer(loadConfig({}, directory));
+  const client = new Client({
+    name: "v3-query-policy-catalog-test",
+    version: "1.0.0",
+  });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  context.after(async () => {
+    await client.close();
+    await server.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  const described = toolJson(
+    await client.callTool({
+      name: "sv_describe",
+      arguments: {},
+    }),
+  );
+  const categories = described.categories as {
+    readonly read: readonly string[];
+  };
+  assert.deepEqual(
+    [...queryProjectionActionNames()].sort(),
+    [...categories.read].sort(),
+  );
+});
+
+test("v3 Query policy applies bounded defaults without treating them as caller scope", () => {
+  assert.deepEqual(prepareQueryArguments("list_tracks", {}), {
+    args: { offset: 0, limit: 128 },
+    explicitlyScoped: false,
+  });
+  assert.deepEqual(prepareQueryArguments("get_track_notes", { trackIndex: 1 }), {
+    args: {
+      trackIndex: 1,
+      groupOffset: 0,
+      groupLimit: 1,
+      offset: 0,
+      limit: 64,
+    },
+    explicitlyScoped: false,
+  });
+  assert.deepEqual(
+    prepareQueryArguments("get_phrase_context", {
+      trackIndex: 1,
+      limit: 12,
+    }),
+    {
+      args: { trackIndex: 1, offset: 0, limit: 12 },
+      explicitlyScoped: true,
+    },
+  );
+  assert.deepEqual(prepareQueryArguments("get_time_axis", {}), {
+    args: {
+      tempoOffset: 0,
+      tempoLimit: 128,
+      measureOffset: 0,
+      measureLimit: 128,
+    },
+    explicitlyScoped: false,
+  });
+  assert.equal(
+    prepareQueryArguments("sample_automation", {
+      trackIndex: 1,
+      groupIndex: 1,
+      parameter: "loudness",
+      positions: [0],
+    }).explicitlyScoped,
+    true,
+  );
+});
+
+test("shared v3 Query Projector preserves compact phrase and dense-row semantics", () => {
+  const root: Record<string, unknown> = {
+    trackIndex: 1,
+    notes: Array.from({ length: 24 }, (_, index) => ({
+      noteIndex: index + 1,
+      onset: index * 10,
+      duration: 10,
+      endPosition: index * 10 + 10,
+      absoluteOnset: index * 10,
+      absoluteEnd: index * 10 + 10,
+      absoluteOnsetSeconds: index / 10,
+      absoluteEndSeconds: (index + 1) / 10,
+      absoluteDurationSeconds: 0.1,
+      pitch: 60,
+      absolutePitch: 60,
+    })),
+    voice: { parameters: {} },
+    analysis: { gapCount: 0 },
+    recommendations: [{ noteIndex: 1 }],
+    contextId: "ctx_phrase",
+  };
+  const result = projectQueryResult("get_phrase_context", root, {
+    include: ["notes", "analysis"],
+    dense: "auto",
+    debug: false,
+    explicitlyScoped: true,
+  });
+
+  assert.deepEqual(Object.keys(result.publicProjection).sort(), [
+    "analysis",
+    "contextId",
+    "noteDefaults",
+    "noteFormat",
+    "notes",
+    "trackIndex",
+  ]);
+  assert.equal(result.publicProjection.noteFormat, "rows");
+  const notes = result.publicProjection.notes as {
+    readonly columns: readonly string[];
+    readonly rows: readonly unknown[][];
+  };
+  assert.ok(notes.columns.includes("noteIndex"));
+  assert.equal(notes.columns.includes("absoluteOnset"), false);
+  assert.equal(notes.rows.length, 24);
+  assert.equal(
+    result.responseCharacters,
+    JSON.stringify({
+      traceId: "tr_0000000000000000",
+      ...result.publicProjection,
+    }).length,
+  );
+  assert.equal(result.budgetClass, "explicitScope");
+  assert.equal(result.budgetExceeded, false);
+});
+
+test("computed-data projection preserves retry-critical pending state", () => {
+  const result = projectQueryResult(
+    "get_computed_group_data",
+    {
+      noteCount: 42,
+      returnedNoteOffset: 0,
+      returnedNoteCount: 0,
+      computedPhonemes: [],
+      computedAttributes: [],
+      phonemesPending: true,
+      attributesPending: true,
+      page: {
+        offset: 0,
+        limit: 64,
+        requestedCount: 42,
+        returnedCount: 0,
+        nextOffset: 0,
+        retryOffset: 0,
+      },
+    },
+    {
+      dense: "never",
+      debug: false,
+      explicitlyScoped: false,
+    },
+  );
+
+  assert.equal(result.publicProjection.phonemesPending, true);
+  assert.equal(result.publicProjection.attributesPending, true);
+  assert.deepEqual(
+    (result.publicProjection.page as Record<string, unknown>).retryOffset,
+    0,
+  );
+});
+
+test("ordinary v3 Query responses fail closed above the model-facing budget", () => {
+  const largeRoot = {
+    trackIndex: 1,
+    notes: [{ noteIndex: 1, lyrics: "x".repeat(21_000) }],
+  };
+  const ordinary = projectQueryResult(
+    "get_phrase_context",
+    structuredClone(largeRoot),
+    {
+      include: ["notes"],
+      dense: "never",
+      debug: false,
+      explicitlyScoped: false,
+    },
+  );
+  assert.equal(ordinary.budgetClass, "ordinary");
+  assert.equal(ordinary.budgetExceeded, true);
+  assert.throws(
+    () => enforceQueryResponseBudget("get_phrase_context", ordinary),
+    (error: unknown) => {
+      const value = error as {
+        readonly code?: string;
+        readonly details?: Record<string, unknown>;
+      };
+      assert.equal(value.code, "QUERY_RESPONSE_BUDGET_EXCEEDED");
+      assert.equal(value.details?.budgetCharacters, 20_000);
+      assert.equal(
+        JSON.stringify(value).includes("x".repeat(100)),
+        false,
+      );
+      return true;
+    },
+  );
+
+  const explicit = projectQueryResult(
+    "get_phrase_context",
+    structuredClone(largeRoot),
+    {
+      include: ["notes"],
+      dense: "never",
+      debug: false,
+      explicitlyScoped: true,
+    },
+  );
+  assert.equal(explicit.budgetExceeded, true);
+  assert.equal(explicit.budgetClass, "explicitScope");
+  assert.ok(explicit.responseCharacters > 20_000);
+  assert.doesNotThrow(() =>
+    enforceQueryResponseBudget("get_phrase_context", explicit),
+  );
+});
+
+test("sv_query returns a bounded public failure instead of an oversized default payload", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "synthv-v3-query-budget-"),
+  );
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const config = loadConfig(
+    {
+      SYNTHV_AGENT_BRIDGE_DIR: directory,
+      SYNTHV_AGENT_BRIDGE_TIMEOUT_MS: "2000",
+      SYNTHV_AGENT_BRIDGE_POLL_MS: "5",
+      SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS: "3000",
+    },
+    directory,
+  );
+  await writeStatus(config);
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const server = createServer(config);
+  const client = new Client({
+    name: "v3-query-budget-test",
+    version: "1.0.0",
+  });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  context.after(async () => {
+    await client.close();
+    await server.close();
+  });
+
+  const privateLyrics = "private-lyric-".repeat(2_000);
+  const bridge = serveRead(config, "get_phrase_context", {
+    trackIndex: 1,
+    groupIndex: 1,
+    groupUuid: "private-group-uuid",
+    notes: [
+      {
+        noteIndex: 1,
+        pitch: 60,
+        lyrics: privateLyrics,
+        fingerprint: "private-note-fingerprint",
+      },
+    ],
+    voice: { referenceFingerprint: "private-reference-fingerprint" },
+    automation: [],
+    analysis: { gapCount: 0 },
+  });
+  const result = await client.callTool({
+    name: "sv_query",
+    arguments: {
+      action: "get_phrase_context",
+      args: { trackIndex: 1, groupIndex: 1 },
+      contextMode: "readOnly",
+    },
+  });
+  assert.equal(await bridge, 1);
+  const failure = toolJson(result);
+  assert.equal(failure.outcome, "failed");
+  const error = failure.error as Record<string, unknown>;
+  assert.equal(error.code, "QUERY_RESPONSE_BUDGET_EXCEEDED");
+  assert.equal(failure.phase, "projected");
+  const serialized = JSON.stringify(failure);
+  assert.ok(serialized.length <= 4_096);
+  assert.doesNotMatch(serialized, /private-lyric/u);
+  assert.doesNotMatch(serialized, /private-note-fingerprint/u);
+
+  const diagnostics = toolJson(
+    await client.callTool({
+      name: "sv_status",
+      arguments: {
+        operation: "diagnostics",
+        level: "debug",
+        traceId: failure.traceId,
+        limit: 1,
+      },
+    }),
+  );
+  const observability = diagnostics.observability as {
+    readonly traces: readonly {
+      readonly stages: readonly {
+        readonly stage: string;
+        readonly metadata?: Record<string, unknown>;
+      }[];
+    }[];
+  };
+  const queryProjected = observability.traces[0]?.stages.find(
+    (stage) => stage.stage === "queryProjected",
+  );
+  assert.equal(queryProjected?.metadata?.budgetClass, "ordinary");
+  assert.equal(queryProjected?.metadata?.budgetExceeded, true);
+  assert.equal(typeof queryProjected?.metadata?.responseCharacters, "number");
+});
+
+test("irrelevant top-level include cannot bypass the ordinary Query budget", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "synthv-v3-query-include-budget-"),
+  );
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const config = loadConfig(
+    {
+      SYNTHV_AGENT_BRIDGE_DIR: directory,
+      SYNTHV_AGENT_BRIDGE_TIMEOUT_MS: "2000",
+      SYNTHV_AGENT_BRIDGE_POLL_MS: "5",
+      SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS: "3000",
+    },
+    directory,
+  );
+  await writeStatus(config);
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const server = createServer(config);
+  const client = new Client({
+    name: "v3-query-include-budget-test",
+    version: "1.0.0",
+  });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  context.after(async () => {
+    await client.close();
+    await server.close();
+  });
+
+  const bridge = serveRead(config, "list_tracks", {
+    tracks: [
+      {
+        trackIndex: 1,
+        name: "oversized-track-name-".repeat(1_200),
+        trackFingerprint: "private-track-fingerprint",
+      },
+    ],
+    totalTrackCount: 1,
+    returnedTrackCount: 1,
+    offset: 0,
+    limit: 128,
+    hasMore: false,
+  });
+  const result = await client.callTool({
+    name: "sv_query",
+    arguments: {
+      action: "list_tracks",
+      args: {},
+      include: ["notes"],
+      contextMode: "readOnly",
+    },
+  });
+  assert.equal(await bridge, 1);
+  const failure = toolJson(result);
+  assert.equal(failure.outcome, "failed");
+  assert.equal(
+    (failure.error as Record<string, unknown>).code,
+    "QUERY_RESPONSE_BUDGET_EXCEEDED",
+  );
+  assert.equal(failure.phase, "projected");
+});
+
 test("v3 mixer projector rejects private fields even when explicitly requested", () => {
   const publicProjection = {
     trackIndex: 1,
@@ -245,7 +674,6 @@ test("v3 Track collection projector preserves order and nested Contexts", () => 
       tracks: [
         {
           trackIndex: 1,
-          mainGroupUuid: "main-group-1",
           name: "Lead",
           displayColor: "#D6BC43",
           displayColorArgb: "#FFD6BC43",
@@ -265,7 +693,6 @@ test("v3 Track collection projector preserves order and nested Contexts", () => 
         },
         {
           trackIndex: 2,
-          mainGroupUuid: "main-group-2",
           name: "Harmony",
           displayColor: "",
           displayOrder: 1,
@@ -289,7 +716,7 @@ test("v3 Track collection projector preserves order and nested Contexts", () => 
     comparedFieldCount: 2,
     comparedItemCount: 2,
     differenceCount: 0,
-    privateFieldCount: 2,
+    privateFieldCount: 4,
   });
 });
 
@@ -503,6 +930,13 @@ test("v3 mixer query shadow-compares its projection without another host read", 
     differenceCount: 0,
     privateFieldCount: 1,
   });
+  const projectedStage = observability.traces[0]?.stages.find(
+    (stage) => stage.stage === "queryProjected",
+  );
+  assert.equal(projectedStage?.metadata?.action, "get_track_mixer");
+  assert.equal(projectedStage?.metadata?.projectionStrategy, "fixed");
+  assert.equal(projectedStage?.metadata?.budgetExceeded, false);
+  assert.equal(typeof projectedStage?.metadata?.responseCharacters, "number");
 });
 
 test("v3 Group Voice query shadow-compares its compact default with one host read", async (context) => {
@@ -724,7 +1158,14 @@ test("v3 Track collection shadow-compares nested Contexts with one host read", a
     await server.close();
   });
 
-  const bridge = serveRead(config, "list_tracks", trackListResult());
+  const bridge = serveRead(
+    config,
+    "list_tracks",
+    trackListResult(),
+    (payload) => {
+      assert.deepEqual(payload, { offset: 0, limit: 128 });
+    },
+  );
   const queryResult = await client.callTool({
     name: "sv_query",
     arguments: {
@@ -745,6 +1186,8 @@ test("v3 Track collection shadow-compares nested Contexts with one host read", a
   assert.equal(typeof tracks[1]?.contextId, "string");
   assert.equal(tracks[0]?.fingerprint, undefined);
   assert.equal(tracks[1]?.trackFingerprint, undefined);
+  assert.equal(tracks[0]?.mainGroupUuid, undefined);
+  assert.equal(tracks[1]?.mainGroupUuid, undefined);
   assert.deepEqual(tracks[0]?.mixer, {
     gainDecibel: 0,
     pan: 0,
@@ -782,7 +1225,7 @@ test("v3 Track collection shadow-compares nested Contexts with one host read", a
     comparedFieldCount: 2,
     comparedItemCount: 2,
     differenceCount: 0,
-    privateFieldCount: 2,
+    privateFieldCount: 4,
   });
 
   const countBridge = serveRead(config, "list_tracks", trackListResult());
@@ -832,7 +1275,7 @@ test("v3 Track collection shadow-compares nested Contexts with one host read", a
     comparedFieldCount: 1,
     comparedItemCount: 0,
     differenceCount: 0,
-    privateFieldCount: 2,
+    privateFieldCount: 4,
   });
 });
 
@@ -872,6 +1315,9 @@ test("v3 Note Group collection shadow-compares ownership Contexts with one host 
     config,
     "list_note_groups",
     noteGroupListResult(),
+    (payload) => {
+      assert.deepEqual(payload, { offset: 0, limit: 128 });
+    },
   );
   const queryResult = await client.callTool({
     name: "sv_query",

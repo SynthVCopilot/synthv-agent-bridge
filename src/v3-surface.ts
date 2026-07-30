@@ -19,7 +19,10 @@ import {
   traceStage,
 } from "./v3-command-kernel.js";
 import {
-  shadowQueryProjection,
+  enforceQueryResponseBudget,
+  prepareQueryArguments,
+  projectQueryResult,
+  queryProjectorTesting,
   snapshotQueryProjectionSource,
 } from "./v3-query-projector.js";
 
@@ -193,34 +196,6 @@ const GROUP_LOCATOR_ACTIONS = new Set([
   "transform_notes",
   "update_group",
 ]);
-
-const DIAGNOSTIC_FIELDS = new Set([
-  "attributesPending",
-  "computedPhonemesIncluded",
-  "matchedNoteCount",
-  "noteDefaultsOmitted",
-  "phonemesPending",
-  "rangeScannedNoteCount",
-  "responseMode",
-  "returnedNoteCount",
-  "returnedNoteOffset",
-  "scannedNoteCount",
-  "secondsPrecision",
-  "serializationScannedNoteCount",
-]);
-
-const DEFAULT_READ_FIELDS: Readonly<Record<string, readonly string[]>> = {
-  get_group_voice: [
-    "trackIndex",
-    "groupIndex",
-    "parameters",
-    "vocalModes",
-  ],
-};
-
-function defaultReadFields(action: string): readonly string[] | undefined {
-  return DEFAULT_READ_FIELDS[action];
-}
 
 function asRecord(value: unknown, path: string): JsonRecord {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -593,6 +568,12 @@ function addRootContext(
   sessionToken: string | undefined,
 ): string | undefined {
   const noteFingerprints = consumeNoteGuards(root, root.notes, guardTokens);
+  const singleNoteIndex = optionalInteger(root.noteIndex);
+  const singleNoteFingerprint = optionalString(root.noteFingerprint);
+  if (singleNoteIndex !== undefined && singleNoteFingerprint !== undefined) {
+    noteFingerprints.set(singleNoteIndex, singleNoteFingerprint);
+    delete root.noteFingerprint;
+  }
   const pitchFingerprints = consumePitchGuards(root.pitchControls);
   const automationFingerprints = consumeAutomationGuards(
     root,
@@ -608,15 +589,15 @@ function addRootContext(
     pitchFingerprints,
     automationFingerprints,
   );
-  if (!hasContextGuards(entry)) {
-    return undefined;
+  const contextId = hasContextGuards(entry) ? contexts.issue(entry) : undefined;
+  if (contextId !== undefined) {
+    root.contextId = contextId;
   }
-  const contextId = contexts.issue(entry);
-  root.contextId = contextId;
   delete root.fingerprint;
   delete root.trackFingerprint;
   delete root.referenceFingerprint;
   delete root.groupUuid;
+  delete root.mainGroupUuid;
   const voice = optionalRecord(root.voice, "result.voice");
   if (voice !== undefined) {
     delete voice.referenceFingerprint;
@@ -675,6 +656,11 @@ function addNestedContexts(
         sessionToken,
       );
     }
+    if (track !== undefined) {
+      delete track.fingerprint;
+      delete track.trackFingerprint;
+      delete track.referenceFingerprint;
+    }
     delete root.trackFingerprint;
     return;
   }
@@ -710,26 +696,6 @@ function addNestedContexts(
     guardTokens,
     mode,
     sessionToken,
-  );
-}
-
-function stripDiagnostics(root: JsonRecord): void {
-  for (const field of DIAGNOSTIC_FIELDS) {
-    delete root[field];
-  }
-}
-
-function shouldStripDiagnostics(
-  action: string,
-  include: readonly V3IncludeValue[] | undefined,
-  debug: boolean,
-): boolean {
-  return (
-    !debug &&
-    !(
-      action === "get_phrase_context" &&
-      include?.includes("diagnostics") === true
-    )
   );
 }
 
@@ -776,114 +742,6 @@ function normalizePhraseReadInclude(
     );
   }
   return topLevelInclude ?? nestedInclude;
-}
-
-function projectIncludes(
-  root: JsonRecord,
-  include: readonly V3IncludeValue[] | undefined,
-): void {
-  if (include === undefined) {
-    return;
-  }
-  const selected = new Set(include);
-  const fields: ReadonlyArray<
-    readonly [(typeof V3_INCLUDE_VALUES)[number], string]
-  > = [
-    ["notes", "notes"],
-    ["voice", "voice"],
-    ["automation", "automation"],
-    ["analysis", "analysis"],
-    ["recommendations", "recommendations"],
-    ["pitchAnalysis", "pitchAnalysis"],
-    ["selection", "selectionContext"],
-  ];
-  for (const [option, field] of fields) {
-    if (!selected.has(option)) {
-      delete root[field];
-    }
-  }
-}
-
-function compactPhraseNotes(root: JsonRecord): void {
-  if (!Array.isArray(root.notes)) {
-    return;
-  }
-  let absolutePitchDefaultsToPitch = false;
-  for (const value of root.notes) {
-    const note = asRecord(value, "result.notes[]");
-    delete note.absoluteEnd;
-    delete note.absoluteEndSeconds;
-    delete note.absoluteOnset;
-    delete note.durationQuarters;
-    delete note.endPosition;
-    delete note.onsetQuarters;
-    if (
-      typeof note.absolutePitch === "number" &&
-      note.absolutePitch === note.pitch
-    ) {
-      delete note.absolutePitch;
-      absolutePitchDefaultsToPitch = true;
-    }
-  }
-  if (absolutePitchDefaultsToPitch) {
-    root.noteDefaults = {
-      ...optionalRecord(root.noteDefaults, "result.noteDefaults"),
-      absolutePitch: "pitch",
-    };
-  }
-}
-
-function projectFields(root: JsonRecord, fields: readonly string[]): JsonRecord {
-  const projected: JsonRecord = {};
-  for (const field of fields) {
-    if (Object.prototype.hasOwnProperty.call(root, field)) {
-      projected[field] = root[field];
-    }
-  }
-  if (root.contextId !== undefined) {
-    projected.contextId = root.contextId;
-  }
-  if (root.page !== undefined) {
-    projected.page = root.page;
-  }
-  if (root.hasMore !== undefined) {
-    projected.hasMore = root.hasMore;
-  }
-  if (root.sessionReset !== undefined) {
-    projected.sessionReset = root.sessionReset;
-  }
-  return projected;
-}
-
-function denseNotes(root: JsonRecord, mode: "auto" | "never" | "always"): void {
-  if (!Array.isArray(root.notes)) {
-    return;
-  }
-  if (
-    mode === "never" ||
-    (mode === "auto" && root.notes.length < 24)
-  ) {
-    return;
-  }
-  const columns: string[] = [];
-  const seen = new Set<string>();
-  for (const value of root.notes) {
-    const note = asRecord(value, "result.notes[]");
-    for (const key of Object.keys(note)) {
-      if (!seen.has(key)) {
-        seen.add(key);
-        columns.push(key);
-      }
-    }
-  }
-  root.notes = {
-    columns,
-    rows: root.notes.map((value) => {
-      const note = asRecord(value, "result.notes[]");
-      return columns.map((column) => note[column] ?? null);
-    }),
-  };
-  root.noteFormat = "rows";
 }
 
 function normalizeItemIndex(
@@ -1362,15 +1220,9 @@ function expandContext(
 
 export const v3Testing = {
   addNestedContexts,
-  compactPhraseNotes,
-  defaultReadFields,
-  denseNotes,
   expandContext,
   normalizePhraseReadInclude,
-  projectFields,
-  projectIncludes,
-  stripDiagnostics,
-  shouldStripDiagnostics,
+  ...queryProjectorTesting,
   waitForSessionTokenChange,
 };
 
@@ -1781,14 +1633,19 @@ export function registerV3Surface(
         if (sessionChange !== undefined && input.contextId !== undefined) {
           throw sessionChangedError(sessionChange);
         }
+        const includeWasExplicit =
+          input.action === "get_phrase_context" &&
+          (input.include !== undefined ||
+            Object.prototype.hasOwnProperty.call(input.args, "include"));
         const rawArgs = { ...input.args };
         const include =
           input.action === "get_phrase_context"
             ? normalizePhraseReadInclude(input.include, rawArgs)
             : input.include;
+        const prepared = prepareQueryArguments(input.action, rawArgs);
         let args = expandContext(
           input.action,
-          rawArgs,
+          prepared.args,
           input.contextId,
           contexts,
         );
@@ -1833,24 +1690,30 @@ export function registerV3Surface(
           input.contextMode,
           await getSessionToken?.(),
         );
-        if (input.action === "get_phrase_context") {
-          projectIncludes(root, include);
-          compactPhraseNotes(root);
-        }
-        if (shouldStripDiagnostics(input.action, include, input.debug)) {
-          stripDiagnostics(root);
-        }
-        denseNotes(root, input.dense);
-        const fields =
-          input.fields ?? defaultReadFields(input.action);
-        const publicProjection =
-          fields === undefined ? root : projectFields(root, fields);
-        const shadow = shadowQueryProjection(
+        const projected = projectQueryResult(
           input.action,
-          shadowSource ?? root,
-          publicProjection,
-          fields,
+          root,
+          {
+            ...(include === undefined ? {} : { include }),
+            ...(input.fields === undefined ? {} : { fields: input.fields }),
+            dense: input.dense,
+            debug: input.debug,
+            explicitlyScoped:
+              prepared.explicitlyScoped ||
+              includeWasExplicit ||
+              input.fields !== undefined,
+            ...(shadowSource === undefined ? {} : { shadowSource }),
+          },
         );
+        traceStage("queryProjected", {
+          action: input.action,
+          responseCharacters: projected.responseCharacters,
+          budgetExceeded: projected.budgetExceeded,
+          budgetClass: projected.budgetClass,
+          projectionStrategy: projected.strategy,
+        });
+        enforceQueryResponseBudget(input.action, projected);
+        const shadow = projected.shadow;
         if (shadow !== undefined) {
           traceStage("shadowProjected", {
             action: input.action,
@@ -1863,7 +1726,7 @@ export function registerV3Surface(
             privateFieldCount: shadow.privateFieldCount,
           });
         }
-        return jsonResult(publicProjection);
+        return jsonResult(projected.publicProjection);
       } catch (error) {
         return errorResult(error);
       }
@@ -2035,7 +1898,7 @@ export function registerV3Surface(
           "readOnly",
           await getSessionToken?.(),
         );
-        stripDiagnostics(root);
+        queryProjectorTesting.stripDiagnostics(root);
         return jsonResult(root);
       } catch (error) {
         return errorResult(error);

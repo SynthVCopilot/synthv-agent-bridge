@@ -334,6 +334,13 @@ at least 24 notes use a column/row representation when `dense: "auto"`; use
 end positions and report `noteDefaults.absolutePitch: "pitch"` when equal
 absolute/local pitches were omitted.
 
+Collection reads are bounded by default and return page/continuation metadata.
+This includes Tracks, library Groups, time-axis marks, Track Groups/notes, computed
+performance data, and Smart Pitch controls. Automation defaults to a compact
+full-curve summary and returns point arrays only for an explicitly requested
+closed range. An unscoped default Query above the 20,000-character response
+budget fails with narrowing guidance instead of flooding the Agent context.
+
 ### Action catalog
 
 These actions are routed internally through the six MCP v3 tools. They are
@@ -354,17 +361,17 @@ not registered as standalone MCP tools; request their current schemas through
 | `convert_pitch` | Read | Convert MIDI pitch and frequency and identify black keys. |
 | `get_project_info` | Read | Project, timing, playback, host, and current editor location. |
 | `inspect_score_file` | Read | Inspect an explicitly supplied local MusicXML or SMF MIDI file in Node, return a SHA-256 file guard and selectable parts/voices/staves or tracks/channels, and preview a bounded monophonic lane without changing SynthV. |
-| `get_time_axis` | Read | All tempo/time-signature marks and a safe-write fingerprint. |
+| `get_time_axis` | Read | Bounded, independently paged tempo/time-signature marks; private full-state guards are captured behind Contexts. |
 | `convert_time` | Read | Convert seconds, quarter notes, or blicks through the current tempo map, with optional Blick-grid rounding. |
 | `set_time_axis` | Destructive | Add, replace, or remove tempo/time-signature marks. |
-| `list_tracks` | Read | Track summaries, group counts, note counts, and mixer state. |
-| `list_note_groups` | Read | Reusable library groups, UUIDs, fingerprints, and reference counts. |
+| `list_tracks` | Read | A bounded page of Track summaries, Group/note counts, and mixer state. |
+| `list_note_groups` | Read | A bounded page of reusable library Group summaries and reference counts; private identities and guards remain Context-backed. |
 | `create_note_group` | Write | Create an optionally populated reusable library group. |
 | `clone_note_group` | Write | Deep-clone a track or library group into the library. |
 | `delete_note_group` | Destructive | Delete a library group and all references to it. |
 | `add_group_reference` | Write | Place a library group on a track. |
 | `clone_group_reference` | Write | Make a linked or deep-copied reference on another track. |
-| `get_track_notes` | Read | Groups, UUIDs, notes, attributes, offsets, and safe-write fingerprints. |
+| `get_track_notes` | Read | Independently bounded Group and note pages with attributes and offsets; private Group/note guards remain Context-backed. |
 | `get_group_voice` | Read | Typed group voice defaults, Vocal Modes, experimental Unison fields, and target selection context. |
 | `get_note_phoneme_data` | Read | User/computed phonemes, phoneset overrides, per-phoneme attributes, and note selection state, with optional compact note-index or seconds-range filtering. |
 | `get_phrase_context` | Read | One compact, write-ready selected/ranged phrase read with note and automation Guard Tokens, voice/Vocal Modes, diagnostics, and recommendation-only review targets. |

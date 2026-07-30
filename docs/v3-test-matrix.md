@@ -4,7 +4,7 @@ Status: baseline
 
 Date: 2026-07-30
 
-Current automated baseline: 134 passing tests. Recorded real-host acceptance
+Current automated baseline: 150 passing tests. Recorded real-host acceptance
 uses SynthV Studio 2 Pro 2.2.1 standalone and a saved disposable test project.
 It currently covers the Mixer command/no-op path, Session invalidation,
 Sidebar Apply/Undo, isolated clone/source preservation, and closed-range
@@ -17,7 +17,17 @@ coverage also includes `list_note_groups` order, shared ownership summaries,
 nested write-intent Contexts, private Group UUID/fingerprint isolation, and
 count-only projection. Its real-host gate confirms the same projection and
 privacy behavior on two current library Groups; the multiply referenced case
-remains covered by the deterministic fixture.
+remains covered by the deterministic fixture. Phase 3 automation additionally
+proves exact policy coverage for all 17 public Query actions, bounded host
+pages for time-axis/Track/library-Group/computed-data/Smart-Pitch collections,
+compact Automation summaries, shared projection behavior, and a redacted
+20,000-character default-response gate. It also verifies Retake/nested Track
+Guard redaction, retry-safe pending computed data, 1-based page reconstruction,
+and stable full-state Guards across pages/range projections. The final
+real-host Phase 3 gate covers ten representative paths on the final build:
+43-219 ms end to end, 160-1,698 model-facing characters, zero shadow
+differences, private Group UUID isolation even for guardless reads, and zero
+mutation/Undo stages.
 
 This matrix turns architecture and known production-session failures into
 release gates. It supplements the current tests; it does not replace the
@@ -94,6 +104,11 @@ It does not model audio rendering or Vocal timbre.
 | PRJ-001 | Default phrase read | excluded sections are not computed or serialized |
 | PRJ-002 | Dense rows | lossless reconstruction of every included field |
 | PRJ-003 | Write acknowledgement | counts/identifiers only; no full mutated objects |
+| PRJ-004 | Public Query catalog changes | every read Action must have exactly one projection policy |
+| PRJ-005 | Default pageable Query | bounded host page with count/offset/continuation metadata |
+| PRJ-006 | Default Automation Query | full private Guard, no public point array without an explicit range |
+| PRJ-007 | Unscoped default response exceeds 20,000 characters | bounded `QUERY_RESPONSE_BUDGET_EXCEEDED`; rejected payload not echoed |
+| PRJ-008 | Explicit large page/range/projection | allowed, measured, and coverage reported |
 | CAC-001 | Cache hit for read-only projection | same DTO and `sessionCached` support trace |
 | CAC-002 | Write-capable Context request | host read even when a cache entry exists |
 | CAC-003 | Bridge write | touched keys invalidated before replacement |

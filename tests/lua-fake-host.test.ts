@@ -115,6 +115,26 @@ test("Fake Host: focused mixer reads carry the Track guard for writeIntent Conte
   assertMarker(context, "focused-mixer-write-context");
 });
 
+test("Fake Host: time-axis reads return independent bounded mark pages", (context) => {
+  assertMarker(context, "query-time-axis-page");
+});
+
+test("Fake Host: Track and Note Group collections return bounded pages", (context) => {
+  assertMarker(context, "query-track-page");
+  assertMarker(context, "query-note-group-page");
+});
+
+test("Fake Host: computed data and Pitch Controls return bounded pages", (context) => {
+  assertMarker(context, "query-track-notes-page");
+  assertMarker(context, "query-track-group-page");
+  assertMarker(context, "query-computed-page");
+  assertMarker(context, "query-pitch-control-page");
+});
+
+test("Fake Host: compact Automation reads omit unrequested point arrays", (context) => {
+  assertMarker(context, "query-automation-summary");
+});
+
 test("Fake Host: aggregate tuning uses one Undo for multiple curves", (context) => {
   assertMarker(context, "aggregate-tuning-single-undo");
 });

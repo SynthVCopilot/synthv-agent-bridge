@@ -66,13 +66,20 @@ All notable changes will be documented in this file.
 
 ### Added
 
-- The first v3 Query Projector shadow slices for `get_track_mixer`,
-  `get_group_voice`, `list_tracks`, and `list_note_groups`. They compare
-  independently built projections with the existing public projections from
-  the same host result, record only bounded parity/item counts, perform no
-  second SynthV read, preserve nested Track/library-Group Contexts, ownership
-  summaries, and explicitly requested Group Voice diagnostics, and keep
-  private Track/Group/Reference Guards server-side.
+- A complete v3 Query policy registry covering all 17 read Actions, a shared
+  model-facing projector, a 20,000-character unscoped default-response gate,
+  and bounded projection telemetry. The first shadow slices for
+  `get_track_mixer`, `get_group_voice`, `list_tracks`, and
+  `list_note_groups` compare independently built projections from the same
+  host result, record only bounded parity/item counts, preserve nested
+  Contexts and ownership summaries, and keep all private Guards server-side.
+- Default host pages for time-axis marks, Tracks, library Groups, notes,
+  computed note data, and Smart Pitch controls. Compact Automation reads now
+  omit point arrays unless an explicit closed range is requested, while their
+  full private OCC fingerprint remains available for Context creation.
+- Retry-safe computed-data pages that preserve pending state without advancing,
+  direct Smart Pitch page serialization, and independent Group/note paging for
+  `get_track_notes`.
 - Node-local `inspect_score_file` and `import_monophonic_score` actions for
   explicitly supplied local MusicXML (`.xml`, `.musicxml`, `.mxl`) and SMF MIDI
   (`.mid`, `.midi`) files. Inspection returns selectable lanes, overlap
@@ -173,6 +180,11 @@ All notable changes will be documented in this file.
 
 ### Fixed
 
+- Guardless Group reads and Track collection pages now remove private Group
+  UUIDs even when no write-capable Context is minted.
+- Retake note fingerprints and nested Track fingerprints from Track-note reads
+  are now consumed into server-side Contexts or discarded before projection
+  instead of crossing the public MCP boundary.
 - `get_track_notes` Context projection now retains its track locator for nested
   Group Contexts, while Context expansion rejects kind/scope mismatches and
   conflicting guarded-array fingerprints.

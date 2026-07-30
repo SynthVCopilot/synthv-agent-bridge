@@ -37,6 +37,13 @@ Larger explicit reads are allowed only when the caller requests the relevant
 projection/page. They must report pagination or range coverage rather than
 silently truncating correctness data.
 
+Phase 3 enforces the ordinary-read target as a 20,000-character hard gate for
+unscoped defaults. The final public JSON is measured after compact projection.
+Explicit pages, ranges, `include`, or `fields` projections remain available
+when the caller deliberately requests them; telemetry records whether they
+exceed the ordinary budget. The rejected payload is never copied into the
+public error.
+
 ## Interaction targets
 
 - Common guarded edit: one focused fresh read plus one logical write.
@@ -132,6 +139,24 @@ were 30,429 bytes because the current private content fingerprints serialize
 the complete Group definition; this remains an internal transport/projection
 optimization opportunity rather than model-token exposure. Component Build
 Identity remained `matched`.
+
+The final Phase 3 Query gate used Node build fingerprint
+`cf5a9ac681eff0b615d3a5c62f27195c2aec98a8262baac7092136d69e25f56f`
+with Lua executor `sv3-lua-0.2.0-alpha.1-6` and Sidebar
+`sv3-sidebar-0.2.0-alpha.1-3`; all components were `matched`. The saved
+standalone SynthV 2.2.1 test project contained two Tracks, two library Groups,
+42 Notes in the selected Group, zero Smart Pitch controls, and 22 Loudness
+Automation points.
+
+Ten final-build representative reads covered Mixer, Group Voice,
+Track/library collection pages, a two-note phrase page, an empty Smart Pitch
+page, a ready two-note computed-data page, independent time-axis pages, and
+Automation summary/closed-range modes. End-to-end Trace duration ranged from
+43 to 219 ms. Model-facing JSON ranged from 160 to 1,698 characters. All four
+shadow-enabled paths reported zero differences; the Track and library-Group
+collection shadows each counted four private UUID/fingerprint fields without
+exposing them. Every Trace reported zero mutation or Undo stages. Snapshot
+caching remained disabled, so each result came from the authoritative host.
 
 ## Cache targets
 

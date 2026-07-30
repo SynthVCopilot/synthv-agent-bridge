@@ -87,6 +87,36 @@ explicitly choose `writeIntent` before reusing a Context for a command:
 Raw fingerprints do not cross the public MCP boundary. Session replacement
 clears Contexts, Guards, cursors, and read snapshots.
 
+Every Query action is classified by one projection strategy:
+
+- `fixed`: bounded scalar/object result;
+- `offsetPage`: collection with an explicit offset, limit, total count, and
+  continuation metadata;
+- `cursorPage`: phrase paging with a target-bound opaque cursor;
+- `rangeSummary`: compact full-state summary unless a closed range is
+  explicitly requested;
+- `explicitBounded`: the action requires or internally enforces a bounded
+  caller scope.
+
+Default Track, library Group, time-axis-mark, Track-Group/note, computed-data,
+and Smart Pitch reads are paged. A compact Automation read omits its point array unless
+the caller supplies a closed range. The complete private fingerprint is still
+computed from current host state before paging or summarization and remains
+available only to the server-side Context.
+
+The shared Query Projector measures the final public JSON. An unscoped default
+result above 20,000 characters fails with
+`QUERY_RESPONSE_BUDGET_EXCEEDED`. An explicitly requested page, range,
+`include`, or `fields` projection may exceed that ordinary budget, but it is
+still measured and must expose its coverage rather than silently truncate.
+Projection and shadow comparison never perform a second SynthV read.
+
+Computed phoneme/attribute pages retain their pending state in the normal
+projection. A pending page reports zero advancement plus the same retry offset;
+the caller must retry that page after SynthV finishes computation rather than
+skip ahead. Smart Pitch paging serializes only the requested controls instead
+of constructing the complete control array before slicing it.
+
 ## Command outcomes
 
 Every `sv_command` public result has one outcome:
@@ -129,7 +159,8 @@ Normal responses contain only:
 
 They do not contain raw fingerprints, lyrics, phoneme text, full note arrays,
 Automation point arrays, stack traces, or local IPC paths. The target limits
-are 2 KB for a write acknowledgement and 4 KB for a public error.
+are 20 KB for an ordinary compact read, 2 KB for a write acknowledgement, and
+4 KB for a public error.
 
 ## Indexing and ownership
 

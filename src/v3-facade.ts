@@ -195,6 +195,9 @@ function failurePhaseForCode(
   if (code === "HOST_POSTCONDITION_FAILED") {
     return "verified";
   }
+  if (code === "QUERY_RESPONSE_BUDGET_EXCEEDED") {
+    return "projected";
+  }
   if (
     code.startsWith("STALE_") ||
     code === "SHARED_GROUP_WRITE" ||

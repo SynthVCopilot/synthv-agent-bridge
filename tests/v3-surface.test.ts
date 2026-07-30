@@ -606,6 +606,139 @@ test("track contexts locate track reads without becoming Group contexts", () => 
   );
 });
 
+test("v3 Retake reads keep the note fingerprint inside a write-intent Context", () => {
+  const contexts = new V2ContextStore();
+  const result: Record<string, unknown> = {
+    trackIndex: 2,
+    groupIndex: 3,
+    groupUuid: GROUP_UUID,
+    noteIndex: 7,
+    noteFingerprint: "private-note-fingerprint-with-lyric-content",
+    takeCount: 2,
+  };
+
+  v2Testing.addNestedContexts(
+    "get_note_retakes",
+    result,
+    contexts,
+    new GuardTokenStore(),
+    "writeIntent",
+    "session-retake",
+  );
+
+  assert.equal(result.noteFingerprint, undefined);
+  assert.equal(result.groupUuid, undefined);
+  const contextId = result.contextId;
+  assert.equal(typeof contextId, "string");
+  const context = contexts.resolve(contextId as string, "writeIntent");
+  assert.equal(
+    context.noteFingerprints.get(7),
+    "private-note-fingerprint-with-lyric-content",
+  );
+  assert.deepEqual(
+    v2Testing.expandContext(
+      "generate_note_retake",
+      { noteIndex: 7, newPitch: true },
+      contextId as string,
+      contexts,
+      "writeIntent",
+    ),
+    {
+      trackIndex: 2,
+      groupIndex: 3,
+      groupUuid: GROUP_UUID,
+      noteIndex: 7,
+      fingerprint: "private-note-fingerprint-with-lyric-content",
+      newPitch: true,
+    },
+  );
+});
+
+test("v3 guardless Group reads still redact the private Group UUID", () => {
+  const contexts = new V2ContextStore();
+  const result: Record<string, unknown> = {
+    trackIndex: 1,
+    groupIndex: 2,
+    groupUuid: GROUP_UUID,
+    pitchControlCount: 0,
+    pitchControls: [],
+  };
+
+  v2Testing.addNestedContexts(
+    "get_pitch_controls",
+    result,
+    contexts,
+    new GuardTokenStore(),
+    "readOnly",
+    "session-empty-pitch-controls",
+  );
+
+  assert.equal(result.groupUuid, undefined);
+  assert.equal(result.contextId, undefined);
+});
+
+test("v3 guardless Track pages still redact the private main Group UUID", () => {
+  const contexts = new V2ContextStore();
+  const result: Record<string, unknown> = {
+    trackCount: 1,
+    tracks: [
+      {
+        trackIndex: 1,
+        mainGroupUuid: GROUP_UUID,
+        name: "Guardless Track",
+      },
+    ],
+  };
+
+  v2Testing.addNestedContexts(
+    "list_tracks",
+    result,
+    contexts,
+    new GuardTokenStore(),
+    "readOnly",
+    "session-guardless-track",
+  );
+
+  const track = (result.tracks as Record<string, unknown>[])[0];
+  assert.equal(track?.mainGroupUuid, undefined);
+  assert.equal(track?.contextId, undefined);
+});
+
+test("v3 Track-note reads remove the nested Track fingerprint", () => {
+  const contexts = new V2ContextStore();
+  const result: Record<string, unknown> = {
+    trackIndex: 2,
+    track: {
+      trackIndex: 2,
+      name: "Lead",
+      fingerprint: "private-track-fingerprint",
+    },
+    groups: [
+      {
+        groupIndex: 1,
+        groupUuid: GROUP_UUID,
+        referenceFingerprint: "private-reference-fingerprint",
+        notes: [],
+      },
+    ],
+  };
+
+  v2Testing.addNestedContexts(
+    "get_track_notes",
+    result,
+    contexts,
+    new GuardTokenStore(),
+    "readOnly",
+    "session-track-notes",
+  );
+
+  assert.equal(
+    (result.track as Record<string, unknown>).fingerprint,
+    undefined,
+  );
+  assert.doesNotMatch(JSON.stringify(result), /private-track-fingerprint/u);
+});
+
 test("v3 Group Voice refresh defaults to a compact write-ready projection", () => {
   assert.deepEqual(v2Testing.defaultReadFields("get_group_voice"), [
     "trackIndex",

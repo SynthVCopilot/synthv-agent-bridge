@@ -98,7 +98,7 @@ Rollback:
 
 - disable the new collector while leaving request behavior unchanged.
 
-## Phase 3: v3 Query Facade and compact response envelope — in progress
+## Phase 3: v3 Query Facade and compact response envelope — complete
 
 Deliver:
 
@@ -114,9 +114,13 @@ Shadow validation:
 - compare all requested semantic fields;
 - return only the old projection until parity passes.
 
-The six-tool Facade, typed Context modes, and compact Command outcomes are
-implemented. Shadow projection parity, complete pagination budgets, and action
-coverage remain open.
+The six-tool Facade, typed Context modes, compact Command outcomes, shared
+Query Projector, complete 17-Action Query policy registry, bounded host
+collection defaults, compact Automation summary, and public response-budget
+gate are implemented. Four representative legacy/new projector pairs run in
+one-read shadow mode; the remaining Actions use the shared projector directly
+and are protected by policy-completeness, Fake Host, Context, privacy, and
+response-budget tests. Snapshot caching remains disabled.
 
 The first focused-query slice is also implemented: `get_track_mixer` carries a
 private Track guard to Node, so a `writeIntent` query can mint one directly
@@ -194,16 +198,19 @@ Following collection slice:
 - Goal: extend shadow validation to `list_tracks`, including ordered collection
   projection and one nested read-only Track `contextId` per item.
 - Non-goals: pagination, Snapshot cache activation, Track mutation, or changing
-  the existing Track summary fields.
+  the established Track summary fields except for the required
+  `mainGroupUuid` privacy correction.
 - Existing action/path: `sv_query` -> private `sv_read` adapter ->
   `list_tracks`.
 - Target aggregate: ordered `TrackShell` summaries.
-- Public compatibility: `trackCount`, Track order, every established public
-  summary/mixer/color field, optional color variants, and nested `contextId`
-  values remain unchanged.
-- Safety invariants: every Track fingerprint remains private, the projector
-  snapshots nested source items before the legacy Context path mutates them,
-  Trace metadata contains counts only, and no second host read occurs.
+- Public compatibility: `trackCount`, Track order, all non-sensitive
+  summary/mixer/color fields, optional color variants, and nested `contextId`
+  values remain unchanged. `mainGroupUuid` is deliberately removed from the
+  public DTO as private locator metadata.
+- Safety invariants: every Track fingerprint and main Group UUID remains
+  private, the projector snapshots nested source items before the legacy
+  Context path mutates them, Trace metadata contains counts only, and no second
+  host read occurs.
 - Regression fixture: two Tracks with different optional fields, mixer state,
   private fingerprint spellings, and nested Contexts.
 - Automated acceptance: ordered collection parity, nested Context parity,
@@ -243,8 +250,9 @@ Ownership collection slice:
 - Automated acceptance: ordered collection parity, ownership-summary parity,
   nested Context parity, private-field counting, mismatch counts without
   values, count-only projection, and one IPC request per Query. Completed with
-  134 repository tests, including compatible-command expansion of the private
-  library Group guards.
+  150 repository tests, including compatible-command expansion of the private
+  library Group guards and rejection of irrelevant projection selectors as a
+  response-budget bypass.
 - Real SynthV acceptance: completed on two library Groups in SynthV Studio 2
   Pro 2.2.1 standalone. The write-intent full collection completed in 75 ms
   with a 7 ms shadow stage (`2` root fields, `2` items, `0` differences, `4`
@@ -257,12 +265,36 @@ Ownership collection slice:
 - Rollback: remove `list_note_groups` from the shadow registry; the established
   public projection remains unchanged.
 
+Final Phase 3 real-host gate:
+
+- Environment: SynthV Studio 2 Pro 2.2.1 standalone on Windows 11, two Tracks,
+  two library Groups, and a selected 42-note non-main Group.
+- Build: Node fingerprint
+  `cf5a9ac681eff0b615d3a5c62f27195c2aec98a8262baac7092136d69e25f56f`;
+  Lua executor `sv3-lua-0.2.0-alpha.1-6`; Sidebar
+  `sv3-sidebar-0.2.0-alpha.1-3`; component coherence `matched`.
+- Coverage: final-build reads exercised the fixed Mixer and Group Voice paths,
+  paged Track and library-Group collections, a two-note phrase page, an empty
+  Smart Pitch page, a ready two-note computed-data page, independently paged
+  tempo/measure marks, a 22-point Automation summary, and the same 22 points in
+  one explicit closed range.
+- Result: ten representative Traces completed in 43-219 ms with
+  160-1,698 model-facing characters. The four shadow-enabled paths reported
+  zero differences. All returned Contexts remained target typed; Track/main
+  Group and guardless Group UUIDs were absent from public results.
+- Safety: every Trace contained zero mutation or Undo stages; Track 1 remained
+  at 0 dB and unmuted; no project state was changed.
+
 Exit criteria:
 
-- ordinary reads/writes meet size targets;
-- Dense/page reconstruction is lossless;
-- no normal error contains a complete fingerprint;
-- no extra host read is introduced solely for projection.
+- ordinary default reads are measured and fail closed above 20,000 characters;
+- explicit pages/ranges retain coverage metadata and Dense reconstruction is
+  lossless;
+- no normal error contains a complete fingerprint or rejected Query payload;
+- no extra host read is introduced solely for projection or shadow comparison;
+- all 17 `sv_query` Actions have one checked projection strategy;
+- representative flat, collection, phrase, Smart Pitch, Automation, and
+  computed-data reads pass one final read-only real-host acceptance.
 
 Rollback:
 

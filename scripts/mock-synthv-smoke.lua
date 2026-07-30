@@ -725,6 +725,7 @@ SV={QUARTER=705600000}
 local clipboard=""
 local computedPhonemeCalls=0
 local computedPitchCalls=0
+computedDataPending=false
 function SV:getHostInfo() return {osType="Linux",hostName="Mock SynthV",hostVersion="2.2.0",hostVersionNumber=131584,languageCode="en-us"} end
 function SV:getProject() return project end
 function SV:getPlayback() return playback end
@@ -732,6 +733,7 @@ function SV:getMainEditor() return mainEditor end
 function SV:getArrangement() return arrangement end
 function SV:getPhonemesForGroup(reference)
     computedPhonemeCalls=computedPhonemeCalls+1
+    if computedDataPending then return {} end
     local result={}
     for _,note in ipairs(reference.group.notes) do
         result[#result+1]=note.phonemes~="" and note.phonemes or "l a"
@@ -739,6 +741,7 @@ function SV:getPhonemesForGroup(reference)
     return result
 end
 function SV:getComputedAttributesForGroup(reference)
+    if computedDataPending then return {} end
     local result={}
     for _,note in ipairs(reference.group.notes) do
         result[#result+1]={accent=note.rapAccent,phonemes={{symbol=note.phonemes~="" and note.phonemes or "l a",language=note.languageOverride~="" and note.languageOverride or "english"}}}
@@ -899,6 +902,18 @@ assert(project.undo==undoBeforeStaleTimeAxis,"stale time-axis edit must not crea
 local updatedTimeAxis=callWrite("set_time_axis",'{"tempoMarks":[{"position":0,"bpm":96},{"position":2822400000,"bpm":90}],"measureMarks":[{"measure":0,"numerator":4,"denominator":4},{"measure":2,"numerator":3,"denominator":4}]}')
 assert(updatedTimeAxis:find('"bpm":96',1,true),"position-zero tempo replacement was not retained")
 assert(updatedTimeAxis:find('"verified":true',1,true),"time-axis response was not postcondition-verified")
+do
+local page=call("get_time_axis",'{"tempoOffset":0,"tempoLimit":1,"measureOffset":0,"measureLimit":1}')
+assert(page:find('"tempoMarkCount":2',1,true),"time-axis page lost the total tempo count")
+assert(page:find('"returnedTempoMarkCount":1',1,true),"time-axis page returned the wrong tempo count")
+assert(page:find('"returnedMeasureMarkCount":1',1,true),"time-axis page returned the wrong measure count")
+assert(page:find('"hasMore":true',1,true),"time-axis page omitted its continuation flag")
+local nextPage=call("get_time_axis",'{"tempoOffset":1,"tempoLimit":1,"measureOffset":1,"measureLimit":1}')
+assert(nextPage:find('"returnedTempoMarkOffset":1',1,true),"time-axis continuation lost its tempo offset")
+assert(nextPage:find('"returnedMeasureMarkOffset":1',1,true),"time-axis continuation lost its measure offset")
+assert(extractJsonString(page,"fingerprint")==extractJsonString(nextPage,"fingerprint"),"time-axis paging changed the full-state Guard")
+print("CASE:query-time-axis-page")
+end
 
 call("list_tracks","{}")
 local addedTrack=callWrite("add_track",'{"name":"Lead Copy Source","displayColor":"#ABCDEF"}')
@@ -906,6 +921,16 @@ assert(addedTrack:find('"mainGroup"',1,true),"add_track must return the main gro
 assert(addedTrack:find('"groupUuid"',1,true),"add_track must return the main group UUID")
 assert(addedTrack:find('"displayColorArgb":"ffabcdef"',1,true),"track color was not normalized to AARRGGBB")
 assert(project.tracks[2].color=="ffabcdef","host track color did not receive AARRGGBB")
+do
+local page=call("list_tracks",'{"offset":0,"limit":1}')
+assert(page:find('"trackCount":2',1,true),"Track page lost the total count")
+assert(page:find('"returnedTrackCount":1',1,true),"Track page returned the wrong count")
+assert(page:find('"hasMore":true',1,true),"Track page omitted its continuation flag")
+local nextPage=call("list_tracks",'{"offset":1,"limit":1}')
+assert(nextPage:find('"trackIndex":2',1,true),"Track continuation lost its 1-based identity")
+assert(nextPage:find('"returnedTrackCount":1',1,true),"Track continuation returned the wrong count")
+print("CASE:query-track-page")
+end
 local track2GroupUuid=project.tracks[2].refs[1].group.uuid
 local advancedAdded=callWrite("add_notes",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","notes":[{"onset":0,"duration":705600000,"pitch":60,"lyrics":"hello","languageOverride":"english","musicalType":"rap","pitchAutoMode":false,"rapAccent":"2"}]}')
 assert(advancedAdded:find('"languageOverride":"english"',1,true),"advanced language field was not serialized")
@@ -1122,7 +1147,31 @@ local undoBeforeOutOfRangeVocalMode=project.undo
 callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","referenceFingerprint":"'..escape(preexistingVoiceFingerprint)..'","vocalModes":[{"name":"Powerful","pitch":220}]}',"INVALID_ARGUMENT")
 assert(project.undo==undoBeforeOutOfRangeVocalMode,"out-of-range Vocal Mode must fail before an undo record")
 callWrite("update_group",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","name":"Lead Main","voice":{"paramLoudness":-2}}')
-call("get_computed_group_data",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","pitchSample":{"absoluteStart":0,"interval":352800000,"frames":4}}')
+do
+local firstNotes=call("get_track_notes",'{"trackIndex":2,"groupIndex":1,"offset":0,"limit":1}')
+local nextNotes=call("get_track_notes",'{"trackIndex":2,"groupIndex":1,"offset":1,"limit":1}')
+assert(firstNotes:find('"noteIndex":1',1,true),"Track-note first page lost its 1-based note identity")
+assert(nextNotes:find('"noteIndex":2',1,true),"Track-note continuation lost its 1-based note identity")
+assert(extractJsonString(firstNotes,"referenceFingerprint")==extractJsonString(nextNotes,"referenceFingerprint"),"Track-note paging changed the full Reference Guard")
+print("CASE:query-track-notes-page")
+end
+
+do
+local page=call("get_computed_group_data",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","offset":0,"limit":1,"pitchSample":{"absoluteStart":0,"interval":352800000,"frames":4}}')
+assert(page:find('"noteCount":2',1,true),"computed-data page lost the total note count")
+assert(page:find('"returnedNoteCount":1',1,true),"computed-data page returned the wrong count")
+assert(page:find('"hasMore":true',1,true),"computed-data page omitted its continuation flag")
+computedDataPending=true
+local pending=call("get_computed_group_data",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","offset":1,"limit":1}')
+computedDataPending=false
+assert(pending:find('"phonemesPending":true',1,true),"pending computed phonemes were not reported")
+assert(pending:find('"attributesPending":true',1,true),"pending computed attributes were not reported")
+assert(pending:find('"returnedNoteCount":0',1,true),"pending computed data claimed that the page advanced")
+assert(pending:find('"nextOffset":1',1,true),"pending computed data did not preserve the retry offset")
+local ready=call("get_computed_group_data",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","offset":1,"limit":1}')
+assert(ready:find('"returnedNoteCount":1',1,true),"ready computed data did not advance its page")
+print("CASE:query-computed-page")
+end
 
 do
 local sharedCloneSource=makeGroup()
@@ -1359,13 +1408,39 @@ callWrite("add_group_reference",'{"trackIndex":1,"trackFingerprint":"'..track1Fi
 assert(project.tracks[1]:getNumGroups()==2,"library reference was not added")
 callWrite("clone_group_reference",'{"sourceTrackIndex":1,"sourceGroupIndex":2,"sourceGroupUuid":"'..libraryUuid..'","targetTrackIndex":2,"targetTrackFingerprint":"'..track2Fingerprint..'","linked":true}')
 assert(project.tracks[2]:getNumGroups()==2,"linked group reference was not cloned")
+do
+local groupPage=call("get_track_notes",'{"trackIndex":2,"groupOffset":1,"groupLimit":1,"offset":0,"limit":1}')
+assert(groupPage:find('"groupCount":2',1,true),"Track-note Group page lost the total Group count")
+assert(groupPage:find('"groupIndex":2',1,true),"Track-note Group continuation lost its 1-based Group identity")
+assert(groupPage:find('"returnedGroupCount":1',1,true),"Track-note Group continuation returned the wrong count")
+print("CASE:query-track-group-page")
+end
 local referencedLibrary=call("list_note_groups","{}")
 assert(referencedLibrary:find('"referenceCount":2',1,true),"library reference count must use UUID identity")
+do
+local page=call("list_note_groups",'{"offset":0,"limit":1}')
+assert(page:find('"returnedGroupCount":1',1,true),"Note Group page returned the wrong count")
+assert(page:find('"hasMore":true',1,true),"Note Group page omitted its continuation flag")
+local nextPage=call("list_note_groups",'{"offset":1,"limit":1}')
+assert(nextPage:find('"libraryIndex":2',1,true),"Note Group continuation lost its 1-based library identity")
+assert(nextPage:find('"returnedGroupCount":1',1,true),"Note Group continuation returned the wrong count")
+print("CASE:query-note-group-page")
+end
 local libraryClone=callWrite("clone_note_group",'{"groupUuid":"'..libraryUuid..'","name":"Reusable Chorus Copy"}')
 local clonedLibraryUuid=assert(libraryClone:match('"groupUuid":"([^"]+)"'))
 callWrite("delete_note_group",'{"groupUuid":"'..clonedLibraryUuid..'"}')
 
 local pitchAdded=callWrite("add_pitch_controls",'{"trackIndex":1,"groupIndex":1,"pitchControls":[{"kind":"point","position":352800000,"pitch":0.5},{"kind":"curve","position":705600000,"pitch":-0.25,"points":[{"offset":-176400000,"value":0},{"offset":176400000,"value":1}]}]}')
+do
+local page=call("get_pitch_controls",'{"trackIndex":1,"groupIndex":1,"offset":0,"limit":1}')
+assert(page:find('"pitchControlCount":2',1,true),"Pitch Control page lost the total count")
+assert(page:find('"returnedPitchControlCount":1',1,true),"Pitch Control page returned the wrong count")
+assert(page:find('"hasMore":true',1,true),"Pitch Control page omitted its continuation flag")
+local nextPage=call("get_pitch_controls",'{"trackIndex":1,"groupIndex":1,"offset":1,"limit":1}')
+assert(nextPage:find('"pitchControlIndex":2',1,true),"Pitch Control continuation lost its 1-based identity")
+assert(nextPage:find('"returnedPitchControlCount":1',1,true),"Pitch Control continuation returned the wrong count")
+print("CASE:query-pitch-control-page")
+end
 local pointFingerprint=assert(pitchAdded:match('"fingerprint":"([^"]+)","kind":"point"'))
 local pitchEdited=callWrite("edit_pitch_controls",'{"trackIndex":1,"groupIndex":1,"edits":[{"pitchControlIndex":1,"fingerprint":"'..escape(pointFingerprint)..'","changes":{"pitch":0.75}}]}')
 local editedPointFingerprint=assert(pitchEdited:match('"fingerprint":"([^"]+)","kind":"point"'))
@@ -1373,6 +1448,15 @@ callWrite("delete_pitch_controls",'{"trackIndex":1,"groupIndex":1,"pitchControls
 assert(project.tracks[1].refs[1].group:getNumPitchControls()==1,"pitch-control CRUD failed")
 
 callWrite("set_automation_points",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","clearMode":"all","points":[{"position":0,"value":-3},{"position":705600000,"value":-1},{"position":1411200000,"value":0}]}')
+do
+local summary=call("get_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","responseMode":"compact"}')
+assert(summary:find('"pointCount":3',1,true),"compact Automation summary lost its point count")
+assert(not summary:find('"points":',1,true),"compact Automation summary returned its full point array")
+local ranged=call("get_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","responseMode":"compact","rangeBegin":0,"rangeEnd":705600000}')
+assert(ranged:find('"points":',1,true),"explicit Automation range omitted its point array")
+assert(extractJsonString(summary,"fingerprint")==extractJsonString(ranged,"fingerprint"),"Automation range projection changed the full-curve Guard")
+print("CASE:query-automation-summary")
+end
 local sampled=call("sample_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","positions":[352800000],"interpolation":"linear"}')
 assert(sampled:find('"sampleCount":1',1,true),"automation sampling failed")
 callWrite("simplify_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","beginPosition":0,"endPosition":1411200000,"threshold":0.01}')

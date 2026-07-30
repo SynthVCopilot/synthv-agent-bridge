@@ -13,6 +13,38 @@ capability still awaiting a supported action or real-host certification.
 This matrix records intended coverage, not a claim that every alpha action has
 completed real SynthV acceptance.
 
+## v3 Query action coverage
+
+The Query policy registry is checked against the live `sv_describe` read
+catalog. Adding or removing a public read Action without classifying it fails
+the repository test suite.
+
+| Query action | Projection strategy | Default bound / coverage |
+|---|---|---|
+| `convert_pitch` | fixed | Scalar conversion only |
+| `get_project_info` | fixed | Compact project/current-editor summary |
+| `inspect_score_file` | explicit bounded | Local preview limits and lane selection |
+| `get_time_axis` | offset page | 128 tempo marks and 128 measure marks |
+| `convert_time` | fixed | One supplied time value |
+| `list_tracks` | offset page | 128 Tracks |
+| `list_note_groups` | offset page | 128 library Groups |
+| `get_track_notes` | offset page | 1 Group × 64 notes; explicit Group/Group page available |
+| `get_group_voice` | fixed | One Group Reference |
+| `get_note_phoneme_data` | offset page | 64 notes or explicit note/time scope |
+| `get_phrase_context` | cursor page | 64 notes, opaque cursor, or explicit notes/ranges |
+| `get_computed_group_data` | offset page | 64 note-derived entries; pitch frames are explicit |
+| `get_note_retakes` | fixed | One note's bounded Retake metadata |
+| `get_pitch_controls` | offset page | 64 Smart Pitch controls |
+| `get_automation` | range summary | Point-free summary, or one explicit closed range |
+| `sample_automation` | explicit bounded | Caller-supplied positions |
+| `get_track_mixer` | fixed | One Track Mixer |
+
+Every path performs one authoritative host read. Paging changes only the public
+collection; full-state fingerprints required for OCC are computed before
+projection and retained server-side. The shared projector measures every
+public result and rejects an oversized unscoped default without echoing its
+content.
+
 | Official class | Semantic methods/capabilities | Internal or deliberately hidden | Alpha gaps/notes |
 |---|---|---|---|
 | `ArrangementSelectionState` | read/clear/select/unselect Groups | callbacks, parent/index, memory methods | Real-host selection callback behavior remains advisory |
