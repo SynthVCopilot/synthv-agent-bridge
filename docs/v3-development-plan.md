@@ -300,7 +300,7 @@ Rollback:
 
 - route the affected action back to the existing projector.
 
-## Phase 4: common command lifecycle — first slice implemented
+## Phase 4: common command lifecycle — first slice implemented; mixer real-host gate complete
 
 Deliver:
 
@@ -313,6 +313,35 @@ Initial project-write slice:
 
 - choose a bounded, already well-tested reference-local or mixer write;
 - do not begin with track cloning or a multi-curve transaction.
+
+### `set_track_mixer` real-host acceptance (2026-07-30)
+
+- Environment: Synthesizer V Studio 2 Pro 2.2.1 standalone on Windows 11.
+  The saved destructive-test project was
+  `C:\Users\pengj\Project\SynthesizerV\test2\test.svp`.
+- Build: Node commit
+  `343a84f276693dfceba877c6c1c584f42e420b66`; Node/Lua executor coherence
+  was `matched` and writes were allowed. Executor Build ID:
+  `sv3-lua-0.2.0-alpha.1-648fe4fbb3a7e14e6ce5ce7e3f0c46d389760e266614da03cc76e20cf502c3a2`.
+  Sidebar Build ID:
+  `sv3-sidebar-0.2.0-alpha.1-12804fef9a667c30b3bf8724eb256a6a416c91945533a88969f8567fb23b7ad7`.
+- Pre-restart safety: old Node against new Lua reported `writesAllowed=false`
+  and rejected a `writeIntent` read before host access.
+- Initial Track 1 mixer state: gain `0 dB`, mute off, pan `0`, solo off.
+- Changed command: set gain to `-3 dB`; public outcome `changed`,
+  `changedCount=1`, `undoRecords=1`, `verified=true`. Trace
+  `tr_0mCOxXSWDEoLkqxS` reported an internal duration of `55 ms`; the public
+  acknowledgement was 144 UTF-8 bytes.
+- Same-value command: set gain to `-3 dB`; public outcome `alreadySatisfied`,
+  `changedCount=0`, `undoRecords=0`, `verified=true`. Trace
+  `tr_4AkEqcnsRu_Bw-K4` reported an internal duration of `38 ms`; the public
+  acknowledgement was 153 UTF-8 bytes.
+- One explicit SynthV Edit-menu Undo restored gain to `0 dB`; mute, pan, and
+  solo remained unchanged. An initial automated `Ctrl+Z` injection did not
+  trigger the application shortcut, but the enabled Edit-menu Undo restored
+  the state and confirmed the Bridge Undo record.
+- Automated baseline: all 160 repository tests passed before this acceptance
+  run.
 
 Exit criteria:
 
