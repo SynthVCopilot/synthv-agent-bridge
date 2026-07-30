@@ -36,6 +36,8 @@ end
 local notePitchAutoWriteSupported = true
 local phonemeStrengthWriteSupported = true
 mixerThrowAfterGain = false
+trackCloneDropInstrumental = false
+trackAddExtraReference = false
 
 -- SynthV may return distinct Lua proxy values for the same native object.
 -- Delegate every member while intentionally preserving distinct identity.
@@ -506,13 +508,16 @@ local function makeTrack()
             -- Match SynthV 2: Track:clone() owns an independent main group,
             -- while cloned non-main references still point at their library
             -- Note Group because NoteGroupReference:clone() does not own it.
-            local groupCopy=sourceRef.main
-                and sourceRef.group:clone() or sourceRef.group
-            local refCopy=sourceRef:clone()
-            refCopy.group=groupCopy
-            refCopy.parent=copy
-            copy.refs[#copy.refs+1]=refCopy
+            if not (trackCloneDropInstrumental and sourceRef.instrumental) then
+                local groupCopy=sourceRef.main
+                    and sourceRef.group:clone() or sourceRef.group
+                local refCopy=sourceRef:clone()
+                refCopy.group=groupCopy
+                refCopy.parent=copy
+                copy.refs[#copy.refs+1]=refCopy
+            end
         end
+        trackCloneDropInstrumental=false
         return copy
     end
     return t
@@ -624,7 +629,14 @@ function project:getFileName() return "mock.svp" end
 function project:getDuration() local x=0 for _,t in ipairs(self.tracks) do if t:getDuration()>x then x=t:getDuration() end end return x end
 function project:getNumTracks() return #self.tracks end
 function project:getTrack(i) return self.tracks[i] end
-function project:addTrack(t) self.tracks[#self.tracks+1]=t; return #self.tracks end
+function project:addTrack(t)
+    self.tracks[#self.tracks+1]=t
+    if trackAddExtraReference then
+        trackAddExtraReference=false
+        t:addGroupReference(makeReference(makeGroup(),false))
+    end
+    return #self.tracks
+end
 function project:removeTrack(i) table.remove(self.tracks,i) end
 function project:getNumNoteGroupsInLibrary() return #self.groups end
 function project:getNoteGroup(id)
@@ -1272,48 +1284,92 @@ project.tracks[2].refs[1].vocalDatabaseId="mock-source-vocal"
 local shellSourceMain=project.tracks[2].refs[1].group
 shellSourceMain:addPitchControl(makePitchControl("point"))
 shellSourceMain:getParameter("loudness"):add(0,-2)
+shellSourceMain:getParameter("toneShift"):add(352800000,120)
+local interleavedInstrumentalReference=makeReference(makeGroup(),false)
+interleavedInstrumentalReference.instrumental=true
+project.tracks[2]:addGroupReference(interleavedInstrumentalReference)
 local shellSourceNoteCount=shellSourceMain:getNumNotes()
 local shellSourcePitchControlCount=shellSourceMain:getNumPitchControls()
+local shellSourceAutomationPoints=shellSourceMain:getParameter("loudness"):getAllPoints()
+local shellSourceToneShiftPoints=shellSourceMain:getParameter("toneShift"):getAllPoints()
+local shellUndoBefore=project.undo
 local shellResult=callWrite(
     "clone_track_shell",
-    '{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Safe Vocal Shell"}'
+    '{"cloneIntent":"shell","trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Safe Vocal Shell"}'
 )
+assert(project.undo==shellUndoBefore+1,"Track shell clone must create one undo record")
 assert(shellResult:find('"verifiedEmptyShell":true',1,true),"Vocal template track did not verify its empty shell")
 assert(shellResult:find('"vocalIdentityReadable":false',1,true),"Vocal template track overstated API visibility")
 assert(project.tracks[3]:getNumGroups()==1,"Vocal template track retained non-main Groups")
 assert(project.tracks[3].refs[1].group:getNumNotes()==0,"Vocal template track retained notes")
 assert(project.tracks[3].refs[1].group:getNumPitchControls()==0,"Vocal template track retained pitch controls")
 assert(#project.tracks[3].refs[1].group:getParameter("loudness"):getAllPoints()==0,"Vocal template track retained automation")
+assert(#project.tracks[3].refs[1].group:getParameter("toneShift"):getAllPoints()==0,"Vocal template track retained toneShift Automation")
 assert(project.tracks[3].refs[1].vocalDatabaseId=="mock-source-vocal","host Track clone did not preserve opaque Vocal identity")
 assert(project.tracks[3].mixer.gain==0 and project.tracks[3].mixer.pan==0,"Vocal template track mixer was not reset")
 assert(shellSourceMain:getNumNotes()==shellSourceNoteCount,"Vocal template track changed source notes")
 assert(shellSourceMain:getNumPitchControls()==shellSourcePitchControlCount,"Vocal template track changed source pitch controls")
+local shellSourceAutomationAfter=shellSourceMain:getParameter("loudness"):getAllPoints()
+assert(#shellSourceAutomationAfter==#shellSourceAutomationPoints and shellSourceAutomationAfter[1][1]==shellSourceAutomationPoints[1][1] and shellSourceAutomationAfter[1][2]==shellSourceAutomationPoints[1][2],"Vocal template track changed source Automation")
+local shellSourceToneShiftAfter=shellSourceMain:getParameter("toneShift"):getAllPoints()
+assert(#shellSourceToneShiftAfter==#shellSourceToneShiftPoints and shellSourceToneShiftAfter[1][1]==shellSourceToneShiftPoints[1][1] and shellSourceToneShiftAfter[1][2]==shellSourceToneShiftPoints[1][2],"Vocal template track changed source toneShift Automation")
+print("CASE:cln-006-empty-track-shell")
 local shellTrackFingerprint="main-group:"..project.tracks[3].refs[1].group.uuid
 callWrite("delete_track",'{"trackIndex":3,"trackFingerprint":"'..shellTrackFingerprint..'"}')
 
 local undoBeforeImplicitNonMainClone=project.undo
 callExpectError(
     "clone_track",
-    '{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Unsafe Copy"}',
+    '{"cloneIntent":"isolated","trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Unsafe Copy"}',
     "NON_MAIN_GROUP_CLONE_REQUIRES_POLICY"
 )
 assert(project.undo==undoBeforeImplicitNonMainClone,"rejected non-main clone created an undo record")
-callWrite("clone_track",'{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Harmony -3st","transposeSemitones":-3,"nonMainGroupPolicy":"detach"}')
+print("CASE:cln-005-ambiguous-track-clone")
+local droppedInstrumentalUndoBefore=project.undo
+trackCloneDropInstrumental=true
+callExpectError(
+    "clone_track",
+    '{"cloneIntent":"isolated","trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Dropped Instrumental","nonMainGroupPolicy":"detach"}',
+    "HOST_POSTCONDITION_FAILED"
+)
+assert(project.undo==droppedInstrumentalUndoBefore,"instrumental preflight mismatch created an undo record")
+local extraReferenceUndoBefore=project.undo
+local libraryCountBeforeExtraReferenceFault=#project.groups
+trackAddExtraReference=true
+callExpectError(
+    "clone_track",
+    '{"cloneIntent":"isolated","trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Extra Reference","nonMainGroupPolicy":"detach"}',
+    "HOST_POSTCONDITION_FAILED"
+)
+assert(project.undo==extraReferenceUndoBefore+1,"inserted extra Reference fault did not retain one undo boundary")
+project:removeTrack(#project.tracks)
+while #project.groups>libraryCountBeforeExtraReferenceFault do
+    project:removeNoteGroup(#project.groups)
+end
+local isolatedTrackUndoBefore=project.undo
+local isolatedTrackResult=callWrite("clone_track",'{"cloneIntent":"isolated","trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Harmony -3st","transposeSemitones":-3,"nonMainGroupPolicy":"detach"}')
+assert(project.undo==isolatedTrackUndoBefore+1,"isolated Track clone must create one undo record")
 assert(project.tracks[3].refs[1].group.notes[1].pitch==57,"clone_track must transpose cloned notes")
 assert(project.tracks[3].refs[1].voice.paramLoudness==-2,"clone_track must inherit voice properties")
 assert(project.tracks[3].refs[2].group.uuid~=sharedCloneUuid,"clone_track must detach non-main library Groups")
 assert(project.tracks[3].refs[2].group.notes[1].pitch==62,"clone_track must transpose the detached non-main Group")
+assert(not project.tracks[3].refs[2].instrumental and project.tracks[3].refs[3].instrumental,"clone_track changed the ordered vocal/instrumental References")
 assert(sharedCloneSource.notes[1].pitch==65,"clone_track transposed the shared source Group")
+assert(isolatedTrackResult:find('"NON_MAIN_VOCAL_REVIEW_REQUIRED"',1,true),"detached Vocal state omitted the manual-review warning")
+assert(not isolatedTrackResult:find('"vocalDatabaseId"',1,true),"detached Vocal state claimed a Vocal database identity")
+assert(not isolatedTrackResult:find('"vocalName"',1,true),"detached Vocal state claimed a Vocal name")
+print("CASE:cln-007-manual-vocal-review")
 print("CASE:isolated-clone-uuid")
 local cloneWithClearedGroups=callWrite(
     "clone_track",
-    '{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Voice Shell","clearNotes":true,"nonMainGroupPolicy":"detach"}'
+    '{"cloneIntent":"isolated","trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Voice Shell","clearNotes":true,"nonMainGroupPolicy":"detach"}'
 )
 assert(cloneWithClearedGroups:find('"independentGroupsVerified":true',1,true),"clone_track did not report independent Group verification")
 assert(project.tracks[4].refs[1].group:getNumNotes()==0,"clearNotes did not clear the cloned main Group")
 assert(project.tracks[4].refs[2].group:getNumNotes()==0,"clearNotes did not clear the detached non-main Group")
 assert(sharedCloneSource:getNumNotes()==2,"clearNotes changed a shared source Group")
 print("CASE:clone-source-unchanged")
+print("CASE:clone-source-snapshot-unchanged")
 local undoBeforeStaleTrack=project.undo
 callExpectError("update_track",'{"trackIndex":2,"trackFingerprint":"stale","name":"wrong"}',"STALE_TRACK")
 assert(project.undo==undoBeforeStaleTrack,"stale track edit must not create an undo record")
@@ -1322,6 +1378,7 @@ callWrite("delete_track",'{"trackIndex":4,"trackFingerprint":"'..track4Fingerpri
 local track3Fingerprint="main-group:"..project.tracks[3].refs[1].group.uuid
 callWrite("delete_track",'{"trackIndex":3,"trackFingerprint":"'..track3Fingerprint..'"}')
 assert(#project.tracks==2,"delete_track must remove the target track")
+project.tracks[2]:removeGroupReference(3)
 callWrite("delete_note_group",'{"groupUuid":"'..sharedCloneUuid..'"}')
 assert(project.tracks[1]:getNumGroups()==1 and project.tracks[2]:getNumGroups()==1,"shared clone fixture was not cleaned up")
 end
@@ -1412,13 +1469,26 @@ local convertedPitch=call("convert_pitch",'{"pitch":69}')
 assert(convertedPitch:find('"frequency":440',1,true),"pitch conversion fallback failed")
 call("show_dialog",'{"kind":"input","title":"Bridge","message":"Value","defaultText":"ok"}')
 
+do
 local libraryCreated=callWrite("create_note_group",'{"name":"Reusable Chorus","notes":[{"onset":0,"duration":705600000,"pitch":67,"lyrics":"chorus"}]}')
 local libraryUuid=assert(libraryCreated:match('"groupUuid":"([^"]+)"'))
+cloneLibraryUuidFixture=libraryUuid
+local librarySource=assert(project:getNoteGroup(libraryUuid))
+local libraryPitchControl=makePitchControl("point")
+libraryPitchControl:setPosition(176400000)
+libraryPitchControl:setPitch(0.25)
+librarySource:addPitchControl(libraryPitchControl)
+librarySource:getParameter("loudness"):add(0,-2)
 call("list_note_groups","{}")
 callWrite("add_group_reference",'{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","targetGroupUuid":"'..libraryUuid..'","timeOffset":1411200000}')
 assert(project.tracks[1]:getNumGroups()==2,"library reference was not added")
-callWrite("clone_group_reference",'{"sourceTrackIndex":1,"sourceGroupIndex":2,"sourceGroupUuid":"'..libraryUuid..'","targetTrackIndex":2,"targetTrackFingerprint":"'..track2Fingerprint..'","linked":true}')
+local linkedCloneUndoBefore=project.undo
+local linkedClone=callWrite("clone_group_reference",'{"cloneIntent":"linked","sourceTrackIndex":1,"sourceGroupIndex":2,"sourceGroupUuid":"'..libraryUuid..'","targetTrackIndex":2,"targetTrackFingerprint":"'..track2Fingerprint..'"}')
+assert(project.undo==linkedCloneUndoBefore+1,"linked Reference clone must create one undo record")
 assert(project.tracks[2]:getNumGroups()==2,"linked group reference was not cloned")
+assert(project.tracks[2].refs[2].group.uuid==libraryUuid,"linked Reference clone changed the Group UUID")
+assert(linkedClone:find('"targetReferenceCount":2',1,true),"linked Reference clone did not verify the incremented reference count")
+print("CASE:cln-001-linked-reference")
 do
 local groupPage=call("get_track_notes",'{"trackIndex":2,"groupOffset":1,"groupLimit":1,"offset":0,"limit":1}')
 assert(groupPage:find('"groupCount":2',1,true),"Track-note Group page lost the total Group count")
@@ -1428,6 +1498,40 @@ print("CASE:query-track-group-page")
 end
 local referencedLibrary=call("list_note_groups","{}")
 assert(referencedLibrary:find('"referenceCount":2',1,true),"library reference count must use UUID identity")
+local sourceNoteCountBeforeIsolation=librarySource:getNumNotes()
+local sourceNotePitchBeforeIsolation=librarySource:getNote(1):getPitch()
+local sourcePitchControlCountBeforeIsolation=librarySource:getNumPitchControls()
+local sourcePitchControlPitchBeforeIsolation=librarySource:getPitchControl(1):getPitch()
+local sourceAutomationBeforeIsolation=librarySource:getParameter("loudness"):getAllPoints()
+local isolatedCloneUndoBefore=project.undo
+local isolatedClone=callWrite("clone_group_reference",'{"cloneIntent":"isolated","sourceTrackIndex":1,"sourceGroupIndex":2,"sourceGroupUuid":"'..libraryUuid..'","targetTrackIndex":2,"targetTrackFingerprint":"'..track2Fingerprint..'","name":"Reusable Chorus Isolated"}')
+assert(project.undo==isolatedCloneUndoBefore+1,"isolated Reference clone must create one undo record")
+local isolatedUuid=assert(isolatedClone:match('"targetGroupUuid":"([^"]+)"'))
+assert(isolatedUuid~=libraryUuid,"isolated Reference clone retained the source UUID")
+assert(project.tracks[2].refs[3].group.uuid==isolatedUuid,"isolated Reference clone did not target the cloned Group")
+assert(isolatedClone:find('"targetReferenceCount":1',1,true),"isolated Reference clone did not verify reference count one")
+print("CASE:cln-002-isolated-reference")
+local isolatedNotes=call("get_track_notes",'{"trackIndex":2,"groupIndex":3,"offset":0,"limit":1}')
+local isolatedNoteFingerprint=nil
+for value in isolatedNotes:gmatch('"fingerprint":"([^"]+)"') do
+    if value:find("|",1,true) then isolatedNoteFingerprint=value end
+end
+assert(isolatedNoteFingerprint,"isolated note read omitted its fingerprint")
+local isolatedDeleteUndoBefore=project.undo
+callWrite("delete_notes",'{"trackIndex":2,"groupIndex":3,"groupUuid":"'..isolatedUuid..'","notes":[{"noteIndex":1,"fingerprint":"'..escape(isolatedNoteFingerprint)..'"}]}')
+assert(project.undo==isolatedDeleteUndoBefore+1,"isolated note delete must create one undo record")
+assert(project.tracks[2].refs[3].group:getNumNotes()==0,"isolated note delete did not remove the target note")
+assert(librarySource:getNumNotes()==sourceNoteCountBeforeIsolation and librarySource:getNote(1):getPitch()==sourceNotePitchBeforeIsolation,"isolated note delete changed source notes")
+print("CASE:cln-003-isolated-note-delete")
+local isolatedAutomationUndoBefore=project.undo
+callWrite("set_automation_points",'{"trackIndex":2,"groupIndex":3,"groupUuid":"'..isolatedUuid..'","parameter":"loudness","clearMode":"all","points":[{"position":0,"value":-8}]}')
+assert(project.undo==isolatedAutomationUndoBefore+1,"isolated Automation mutation must create one undo record")
+local sourceAutomationAfterIsolation=librarySource:getParameter("loudness"):getAllPoints()
+assert(#sourceAutomationAfterIsolation==#sourceAutomationBeforeIsolation and sourceAutomationAfterIsolation[1][1]==sourceAutomationBeforeIsolation[1][1] and sourceAutomationAfterIsolation[1][2]==sourceAutomationBeforeIsolation[1][2],"isolated Automation mutation changed the source curve")
+assert(librarySource:getNumPitchControls()==sourcePitchControlCountBeforeIsolation and librarySource:getPitchControl(1):getPitch()==sourcePitchControlPitchBeforeIsolation,"isolated clone changed source Smart Pitch")
+print("CASE:cln-004-isolated-automation")
+print("CASE:clone-source-snapshot-unchanged")
+callWrite("delete_note_group",'{"groupUuid":"'..isolatedUuid..'"}')
 do
 local page=call("list_note_groups",'{"offset":0,"limit":1}')
 assert(page:find('"returnedGroupCount":1',1,true),"Note Group page returned the wrong count")
@@ -1440,6 +1544,7 @@ end
 local libraryClone=callWrite("clone_note_group",'{"groupUuid":"'..libraryUuid..'","name":"Reusable Chorus Copy"}')
 local clonedLibraryUuid=assert(libraryClone:match('"groupUuid":"([^"]+)"'))
 callWrite("delete_note_group",'{"groupUuid":"'..clonedLibraryUuid..'"}')
+end
 
 local pitchAdded=callWrite("add_pitch_controls",'{"trackIndex":1,"groupIndex":1,"pitchControls":[{"kind":"point","position":352800000,"pitch":0.5},{"kind":"curve","position":705600000,"pitch":-0.25,"points":[{"offset":-176400000,"value":0},{"offset":176400000,"value":1}]}]}')
 do
@@ -1481,7 +1586,7 @@ callWrite("delete_note_retake",'{"trackIndex":1,"groupIndex":1,"noteIndex":2,"fi
 
 call("get_pitch_controls",'{"trackIndex":1,"groupIndex":1}')
 call("set_selection",'{"scope":"pianoRoll","operation":"replace","kind":"notes","trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(newFingerprint)..'"}]}')
-call("set_selection",'{"scope":"arrangement","operation":"replace","kind":"groups","groups":[{"trackIndex":1,"groupIndex":2,"groupUuid":"'..libraryUuid..'"}]}')
+call("set_selection",'{"scope":"arrangement","operation":"replace","kind":"groups","groups":[{"trackIndex":1,"groupIndex":2,"groupUuid":"'..cloneLibraryUuidFixture..'"}]}')
 assert(#arrangementSelection.selectedGroups==1,"non-main group selection failed")
 callExpectError("set_selection",'{"scope":"arrangement","operation":"replace","kind":"groups","groups":[{"trackIndex":1,"groupIndex":1}]}',"INVALID_ARGUMENT")
 assert(#arrangementSelection.selectedGroups==1,"invalid selection must not clear the previous selection")
@@ -1512,7 +1617,7 @@ callWrite("script_data",'{"operation":"set","objectType":"project","key":"synthv
 call("script_data",'{"operation":"get","objectType":"project","key":"synthv-agent-bridge.test"}')
 callWrite("script_data",'{"operation":"remove","objectType":"project","key":"synthv-agent-bridge.test"}')
 
-callWrite("delete_note_group",'{"groupUuid":"'..libraryUuid..'"}')
+callWrite("delete_note_group",'{"groupUuid":"'..cloneLibraryUuidFixture..'"}')
 assert(project.tracks[1]:getNumGroups()==1 and project.tracks[2]:getNumGroups()==1,"deleting a library group must remove linked references")
 
 local autoGroupUndoBefore=project.undo
@@ -1854,5 +1959,5 @@ do
 end
 end
 
-assert(project.undo==66,"expected 66 undo records, got "..project.undo)
+assert(project.undo==71,"expected 71 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

@@ -1239,15 +1239,15 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Clone SynthV Group Reference",
       description:
-        "Copy a vocal group reference to another track, either linked to the same library group or deep-copied into a new library group.",
+        "Copy a vocal Group Reference to another Track with explicit linked or isolated ownership.",
       inputSchema: {
+        cloneIntent: z.enum(["linked", "isolated"]),
         sourceTrackIndex: indexSchema,
         sourceGroupIndex: indexSchema.default(1),
         sourceGroupUuid: groupUuidSchema.optional(),
         sourceReferenceFingerprint: fingerprintSchema.optional(),
         targetTrackIndex: indexSchema,
         targetTrackFingerprint: fingerprintSchema.optional(),
-        linked: z.boolean().default(true),
         name: z.string().min(1).max(200).optional(),
       },
       annotations: {
@@ -1658,8 +1658,9 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Clone SynthV Track",
       description:
-        "Deep-clone a track so its main Vocal, groups, notes, automation, and mixer settings are inherited. Non-main vocal Groups require explicit detachment because the official API cannot verify or assign their Vocal database identities; review those Vocals after cloning.",
+        "Create an isolated Track clone whose vocal GroupContent targets are UUID-separated. Non-main vocal Groups require explicit detachment and manual Vocal review because the official API cannot read or verify their Vocal identities.",
       inputSchema: {
+        cloneIntent: z.enum(["isolated"]),
         ...trackGuardShape,
         name: z.string().min(1).max(200).optional(),
         displayColor: displayColorSchema.optional(),
@@ -1690,6 +1691,7 @@ export function createServer(config: BridgeConfig): McpServer {
       description:
         "Clone only a source track's host-owned main Vocal context into a new empty track. Notes, pitch controls, known automation, and every non-main Group are removed before insertion. The official API cannot reveal the Vocal database identity, so the result reports host-clone inheritance without naming the Vocal.",
       inputSchema: {
+        cloneIntent: z.enum(["shell"]),
         ...trackGuardShape,
         name: z.string().min(1).max(200).optional(),
         groupName: z.string().min(1).max(200).optional(),

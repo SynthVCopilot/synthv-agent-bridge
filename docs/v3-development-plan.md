@@ -372,6 +372,23 @@ Order:
 3. verified-empty Track shell;
 4. Track clone containing non-main Groups.
 
+Automated clone slice implemented on 2026-07-30:
+
+- `clone_group_reference`, `clone_track_shell`, and `clone_track` now use the
+  common fresh-read, Guard, preflight, one-Undo, mutation, and verification
+  pipeline.
+- `cloneIntent` is required and constrained by the authoritative command
+  policy. The v3 description omits legacy clone booleans and rejects
+  `deepCopy`.
+- postconditions reread UUID association and reference counts, then compare
+  source notes, Automation, Smart Pitch, Track metadata, and ordered Reference
+  snapshots.
+- fake-host cases CLN-001 through CLN-007 cover linked reference ownership,
+  isolated Group mutation, ambiguous Track rejection, empty shells, and the
+  detached Vocal manual-review warning.
+- real SynthV linked/isolated/shell acceptance remains pending; installation
+  and host mutation are intentionally deferred to the controller's checkpoint.
+
 Exit criteria:
 
 - CLN-001 through CLN-007 pass;

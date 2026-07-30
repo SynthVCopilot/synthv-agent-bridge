@@ -754,6 +754,23 @@ function expandContext(
   requiredMode?: V3ContextMode,
 ): JsonRecord {
   const result = { ...args };
+  const cloneIntents = optionalCommandPolicy(action)?.cloneIntents;
+  if (cloneIntents !== undefined) {
+    if (Object.prototype.hasOwnProperty.call(result, "deepCopy")) {
+      throw new BridgeProtocolError(
+        `${action} args.deepCopy is not accepted; use cloneIntent`,
+      );
+    }
+    const cloneIntent = optionalString(result.cloneIntent);
+    if (cloneIntent === undefined) {
+      throw new BridgeProtocolError(`${action} args.cloneIntent is required`);
+    }
+    if (!cloneIntents.some((allowed) => allowed === cloneIntent)) {
+      throw new BridgeProtocolError(
+        `${action} args.cloneIntent must be ${cloneIntents.join(" or ")}`,
+      );
+    }
+  }
   if (action === "add_notes" || action === "import_monophonic_score") {
     result.grouping ??= "ensureNonMain";
   }
@@ -1124,6 +1141,7 @@ function minimalWriteResult(
 }
 
 function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
+  const commandPolicy = optionalCommandPolicy(name);
   const schema = tool.inputSchema;
   let inputSchema: unknown = {};
   if (schema !== undefined) {
@@ -1163,6 +1181,38 @@ function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
     };
     schemaRecord.properties = properties;
   }
+  if (
+    commandPolicy?.cloneIntents !== undefined &&
+    typeof inputSchema === "object" &&
+    inputSchema !== null &&
+    !Array.isArray(inputSchema)
+  ) {
+    const schemaRecord = inputSchema as JsonRecord;
+    const properties =
+      typeof schemaRecord.properties === "object" &&
+      schemaRecord.properties !== null &&
+      !Array.isArray(schemaRecord.properties)
+        ? (schemaRecord.properties as JsonRecord)
+        : {};
+    delete properties.deepCopy;
+    delete properties.linked;
+    properties.cloneIntent = {
+      type: "string",
+      enum: [...commandPolicy.cloneIntents],
+      description:
+        "Explicit ownership intent for this clone command. Generic deepCopy and legacy boolean clone flags are not accepted.",
+    };
+    schemaRecord.properties = properties;
+    const required = Array.isArray(schemaRecord.required)
+      ? schemaRecord.required.filter(
+          (value): value is string => typeof value === "string",
+        )
+      : [];
+    schemaRecord.required = [
+      ...required.filter((value) => value !== "linked"),
+      ...(required.includes("cloneIntent") ? [] : ["cloneIntent"]),
+    ];
+  }
   const contextExpansion = contextExpansionForAction(name);
   const contextHint =
     name === "transform_notes"
@@ -1183,11 +1233,22 @@ function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
   return {
     action: name,
     ...(tool.title === undefined ? {} : { title: tool.title }),
-    ...(tool.description === undefined ? {} : { description: tool.description }),
+    ...(commandPolicy?.cloneIntents === undefined
+      ? tool.description === undefined
+        ? {}
+        : { description: tool.description }
+      : {
+          description:
+            name === "clone_group_reference"
+              ? "Create a linked Reference to the same GroupContent or an isolated Reference to a newly cloned Note Group, with UUID and reference-count verification."
+              : name === "clone_track_shell"
+                ? "Create one verified-empty Track shell with the host-cloned main Vocal context and no Vocal identity claim."
+                : "Create an isolated Track clone whose vocal GroupContent targets are UUID-separated and source-verified; detached non-main Vocals require manual review.",
+        }),
     inputSchema,
     ...(contextHint === undefined ? {} : { v3Context: contextHint }),
     category:
-      optionalCommandPolicy(name)?.category ??
+      commandPolicy?.category ??
       (isReadAction(tool) ? "read" : "edit"),
   };
 }

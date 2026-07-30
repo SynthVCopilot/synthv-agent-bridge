@@ -29,6 +29,25 @@ retains a SynthV object reference across commands.
 
 Ambiguous clone intent fails. A `deepCopy` boolean is not part of v3.
 
+The command registry declares the allowed intent for each clone action:
+
+| Action | Intent | Aggregate effect |
+|---|---|---|
+| `clone_group_reference` | `linked` or `isolated` | Add a Reference to existing `GroupContent`, or clone the content and then add a Reference |
+| `clone_track` | `isolated` | Clone the `TrackShell` and isolate every vocal `GroupContent` target |
+| `clone_track_shell` | `shell` | Clone the host-owned main context, then remove notes, Smart Pitch, Automation, and non-main References |
+
+Success is based on a fresh host reread. Linked success preserves the source
+UUID and verifies the incremented reference count. Isolated success verifies
+distinct UUIDs, intended target associations and reference counts, plus
+unchanged source note, Automation, Smart Pitch, Track, and Reference snapshots.
+Shell success verifies one Reference and no notes, Bridge-supported Automation
+points, or Smart Pitch controls.
+
+The official scripting API cannot read or prove detached non-main Vocal
+identity. Such a clone returns a bounded manual-review warning and never names
+or claims the Vocal.
+
 ## Authority
 
 SynthV is the only live project authority. Agent knowledge, user instructions,

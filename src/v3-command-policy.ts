@@ -29,6 +29,7 @@ export type V3OwnershipPolicy =
   | "transactionBoundary"
   | "runtimeState"
   | "reviewState";
+export type V3CloneIntent = "linked" | "isolated" | "shell";
 export type V3ExpectedEffectPolicy =
   | "allowAlreadySatisfied"
   | "notApplicable";
@@ -60,6 +61,7 @@ export interface V3CommandPolicy {
   readonly targetAggregates: readonly V3TargetAggregate[];
   readonly contextKinds: readonly V3ContextTargetKind[];
   readonly ownershipPolicies: readonly V3OwnershipPolicy[];
+  readonly cloneIntents?: readonly V3CloneIntent[];
   readonly expectedEffectPolicy: V3ExpectedEffectPolicy;
   readonly postconditionStrategy: V3PostconditionStrategy;
   readonly transactionEligibility: V3TransactionEligibility;
@@ -75,6 +77,7 @@ type PolicyOverrides = Partial<
     | "postconditionStrategy"
     | "transactionEligibility"
     | "contextExpansion"
+    | "cloneIntents"
   >
 >;
 
@@ -171,15 +174,28 @@ const COMMAND_POLICIES: Readonly<Record<string, V3CommandPolicy>> = {
     { transactionEligibility: "eligible", contextExpansion: { trackGuard: true } },
   ),
   clone_group_reference: projectCommand(
-    "GroupReference",
+    ["GroupContent", "GroupReference"],
     ["track", "group", "automation"],
-    "referenceLocal",
-    { transactionEligibility: "eligible" },
+    ["sharedGroupContent", "referenceLocal"],
+    {
+      cloneIntents: ["linked", "isolated"],
+      transactionEligibility: "eligible",
+    },
   ),
   add_track: projectCommand("TrackShell", [], "trackShell", { transactionEligibility: "eligible" }),
   update_track: projectCommand("TrackShell", TRACK_CONTEXT, "trackShell", TRACK_SHELL),
-  clone_track: projectCommand("TrackShell", TRACK_CONTEXT, "trackShell", TRACK_SHELL),
-  clone_track_shell: projectCommand("TrackShell", TRACK_CONTEXT, "trackShell", TRACK_SHELL),
+  clone_track: projectCommand(
+    ["GroupContent", "GroupReference", "TrackShell"],
+    TRACK_CONTEXT,
+    ["sharedGroupContent", "referenceLocal", "trackShell"],
+    { ...TRACK_SHELL, cloneIntents: ["isolated"] },
+  ),
+  clone_track_shell: projectCommand(
+    "TrackShell",
+    TRACK_CONTEXT,
+    "trackShell",
+    { ...TRACK_SHELL, cloneIntents: ["shell"] },
+  ),
   delete_track: deleteCommand("TrackShell", TRACK_CONTEXT, "trackShell", TRACK_SHELL),
   update_group: projectCommand(
     ["GroupContent", "GroupReference"],

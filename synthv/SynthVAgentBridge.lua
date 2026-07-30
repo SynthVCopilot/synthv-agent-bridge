@@ -2131,6 +2131,84 @@ local function serializeAutomation(group, parameterName)
     }
 end
 
+local CLONE_SOURCE_AUTOMATION_PARAMETERS = {
+    "pitchDelta",
+    "vibratoEnv",
+    "loudness",
+    "tension",
+    "breathiness",
+    "voicing",
+    "gender",
+    "toneShift",
+    "mouthOpening",
+    "rapIntonation"
+}
+
+local function snapshotCloneSourceGroup(group, reference)
+    local notes = json.array()
+    for noteIndex = 1, group:getNumNotes() do
+        notes[#notes + 1] =
+            makeNoteFingerprint(
+                group:getUUID(),
+                noteIndex,
+                group:getNote(noteIndex)
+            )
+    end
+    local automationNames = {}
+    local seenAutomationNames = {}
+    local function addAutomationName(parameter)
+        if not seenAutomationNames[parameter] then
+            seenAutomationNames[parameter] = true
+            automationNames[#automationNames + 1] = parameter
+        end
+    end
+    for index = 1, #CLONE_SOURCE_AUTOMATION_PARAMETERS do
+        addAutomationName(CLONE_SOURCE_AUTOMATION_PARAMETERS[index])
+    end
+    local voice = safeCall(function()
+        return reference:getVoice()
+    end, {})
+    if type(voice.vocalModeParams) == "table" then
+        for vocalModeName, _value in pairs(voice.vocalModeParams) do
+            addAutomationName("vocalMode_" .. tostring(vocalModeName))
+        end
+    end
+    table.sort(automationNames)
+    local automations = json.array()
+    for index = 1, #automationNames do
+        local _automation, serialized =
+            serializeAutomation(group, automationNames[index])
+        automations[#automations + 1] = {
+            parameter = serialized.parameter,
+            interpolation = serialized.interpolation,
+            pointCount = serialized.pointCount,
+            points = serialized.points
+        }
+    end
+    return json.encode({
+        groupUuid = group:getUUID(),
+        notes = notes,
+        automations = automations,
+        pitchControls = serializePitchControls(group)
+    })
+end
+
+local function snapshotCloneSourceReferences(track)
+    local references = json.array()
+    for groupIndex = 1, track:getNumGroups() do
+        local reference = track:getGroupReference(groupIndex)
+        local instrumental = reference:isInstrumental()
+        local target = instrumental and nil or reference:getTarget()
+        references[#references + 1] = {
+            groupIndex = groupIndex,
+            instrumental = instrumental,
+            groupUuid = target and target:getUUID() or JSON_NULL,
+            fingerprint = makeReferenceFingerprint(reference)
+        }
+    end
+    return json.encode(references)
+end
+
 local function verifyPreparedAutomation(
     automation,
     clearMode,
@@ -4045,72 +4123,199 @@ end
 
 function handlers.clone_group_reference(payload)
     payload = requireObject(payload, "payload")
-    local project, _sourceTrack, sourceTrackIndex, sourceReference, sourceGroup, sourceGroupIndex =
-        resolveGroup({
-            trackIndex = payload.sourceTrackIndex,
-            groupIndex = payload.sourceGroupIndex,
-            groupUuid = payload.sourceGroupUuid
-        })
-    validateReferenceFingerprint(
-        sourceReference,
-        optionalString(payload.sourceReferenceFingerprint, "sourceReferenceFingerprint", false),
-        sourceTrackIndex,
-        sourceGroupIndex
-    )
-    local _sameProject, targetTrack, targetTrackIndex = resolveTrack({
-        trackIndex = payload.targetTrackIndex
-    })
-    validateTrackFingerprint(
-        targetTrack,
-        optionalString(payload.targetTrackFingerprint, "targetTrackFingerprint", false),
-        targetTrackIndex
-    )
-    local linked = optionalBoolean(payload.linked, "linked")
-    if linked == nil then linked = true end
-    if linked and sourceReference:isMain() then
-        raiseBridgeError(
-            "INVALID_ARGUMENT",
-            "A track main group cannot be linked directly; use linked=false to create a library copy"
-        )
-    end
-
-    local targetGroup = sourceGroup
-    local reference
-    if linked then
-        reference = sourceReference:clone()
-    else
-        targetGroup = sourceGroup:clone()
-        local name = optionalString(payload.name, "name", false)
-        if name then targetGroup:setName(name) end
-        reference = SV:create("NoteGroupReference")
-        reference:setTarget(targetGroup)
-        reference:setTimeOffset(sourceReference:getTimeOffset())
-        reference:setPitchOffset(sourceReference:getPitchOffset())
-        reference:setMuted(sourceReference:isMuted())
-        reference:setVoice(sourceReference:getVoice())
-        reference:setTimeRange(sourceReference:getOnset(), sourceReference:getDuration())
-    end
-
-    createUndoRecord(project)
-    local libraryIndex = nil
-    if not linked then
-        libraryIndex = project:addNoteGroup(targetGroup)
-        if type(libraryIndex) ~= "number" then
-            libraryIndex = targetGroup:getIndexInParent()
+    return executeCommandPipeline({
+        action = "clone_group_reference",
+        freshRead = function()
+            if isProvided(payload.deepCopy) then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "deepCopy is not accepted; use cloneIntent=linked or cloneIntent=isolated"
+                )
+            end
+            local cloneIntent =
+                requireString(payload.cloneIntent, "cloneIntent", false)
+            if cloneIntent ~= "linked" and cloneIntent ~= "isolated" then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "cloneIntent must be linked or isolated"
+                )
+            end
+            local project, _sourceTrack, sourceTrackIndex,
+                sourceReference, sourceGroup, sourceGroupIndex =
+                resolveGroup({
+                    trackIndex = payload.sourceTrackIndex,
+                    groupIndex = payload.sourceGroupIndex,
+                    groupUuid = payload.sourceGroupUuid
+                })
+            validateReferenceFingerprint(
+                sourceReference,
+                optionalString(
+                    payload.sourceReferenceFingerprint,
+                    "sourceReferenceFingerprint",
+                    false
+                ),
+                sourceTrackIndex,
+                sourceGroupIndex
+            )
+            local _sameProject, targetTrack, targetTrackIndex = resolveTrack({
+                trackIndex = payload.targetTrackIndex
+            })
+            validateTrackFingerprint(
+                targetTrack,
+                optionalString(
+                    payload.targetTrackFingerprint,
+                    "targetTrackFingerprint",
+                    false
+                ),
+                targetTrackIndex
+            )
+            return {
+                project = project,
+                sourceTrackIndex = sourceTrackIndex,
+                sourceReference = sourceReference,
+                sourceReferenceFingerprint =
+                    makeReferenceFingerprint(sourceReference),
+                sourceGroup = sourceGroup,
+                sourceGroupIndex = sourceGroupIndex,
+                sourceReferenceCount = countGroupReferences(project, sourceGroup),
+                sourceSnapshot =
+                    snapshotCloneSourceGroup(sourceGroup, sourceReference),
+                targetTrack = targetTrack,
+                targetTrackIndex = targetTrackIndex,
+                cloneIntent = cloneIntent
+            }
+        end,
+        guard = function(state)
+            if state.cloneIntent == "linked" and state.sourceReference:isMain() then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "A track main Group cannot be linked directly; use cloneIntent=isolated"
+                )
+            end
+        end,
+        preflight = function(state)
+            local targetGroup = state.sourceGroup
+            local reference
+            if state.cloneIntent == "linked" then
+                reference = state.sourceReference:clone()
+            else
+                targetGroup = state.sourceGroup:clone()
+                if targetGroup:getUUID() == state.sourceGroup:getUUID() then
+                    raiseBridgeError(
+                        "SHARED_GROUP_CLONE",
+                        "SynthV did not assign a new UUID to the isolated Note Group"
+                    )
+                end
+                local name = optionalString(payload.name, "name", false)
+                if name then targetGroup:setName(name) end
+                reference = SV:create("NoteGroupReference")
+                reference:setTarget(targetGroup)
+                reference:setTimeOffset(state.sourceReference:getTimeOffset())
+                reference:setPitchOffset(state.sourceReference:getPitchOffset())
+                reference:setMuted(state.sourceReference:isMuted())
+                reference:setVoice(state.sourceReference:getVoice())
+                local duration = state.sourceReference:getDuration()
+                if duration > 0 then
+                    reference:setTimeRange(
+                        state.sourceReference:getOnset(),
+                        duration
+                    )
+                end
+            end
+            return {
+                changedCount = 1,
+                targetGroup = targetGroup,
+                targetGroupUuid = targetGroup:getUUID(),
+                reference = reference
+            }
+        end,
+        alreadySatisfied = function()
+            raiseBridgeError(
+                "INTERNAL_ERROR",
+                "A clone command cannot be already satisfied"
+            )
+        end,
+        mutate = function(state, plan)
+            if state.cloneIntent == "isolated" then
+                plan.libraryIndex = state.project:addNoteGroup(plan.targetGroup)
+                if type(plan.libraryIndex) ~= "number" then
+                    plan.libraryIndex = plan.targetGroup:getIndexInParent()
+                end
+            end
+            plan.targetGroupIndex =
+                state.targetTrack:addGroupReference(plan.reference)
+            if type(plan.targetGroupIndex) ~= "number" then
+                plan.targetGroupIndex = plan.reference:getIndexInParent()
+            end
+        end,
+        verify = function(state, plan)
+            local inserted =
+                state.targetTrack:getGroupReference(plan.targetGroupIndex)
+            local insertedGroup =
+                inserted and not inserted:isInstrumental()
+                    and inserted:getTarget()
+                    or nil
+            local expectedSourceReferenceCount =
+                state.sourceReferenceCount
+                + (state.cloneIntent == "linked" and 1 or 0)
+            local targetReferenceCount =
+                insertedGroup
+                    and countGroupReferences(state.project, insertedGroup)
+                    or 0
+            local expectedTargetReferenceCount =
+                state.cloneIntent == "linked"
+                    and expectedSourceReferenceCount
+                    or 1
+            if insertedGroup == nil
+                or insertedGroup:getUUID() ~= plan.targetGroupUuid
+                or countGroupReferences(state.project, state.sourceGroup)
+                    ~= expectedSourceReferenceCount
+                or targetReferenceCount ~= expectedTargetReferenceCount
+                or snapshotCloneSourceGroup(
+                    state.sourceGroup,
+                    state.sourceReference
+                ) ~= state.sourceSnapshot
+                or makeReferenceFingerprint(state.sourceReference)
+                    ~= state.sourceReferenceFingerprint
+                or (state.cloneIntent == "linked"
+                    and insertedGroup:getUUID() ~= state.sourceGroup:getUUID())
+                or (state.cloneIntent == "isolated"
+                    and insertedGroup:getUUID() == state.sourceGroup:getUUID()) then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not preserve the requested clone ownership",
+                    {
+                        cloneIntent = state.cloneIntent,
+                        targetTrackIndex = state.targetTrackIndex,
+                        targetGroupIndex = plan.targetGroupIndex,
+                        undoRequired = true
+                    }
+                )
+            end
+            return {
+                cloneIntent = state.cloneIntent,
+                linked = state.cloneIntent == "linked",
+                sourceTrackIndex = state.sourceTrackIndex,
+                sourceGroupIndex = state.sourceGroupIndex,
+                sourceGroupUuid = state.sourceGroup:getUUID(),
+                sourceReferenceCount = expectedSourceReferenceCount,
+                targetTrackIndex = state.targetTrackIndex,
+                targetGroupUuid = insertedGroup:getUUID(),
+                targetReferenceCount = targetReferenceCount,
+                targetAssociationVerified = true,
+                sourceSnapshotVerified = true,
+                ownershipVerified = true,
+                libraryIndex = plan.libraryIndex or JSON_NULL,
+                group =
+                    serializeGroup(
+                        inserted,
+                        plan.targetGroupIndex,
+                        0,
+                        0
+                    )
+            }
         end
-    end
-    local targetGroupIndex = targetTrack:addGroupReference(reference)
-    if type(targetGroupIndex) ~= "number" then
-        targetGroupIndex = reference:getIndexInParent()
-    end
-    return {
-        linked = linked,
-        sourceTrackIndex = sourceTrackIndex,
-        sourceGroupIndex = sourceGroupIndex,
-        targetTrackIndex = targetTrackIndex,
-        libraryIndex = libraryIndex or JSON_NULL,
-        group = serializeGroup(reference, targetGroupIndex, 0, 0)
-    }
+    })
 end
 
 function handlers.get_track_notes(payload)
@@ -5994,344 +6199,747 @@ end
 
 function handlers.clone_track(payload)
     payload = requireObject(payload, "payload")
-    local project, sourceTrack, sourceTrackIndex = resolveTrack(payload)
-    validateTrackFingerprint(
-        sourceTrack,
-        optionalString(payload.trackFingerprint, "trackFingerprint", false),
-        sourceTrackIndex
-    )
-
-    local name = optionalString(payload.name, "name", false)
-    local displayColor = optionalString(payload.displayColor, "displayColor", false)
-    if displayColor then
-        displayColor = normalizeDisplayColor(displayColor, "displayColor")
-    end
-    local bounced = optionalBoolean(payload.bounced, "bounced")
-    local clearNotes = optionalBoolean(payload.clearNotes, "clearNotes")
-    if clearNotes == nil then
-        clearNotes = false
-    end
-    local transposeSemitones = optionalInteger(
-        payload.transposeSemitones,
-        "transposeSemitones",
-        -127,
-        127,
-        0
-    )
-    local minimumPitch = optionalInteger(payload.minimumPitch, "minimumPitch", 0, 127, 0)
-    local maximumPitch = optionalInteger(payload.maximumPitch, "maximumPitch", 0, 127, 127)
-    if minimumPitch > maximumPitch then
-        raiseBridgeError("INVALID_ARGUMENT", "minimumPitch must not exceed maximumPitch")
-    end
-    local rangePolicy = optionalString(payload.rangePolicy, "rangePolicy", false) or "reject"
-    if rangePolicy ~= "reject" and rangePolicy ~= "octave" then
-        raiseBridgeError("INVALID_ARGUMENT", "rangePolicy must be reject or octave")
-    end
-    local gainDecibel = optionalNumber(payload.gainDecibel, "gainDecibel", -24, 24)
-    local pan = optionalNumber(payload.pan, "pan", -1, 1)
-    local nonMainGroupPolicy =
-        optionalString(payload.nonMainGroupPolicy, "nonMainGroupPolicy", false)
-            or "reject"
-    if nonMainGroupPolicy ~= "reject" and nonMainGroupPolicy ~= "detach" then
-        raiseBridgeError(
-            "INVALID_ARGUMENT",
-            "nonMainGroupPolicy must be reject or detach"
-        )
-    end
-    local nonMainVocalGroupCount = 0
-    for groupIndex = 2, sourceTrack:getNumGroups() do
-        local sourceReference = sourceTrack:getGroupReference(groupIndex)
-        if sourceReference and not sourceReference:isInstrumental() then
-            nonMainVocalGroupCount = nonMainVocalGroupCount + 1
-        end
-    end
-    if nonMainVocalGroupCount > 0 and nonMainGroupPolicy ~= "detach" then
-        raiseBridgeError(
-            "NON_MAIN_GROUP_CLONE_REQUIRES_POLICY",
-            "The source track has non-main vocal Groups. Their content can be detached, but SynthV's scripting API cannot verify or assign each Group's Vocal database identity",
-            {
+    return executeCommandPipeline({
+        action = "clone_track",
+        freshRead = function()
+            if isProvided(payload.deepCopy) then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "deepCopy is not accepted; use cloneIntent=isolated"
+                )
+            end
+            local cloneIntent =
+                requireString(payload.cloneIntent, "cloneIntent", false)
+            if cloneIntent ~= "isolated" then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "cloneIntent must be isolated"
+                )
+            end
+            local project, sourceTrack, sourceTrackIndex =
+                resolveTrack(payload)
+            validateTrackFingerprint(
+                sourceTrack,
+                optionalString(
+                    payload.trackFingerprint,
+                    "trackFingerprint",
+                    false
+                ),
+                sourceTrackIndex
+            )
+            local state = {
+                project = project,
+                sourceTrack = sourceTrack,
                 sourceTrackIndex = sourceTrackIndex,
-                nonMainVocalGroupCount = nonMainVocalGroupCount,
-                requiredPolicy = "detach",
-                vocalReviewRequired = true
+                sourceTrackSnapshot =
+                    json.encode(serializeTrackSummary(sourceTrack, sourceTrackIndex)),
+                sourceReferenceSnapshot =
+                    snapshotCloneSourceReferences(sourceTrack),
+                sourceGroups = {},
+                sourceGroupsByUuid = {},
+                cloneIntent = cloneIntent,
+                name = optionalString(payload.name, "name", false),
+                displayColor =
+                    optionalString(payload.displayColor, "displayColor", false),
+                bounced = optionalBoolean(payload.bounced, "bounced"),
+                clearNotes =
+                    optionalBoolean(payload.clearNotes, "clearNotes") or false,
+                transposeSemitones = optionalInteger(
+                    payload.transposeSemitones,
+                    "transposeSemitones",
+                    -127,
+                    127,
+                    0
+                ),
+                minimumPitch =
+                    optionalInteger(payload.minimumPitch, "minimumPitch", 0, 127, 0),
+                maximumPitch =
+                    optionalInteger(payload.maximumPitch, "maximumPitch", 0, 127, 127),
+                rangePolicy =
+                    optionalString(payload.rangePolicy, "rangePolicy", false)
+                        or "reject",
+                gainDecibel =
+                    optionalNumber(payload.gainDecibel, "gainDecibel", -24, 24),
+                pan = optionalNumber(payload.pan, "pan", -1, 1),
+                nonMainGroupPolicy =
+                    optionalString(
+                        payload.nonMainGroupPolicy,
+                        "nonMainGroupPolicy",
+                        false
+                    ) or "reject",
+                nonMainVocalGroupCount = 0
             }
-        )
-    end
-
-    local clonedTrack = sourceTrack:clone()
-    if name ~= nil then
-        clonedTrack:setName(name)
-    end
-    if displayColor ~= nil then
-        setDisplayColorVerified(clonedTrack, displayColor, "displayColor")
-    end
-    if bounced ~= nil then
-        clonedTrack:setBounced(bounced)
-    end
-
-    local sourceMainGroup = sourceTrack:getGroupReference(1):getTarget()
-    local clonedMainGroup = clonedTrack:getGroupReference(1):getTarget()
-    if clonedMainGroup:getUUID() == sourceMainGroup:getUUID() then
-        raiseBridgeError(
-            "SHARED_MAIN_GROUP_CLONE",
-            "SynthV did not create an independent main group for the cloned track"
-        )
-    end
-
-    -- Track:clone() deep-copies the main group, but NoteGroupReference:clone()
-    -- explicitly does not copy a non-main target. Rebuild every vocal non-main
-    -- reference around one cloned library group per source UUID.
-    local detachedGroupsBySourceUuid = {}
-    local detachedGroups = {}
-    local replacementReferences = {}
-    local removeIndices = {}
-    for groupIndex = 2, sourceTrack:getNumGroups() do
-        local sourceReference = sourceTrack:getGroupReference(groupIndex)
-        if sourceReference and not sourceReference:isInstrumental() then
-            local sourceGroup = sourceReference:getTarget()
-            local sourceUuid = sourceGroup:getUUID()
-            local detachedGroup = detachedGroupsBySourceUuid[sourceUuid]
-            if detachedGroup == nil then
-                detachedGroup = sourceGroup:clone()
-                if detachedGroup:getUUID() == sourceUuid then
-                    raiseBridgeError(
-                        "SHARED_GROUP_CLONE",
-                        "SynthV did not assign a new UUID to a cloned library Note Group",
-                        { groupIndex = groupIndex, groupUuid = sourceUuid }
+            if state.displayColor then
+                state.displayColor =
+                    normalizeDisplayColor(state.displayColor, "displayColor")
+            end
+            if state.minimumPitch > state.maximumPitch then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "minimumPitch must not exceed maximumPitch"
+                )
+            end
+            if state.rangePolicy ~= "reject"
+                and state.rangePolicy ~= "octave" then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "rangePolicy must be reject or octave"
+                )
+            end
+            if state.nonMainGroupPolicy ~= "reject"
+                and state.nonMainGroupPolicy ~= "detach" then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "nonMainGroupPolicy must be reject or detach"
+                )
+            end
+            for groupIndex = 1, sourceTrack:getNumGroups() do
+                local sourceReference =
+                    sourceTrack:getGroupReference(groupIndex)
+                if sourceReference and not sourceReference:isInstrumental() then
+                    if groupIndex > 1 then
+                        state.nonMainVocalGroupCount =
+                            state.nonMainVocalGroupCount + 1
+                    end
+                    local sourceGroup = sourceReference:getTarget()
+                    local sourceUuid = sourceGroup:getUUID()
+                    if state.sourceGroupsByUuid[sourceUuid] == nil then
+                        local sourceState = {
+                            group = sourceGroup,
+                            reference = sourceReference,
+                            groupUuid = sourceUuid,
+                            referenceCount =
+                                countGroupReferences(project, sourceGroup),
+                            snapshot =
+                                snapshotCloneSourceGroup(
+                                    sourceGroup,
+                                    sourceReference
+                                )
+                        }
+                        state.sourceGroupsByUuid[sourceUuid] = sourceState
+                        state.sourceGroups[#state.sourceGroups + 1] =
+                            sourceState
+                    end
+                end
+            end
+            return state
+        end,
+        guard = function(state)
+            if state.nonMainVocalGroupCount > 0
+                and state.nonMainGroupPolicy ~= "detach" then
+                raiseBridgeError(
+                    "NON_MAIN_GROUP_CLONE_REQUIRES_POLICY",
+                    "The source Track has non-main vocal Groups. Their content can be isolated, but SynthV's official scripting API cannot read, verify, or assign each Group's Vocal identity",
+                    {
+                        sourceTrackIndex = state.sourceTrackIndex,
+                        nonMainVocalGroupCount =
+                            state.nonMainVocalGroupCount,
+                        requiredPolicy = "detach",
+                        vocalReviewRequired = true
+                    }
+                )
+            end
+        end,
+        preflight = function(state)
+            local clonedTrack = state.sourceTrack:clone()
+            if state.name ~= nil then clonedTrack:setName(state.name) end
+            if state.displayColor ~= nil then
+                setDisplayColorVerified(
+                    clonedTrack,
+                    state.displayColor,
+                    "displayColor"
+                )
+            end
+            if state.bounced ~= nil then
+                clonedTrack:setBounced(state.bounced)
+            end
+            local sourceMainGroup =
+                state.sourceTrack:getGroupReference(1):getTarget()
+            local clonedMainGroup =
+                clonedTrack:getGroupReference(1):getTarget()
+            if clonedMainGroup:getUUID() == sourceMainGroup:getUUID() then
+                raiseBridgeError(
+                    "SHARED_MAIN_GROUP_CLONE",
+                    "SynthV did not create an independent main Group for the cloned Track"
+                )
+            end
+            local detachedGroupsBySourceUuid = {}
+            local detachedGroups = {}
+            local detachedReferenceCounts = {}
+            local orderedReferences = {}
+            for groupIndex = 2, state.sourceTrack:getNumGroups() do
+                local sourceReference =
+                    state.sourceTrack:getGroupReference(groupIndex)
+                if sourceReference
+                    and not sourceReference:isInstrumental() then
+                    local sourceGroup = sourceReference:getTarget()
+                    local sourceUuid = sourceGroup:getUUID()
+                    local detachedGroup =
+                        detachedGroupsBySourceUuid[sourceUuid]
+                    if detachedGroup == nil then
+                        detachedGroup = sourceGroup:clone()
+                        if detachedGroup:getUUID() == sourceUuid then
+                            raiseBridgeError(
+                                "SHARED_GROUP_CLONE",
+                                "SynthV did not assign a new UUID to an isolated library Note Group",
+                                {
+                                    groupIndex = groupIndex,
+                                    groupUuid = sourceUuid
+                                }
+                            )
+                        end
+                        detachedGroupsBySourceUuid[sourceUuid] =
+                            detachedGroup
+                        detachedGroups[#detachedGroups + 1] =
+                            detachedGroup
+                        detachedReferenceCounts[sourceUuid] = 0
+                    end
+                    detachedReferenceCounts[sourceUuid] =
+                        detachedReferenceCounts[sourceUuid] + 1
+                    orderedReferences[#orderedReferences + 1] =
+                        cloneReferenceWithIndependentTarget(
+                            sourceReference,
+                            detachedGroup
+                        )
+                else
+                    local clonedReference =
+                        clonedTrack:getGroupReference(groupIndex)
+                    if clonedReference == nil
+                        or not clonedReference:isInstrumental()
+                        or makeReferenceFingerprint(clonedReference)
+                            ~= makeReferenceFingerprint(sourceReference) then
+                        raiseBridgeError(
+                            "HOST_POSTCONDITION_FAILED",
+                            "SynthV did not preserve an instrumental Reference while preparing the isolated Track clone",
+                            {
+                                sourceTrackIndex =
+                                    state.sourceTrackIndex,
+                                groupIndex = groupIndex
+                            }
+                        )
+                    end
+                    orderedReferences[#orderedReferences + 1] =
+                        clonedReference
+                end
+            end
+            for groupIndex = clonedTrack:getNumGroups(), 2, -1 do
+                clonedTrack:removeGroupReference(groupIndex)
+            end
+            for index = 1, #orderedReferences do
+                clonedTrack:addGroupReference(orderedReferences[index])
+            end
+            local targetGroups = { clonedMainGroup }
+            local detachedExpectedReferenceCounts = {}
+            for index = 1, #detachedGroups do
+                targetGroups[#targetGroups + 1] = detachedGroups[index]
+            end
+            for sourceUuid, detachedGroup in pairs(
+                detachedGroupsBySourceUuid
+            ) do
+                detachedExpectedReferenceCounts[detachedGroup:getUUID()] =
+                    detachedReferenceCounts[sourceUuid]
+            end
+            local affectedNoteCount = 0
+            for targetIndex = 1, #targetGroups do
+                local clonedGroup = targetGroups[targetIndex]
+                if state.clearNotes then
+                    affectedNoteCount =
+                        affectedNoteCount + clonedGroup:getNumNotes()
+                    for noteIndex = clonedGroup:getNumNotes(), 1, -1 do
+                        clonedGroup:removeNote(noteIndex)
+                    end
+                elseif state.transposeSemitones ~= 0 then
+                    for noteIndex = 1, clonedGroup:getNumNotes() do
+                        local note = clonedGroup:getNote(noteIndex)
+                        local newPitch =
+                            note:getPitch() + state.transposeSemitones
+                        if state.rangePolicy == "octave" then
+                            while newPitch < state.minimumPitch do
+                                newPitch = newPitch + 12
+                            end
+                            while newPitch > state.maximumPitch do
+                                newPitch = newPitch - 12
+                            end
+                        end
+                        if newPitch < state.minimumPitch
+                            or newPitch > state.maximumPitch
+                            or newPitch < 0
+                            or newPitch > 127 then
+                            raiseBridgeError(
+                                "PITCH_OUT_OF_RANGE",
+                                "An isolated note would leave MIDI range 0..127",
+                                {
+                                    targetGroupIndex = targetIndex,
+                                    noteIndex = noteIndex,
+                                    originalPitch = note:getPitch(),
+                                    requestedPitch = newPitch,
+                                    minimumPitch = state.minimumPitch,
+                                    maximumPitch = state.maximumPitch,
+                                    rangePolicy = state.rangePolicy
+                                }
+                            )
+                        end
+                        note:setPitch(newPitch)
+                        affectedNoteCount = affectedNoteCount + 1
+                    end
+                end
+            end
+            local clonedMixer = clonedTrack:getMixer()
+            if state.gainDecibel ~= nil then
+                clonedMixer:setGainDecibel(state.gainDecibel)
+            end
+            if state.pan ~= nil then clonedMixer:setPan(state.pan) end
+            local expectedReferences = {}
+            for groupIndex = 1, clonedTrack:getNumGroups() do
+                local reference = clonedTrack:getGroupReference(groupIndex)
+                local instrumental = reference:isInstrumental()
+                expectedReferences[groupIndex] = {
+                    instrumental = instrumental,
+                    groupUuid =
+                        instrumental
+                            and JSON_NULL
+                            or reference:getTarget():getUUID(),
+                    fingerprint = makeReferenceFingerprint(reference)
+                }
+            end
+            return {
+                changedCount = 1,
+                clonedTrack = clonedTrack,
+                clonedMainGroup = clonedMainGroup,
+                detachedGroups = detachedGroups,
+                detachedExpectedReferenceCounts =
+                    detachedExpectedReferenceCounts,
+                expectedReferences = expectedReferences,
+                affectedNoteCount = affectedNoteCount
+            }
+        end,
+        alreadySatisfied = function()
+            raiseBridgeError(
+                "INTERNAL_ERROR",
+                "A clone command cannot be already satisfied"
+            )
+        end,
+        mutate = function(state, plan)
+            for index = 1, #plan.detachedGroups do
+                state.project:addNoteGroup(plan.detachedGroups[index])
+            end
+            plan.trackIndex = state.project:addTrack(plan.clonedTrack)
+            if type(plan.trackIndex) ~= "number" then
+                plan.trackIndex = state.project:getNumTracks()
+            end
+        end,
+        verify = function(state, plan)
+            local insertedTrack =
+                state.project:getTrack(plan.trackIndex)
+            local insertedMainReference =
+                insertedTrack and insertedTrack:getGroupReference(1) or nil
+            local insertedMainGroup =
+                insertedMainReference
+                    and not insertedMainReference:isInstrumental()
+                    and insertedMainReference:getTarget()
+                    or nil
+            local sourceMainUuid =
+                state.sourceTrack:getGroupReference(1):getTarget():getUUID()
+            local valid = insertedTrack ~= nil
+                and insertedMainGroup ~= nil
+                and insertedTrack:getNumGroups()
+                    == #plan.expectedReferences
+                and insertedMainGroup:getUUID()
+                    == plan.clonedMainGroup:getUUID()
+                and insertedMainGroup:getUUID() ~= sourceMainUuid
+                and countGroupReferences(state.project, insertedMainGroup) == 1
+                and json.encode(
+                    serializeTrackSummary(
+                        state.sourceTrack,
+                        state.sourceTrackIndex
                     )
+                ) == state.sourceTrackSnapshot
+                and snapshotCloneSourceReferences(state.sourceTrack)
+                    == state.sourceReferenceSnapshot
+            for index = 1, #state.sourceGroups do
+                local sourceState = state.sourceGroups[index]
+                if countGroupReferences(state.project, sourceState.group)
+                        ~= sourceState.referenceCount
+                    or snapshotCloneSourceGroup(
+                        sourceState.group,
+                        sourceState.reference
+                    ) ~= sourceState.snapshot then
+                    valid = false
                 end
-                detachedGroupsBySourceUuid[sourceUuid] = detachedGroup
-                detachedGroups[#detachedGroups + 1] = detachedGroup
             end
-            replacementReferences[#replacementReferences + 1] =
-                cloneReferenceWithIndependentTarget(sourceReference, detachedGroup)
-            removeIndices[#removeIndices + 1] = groupIndex
+            for index = 1, #plan.detachedGroups do
+                local detachedGroup = plan.detachedGroups[index]
+                if detachedGroup:getUUID() == sourceMainUuid
+                    or countGroupReferences(state.project, detachedGroup)
+                        ~= (
+                            plan.detachedExpectedReferenceCounts[
+                                detachedGroup:getUUID()
+                            ] or 1
+                        ) then
+                    valid = false
+                end
+            end
+            for groupIndex = 1, #plan.expectedReferences do
+                local expected = plan.expectedReferences[groupIndex]
+                local insertedReference =
+                    insertedTrack and insertedTrack
+                        :getGroupReference(groupIndex)
+                        or nil
+                local insertedGroup =
+                    insertedReference
+                        and not insertedReference:isInstrumental()
+                        and insertedReference:getTarget()
+                        or nil
+                if insertedReference == nil
+                    or insertedReference:isInstrumental()
+                        ~= expected.instrumental
+                    or (
+                        not expected.instrumental
+                        and (
+                            insertedGroup == nil
+                            or insertedGroup:getUUID()
+                                ~= expected.groupUuid
+                        )
+                    )
+                    or makeReferenceFingerprint(insertedReference)
+                        ~= expected.fingerprint then
+                    valid = false
+                end
+            end
+            if not valid then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not verify isolated Track ownership or an unchanged source",
+                    {
+                        sourceTrackIndex = state.sourceTrackIndex,
+                        trackIndex = plan.trackIndex,
+                        undoRequired = true
+                    }
+                )
+            end
+            local result =
+                serializeTrackSummary(insertedTrack, plan.trackIndex)
+            result.mainGroup =
+                serializeMainGroupLocator(insertedTrack, plan.trackIndex)
+            result.cloneIntent = state.cloneIntent
+            result.sourceTrackIndex = state.sourceTrackIndex
+            result.clearNotes = state.clearNotes
+            result.transposeSemitones = state.transposeSemitones
+            result.affectedNoteCount = plan.affectedNoteCount
+            result.voiceRange = {
+                minimumPitch = state.minimumPitch,
+                maximumPitch = state.maximumPitch
+            }
+            result.rangePolicy = state.rangePolicy
+            result.nonMainGroupPolicy = state.nonMainGroupPolicy
+            result.detachedGroupCount = #plan.detachedGroups
+            result.independentGroupsVerified = true
+            result.sourceSnapshotVerified = true
+            result.nonMainVocalReviewRequired =
+                #plan.detachedGroups > 0
+            result.manualReviewWarnings = json.array()
+            if #plan.detachedGroups > 0 then
+                result.manualReviewWarnings[1] = {
+                    code = "NON_MAIN_VOCAL_REVIEW_REQUIRED",
+                    groupCount = #plan.detachedGroups,
+                    message =
+                        "Review each detached non-main Group Vocal in SynthV; the official scripting API cannot read or verify Vocal identity."
+                }
+            end
+            result.mixer = serializeMixer(insertedTrack)
+            return result
         end
-    end
-    for index = #removeIndices, 1, -1 do
-        clonedTrack:removeGroupReference(removeIndices[index])
-    end
-    for index = 1, #replacementReferences do
-        clonedTrack:addGroupReference(replacementReferences[index])
-    end
-
-    local targetGroups = { clonedMainGroup }
-    for index = 1, #detachedGroups do
-        targetGroups[#targetGroups + 1] = detachedGroups[index]
-    end
-    local affectedNoteCount = 0
-    for targetIndex = 1, #targetGroups do
-        local clonedGroup = targetGroups[targetIndex]
-        if clearNotes then
-            affectedNoteCount = affectedNoteCount + clonedGroup:getNumNotes()
-            for noteIndex = clonedGroup:getNumNotes(), 1, -1 do
-                clonedGroup:removeNote(noteIndex)
-            end
-        elseif transposeSemitones ~= 0 then
-            for noteIndex = 1, clonedGroup:getNumNotes() do
-                local note = clonedGroup:getNote(noteIndex)
-                local newPitch = note:getPitch() + transposeSemitones
-                if rangePolicy == "octave" then
-                    while newPitch < minimumPitch do newPitch = newPitch + 12 end
-                    while newPitch > maximumPitch do newPitch = newPitch - 12 end
-                end
-                if newPitch < minimumPitch or newPitch > maximumPitch
-                    or newPitch < 0 or newPitch > 127 then
-                    raiseBridgeError("PITCH_OUT_OF_RANGE", "A cloned note would leave MIDI range 0..127", {
-                        targetGroupIndex = targetIndex,
-                        noteIndex = noteIndex,
-                        originalPitch = note:getPitch(),
-                        requestedPitch = newPitch,
-                        minimumPitch = minimumPitch,
-                        maximumPitch = maximumPitch,
-                        rangePolicy = rangePolicy
-                    })
-                end
-                note:setPitch(newPitch)
-                affectedNoteCount = affectedNoteCount + 1
-            end
-        end
-    end
-
-    local clonedMixer = clonedTrack:getMixer()
-    if gainDecibel ~= nil then clonedMixer:setGainDecibel(gainDecibel) end
-    if pan ~= nil then clonedMixer:setPan(pan) end
-
-    createUndoRecord(project)
-    for index = 1, #detachedGroups do
-        project:addNoteGroup(detachedGroups[index])
-    end
-    local trackIndex = project:addTrack(clonedTrack)
-    if type(trackIndex) ~= "number" then
-        trackIndex = project:getNumTracks()
-    end
-    local result = serializeTrackSummary(clonedTrack, trackIndex)
-    result.mainGroup = serializeMainGroupLocator(clonedTrack, trackIndex)
-    result.sourceTrackIndex = sourceTrackIndex
-    result.clearNotes = clearNotes
-    result.transposeSemitones = transposeSemitones
-    result.affectedNoteCount = affectedNoteCount
-    result.voiceRange = { minimumPitch = minimumPitch, maximumPitch = maximumPitch }
-    result.rangePolicy = rangePolicy
-    result.nonMainGroupPolicy = nonMainGroupPolicy
-    result.detachedGroupCount = #detachedGroups
-    result.independentGroupsVerified = true
-    result.nonMainVocalReviewRequired = #detachedGroups > 0
-    result.mixer = serializeMixer(clonedTrack)
-    return result
+    })
 end
 
-local TRACK_SHELL_AUTOMATION_PARAMETERS = {
-    "pitchDelta",
-    "vibratoEnv",
-    "loudness",
-    "tension",
-    "breathiness",
-    "voicing",
-    "gender"
-}
+local TRACK_SHELL_AUTOMATION_PARAMETERS =
+    CLONE_SOURCE_AUTOMATION_PARAMETERS
 
 function handlers.clone_track_shell(payload)
     payload = requireObject(payload, "payload")
-    local project, sourceTrack, sourceTrackIndex = resolveTrack(payload)
-    validateTrackFingerprint(
-        sourceTrack,
-        optionalString(payload.trackFingerprint, "trackFingerprint", false),
-        sourceTrackIndex
-    )
-
-    local name = optionalString(payload.name, "name", false)
-        or (sourceTrack:getName() .. " Vocal Shell")
-    local groupName = optionalString(payload.groupName, "groupName", false)
-        or name
-    local displayColor = optionalString(payload.displayColor, "displayColor", false)
-    if displayColor then
-        displayColor = normalizeDisplayColor(displayColor, "displayColor")
-    end
-    local bounced = optionalBoolean(payload.bounced, "bounced")
-    if bounced == nil then bounced = false end
-    local copyMixer = optionalBoolean(payload.copyMixer, "copyMixer")
-    if copyMixer == nil then copyMixer = false end
-
-    local sourceMainReference = sourceTrack:getGroupReference(1)
-    local sourceMainGroup = sourceMainReference:getTarget()
-    local sourceVoiceSnapshot = json.encode(sanitizeForJson(sourceMainReference:getVoice()))
-    local clonedTrack = sourceTrack:clone()
-    clonedTrack:setName(name)
-    clonedTrack:setBounced(bounced)
-    if displayColor then
-        setDisplayColorVerified(clonedTrack, displayColor, "displayColor")
-    end
-
-    local removedGroupReferenceCount = clonedTrack:getNumGroups() - 1
-    for groupIndex = clonedTrack:getNumGroups(), 2, -1 do
-        clonedTrack:removeGroupReference(groupIndex)
-    end
-
-    local mainReference = clonedTrack:getGroupReference(1)
-    local mainGroup = mainReference:getTarget()
-    if mainGroup:getUUID() == sourceMainGroup:getUUID() then
-        raiseBridgeError(
-            "SHARED_MAIN_GROUP_CLONE",
-            "SynthV did not create an independent main Group for the Vocal template track"
-        )
-    end
-    mainGroup:setName(groupName)
-
-    local clearedNoteCount = mainGroup:getNumNotes()
-    for noteIndex = mainGroup:getNumNotes(), 1, -1 do
-        mainGroup:removeNote(noteIndex)
-    end
-    local clearedPitchControlCount = safeCall(function()
-        return mainGroup:getNumPitchControls()
-    end, 0)
-    for pitchControlIndex = clearedPitchControlCount, 1, -1 do
-        mainGroup:removePitchControl(pitchControlIndex)
-    end
-
-    local automationNames = {}
-    local seenAutomationNames = {}
-    local function addAutomationName(parameter)
-        if not seenAutomationNames[parameter] then
-            seenAutomationNames[parameter] = true
-            automationNames[#automationNames + 1] = parameter
-        end
-    end
-    for index = 1, #TRACK_SHELL_AUTOMATION_PARAMETERS do
-        addAutomationName(TRACK_SHELL_AUTOMATION_PARAMETERS[index])
-    end
-    local sourceVoice = safeCall(function()
-        return sourceMainReference:getVoice()
-    end, {})
-    if type(sourceVoice.vocalModeParams) == "table" then
-        for vocalModeName, _value in pairs(sourceVoice.vocalModeParams) do
-            addAutomationName("vocalMode_" .. tostring(vocalModeName))
-        end
-    end
-    local clearedAutomationPointCount = 0
-    local clearedAutomationParameters = json.array()
-    for index = 1, #automationNames do
-        local parameter = automationNames[index]
-        local automation = safeCall(function()
-            return mainGroup:getParameter(parameter)
-        end, nil)
-        if automation then
-            local points = safeCall(function()
-                return automation:getAllPoints()
-            end, {})
-            clearedAutomationPointCount =
-                clearedAutomationPointCount + #points
-            automation:removeAll()
-            clearedAutomationParameters[#clearedAutomationParameters + 1] =
-                parameter
-        end
-    end
-
-    local mixer = clonedTrack:getMixer()
-    if not copyMixer then
-        mixer:setGainDecibel(0)
-        mixer:setPan(0)
-        mixer:setMuted(false)
-        mixer:setSolo(false)
-    end
-
-    createUndoRecord(project)
-    local trackIndex = project:addTrack(clonedTrack)
-    if type(trackIndex) ~= "number" then
-        trackIndex = project:getNumTracks()
-    end
-
-    local clonedVoiceSnapshot =
-        json.encode(sanitizeForJson(mainReference:getVoice()))
-    if mainGroup:getNumNotes() ~= 0
-        or safeCall(function()
-            return mainGroup:getNumPitchControls()
-        end, 0) ~= 0
-        or clonedTrack:getNumGroups() ~= 1 then
-        raiseBridgeError(
-            "HOST_POSTCONDITION_FAILED",
-            "The Vocal template track was created but its score shell was not empty",
-            {
-                trackIndex = trackIndex,
-                undoRequired = true
+    return executeCommandPipeline({
+        action = "clone_track_shell",
+        freshRead = function()
+            if isProvided(payload.deepCopy) then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "deepCopy is not accepted; use cloneIntent=shell"
+                )
+            end
+            local cloneIntent =
+                requireString(payload.cloneIntent, "cloneIntent", false)
+            if cloneIntent ~= "shell" then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "cloneIntent must be shell"
+                )
+            end
+            local project, sourceTrack, sourceTrackIndex =
+                resolveTrack(payload)
+            validateTrackFingerprint(
+                sourceTrack,
+                optionalString(
+                    payload.trackFingerprint,
+                    "trackFingerprint",
+                    false
+                ),
+                sourceTrackIndex
+            )
+            local sourceMainReference =
+                sourceTrack:getGroupReference(1)
+            local sourceMainGroup = sourceMainReference:getTarget()
+            local name =
+                optionalString(payload.name, "name", false)
+                    or (sourceTrack:getName() .. " Vocal Shell")
+            local displayColor =
+                optionalString(payload.displayColor, "displayColor", false)
+            if displayColor then
+                displayColor =
+                    normalizeDisplayColor(displayColor, "displayColor")
+            end
+            return {
+                project = project,
+                sourceTrack = sourceTrack,
+                sourceTrackIndex = sourceTrackIndex,
+                sourceTrackSnapshot =
+                    json.encode(serializeTrackSummary(sourceTrack, sourceTrackIndex)),
+                sourceReferenceSnapshot =
+                    snapshotCloneSourceReferences(sourceTrack),
+                sourceMainReference = sourceMainReference,
+                sourceMainGroup = sourceMainGroup,
+                sourceMainReferenceCount =
+                    countGroupReferences(project, sourceMainGroup),
+                sourceGroupSnapshot =
+                    snapshotCloneSourceGroup(
+                        sourceMainGroup,
+                        sourceMainReference
+                    ),
+                sourceVoiceSnapshot =
+                    json.encode(
+                        sanitizeForJson(sourceMainReference:getVoice())
+                    ),
+                cloneIntent = cloneIntent,
+                name = name,
+                groupName =
+                    optionalString(payload.groupName, "groupName", false)
+                        or name,
+                displayColor = displayColor,
+                bounced =
+                    optionalBoolean(payload.bounced, "bounced") or false,
+                copyMixer =
+                    optionalBoolean(payload.copyMixer, "copyMixer") or false
             }
-        )
-    end
-
-    local result = serializeTrackSummary(clonedTrack, trackIndex)
-    result.mainGroup = serializeMainGroupLocator(clonedTrack, trackIndex)
-    result.sourceTrackIndex = sourceTrackIndex
-    result.vocalInheritance = "hostTrackClone-unverifiedIdentity"
-    result.voicePropertiesMatched = clonedVoiceSnapshot == sourceVoiceSnapshot
-    result.vocalIdentityReadable = false
-    result.removedGroupReferenceCount = removedGroupReferenceCount
-    result.clearedNoteCount = clearedNoteCount
-    result.clearedPitchControlCount = clearedPitchControlCount
-    result.clearedAutomationPointCount = clearedAutomationPointCount
-    result.clearedAutomationParameters = clearedAutomationParameters
-    result.copyMixer = copyMixer
-    result.verifiedEmptyShell = true
-    return result
+        end,
+        preflight = function(state)
+            local clonedTrack = state.sourceTrack:clone()
+            clonedTrack:setName(state.name)
+            clonedTrack:setBounced(state.bounced)
+            if state.displayColor then
+                setDisplayColorVerified(
+                    clonedTrack,
+                    state.displayColor,
+                    "displayColor"
+                )
+            end
+            local removedGroupReferenceCount =
+                clonedTrack:getNumGroups() - 1
+            for groupIndex = clonedTrack:getNumGroups(), 2, -1 do
+                clonedTrack:removeGroupReference(groupIndex)
+            end
+            local mainReference =
+                clonedTrack:getGroupReference(1)
+            local mainGroup = mainReference:getTarget()
+            if mainGroup:getUUID()
+                == state.sourceMainGroup:getUUID() then
+                raiseBridgeError(
+                    "SHARED_MAIN_GROUP_CLONE",
+                    "SynthV did not create an independent main Group for the Vocal template Track"
+                )
+            end
+            mainGroup:setName(state.groupName)
+            local clearedNoteCount = mainGroup:getNumNotes()
+            for noteIndex = mainGroup:getNumNotes(), 1, -1 do
+                mainGroup:removeNote(noteIndex)
+            end
+            local clearedPitchControlCount = safeCall(function()
+                return mainGroup:getNumPitchControls()
+            end, 0)
+            for pitchControlIndex = clearedPitchControlCount, 1, -1 do
+                mainGroup:removePitchControl(pitchControlIndex)
+            end
+            local automationNames = {}
+            local seenAutomationNames = {}
+            local function addAutomationName(parameter)
+                if not seenAutomationNames[parameter] then
+                    seenAutomationNames[parameter] = true
+                    automationNames[#automationNames + 1] = parameter
+                end
+            end
+            for index = 1, #TRACK_SHELL_AUTOMATION_PARAMETERS do
+                addAutomationName(
+                    TRACK_SHELL_AUTOMATION_PARAMETERS[index]
+                )
+            end
+            local sourceVoice = safeCall(function()
+                return state.sourceMainReference:getVoice()
+            end, {})
+            if type(sourceVoice.vocalModeParams) == "table" then
+                for vocalModeName, _value in pairs(
+                    sourceVoice.vocalModeParams
+                ) do
+                    addAutomationName(
+                        "vocalMode_" .. tostring(vocalModeName)
+                    )
+                end
+            end
+            local clearedAutomationPointCount = 0
+            local clearedAutomationParameters = json.array()
+            for index = 1, #automationNames do
+                local parameter = automationNames[index]
+                local automation = safeCall(function()
+                    return mainGroup:getParameter(parameter)
+                end, nil)
+                if automation then
+                    local points = safeCall(function()
+                        return automation:getAllPoints()
+                    end, {})
+                    clearedAutomationPointCount =
+                        clearedAutomationPointCount + #points
+                    automation:removeAll()
+                    clearedAutomationParameters[
+                        #clearedAutomationParameters + 1
+                    ] = parameter
+                end
+            end
+            local mixer = clonedTrack:getMixer()
+            if not state.copyMixer then
+                mixer:setGainDecibel(0)
+                mixer:setPan(0)
+                mixer:setMuted(false)
+                mixer:setSolo(false)
+            end
+            return {
+                changedCount = 1,
+                clonedTrack = clonedTrack,
+                mainReference = mainReference,
+                mainGroup = mainGroup,
+                automationNames = automationNames,
+                removedGroupReferenceCount =
+                    removedGroupReferenceCount,
+                clearedNoteCount = clearedNoteCount,
+                clearedPitchControlCount =
+                    clearedPitchControlCount,
+                clearedAutomationPointCount =
+                    clearedAutomationPointCount,
+                clearedAutomationParameters =
+                    clearedAutomationParameters
+            }
+        end,
+        alreadySatisfied = function()
+            raiseBridgeError(
+                "INTERNAL_ERROR",
+                "A clone command cannot be already satisfied"
+            )
+        end,
+        mutate = function(state, plan)
+            plan.trackIndex = state.project:addTrack(plan.clonedTrack)
+            if type(plan.trackIndex) ~= "number" then
+                plan.trackIndex = state.project:getNumTracks()
+            end
+        end,
+        verify = function(state, plan)
+            local insertedTrack =
+                state.project:getTrack(plan.trackIndex)
+            local insertedReference =
+                insertedTrack and insertedTrack:getGroupReference(1) or nil
+            local insertedGroup =
+                insertedReference
+                    and not insertedReference:isInstrumental()
+                    and insertedReference:getTarget()
+                    or nil
+            local automationEmpty = true
+            if insertedGroup ~= nil then
+                for index = 1, #plan.automationNames do
+                    local points = safeCall(function()
+                        return insertedGroup
+                            :getParameter(plan.automationNames[index])
+                            :getAllPoints()
+                    end, {})
+                    if #points ~= 0 then
+                        automationEmpty = false
+                    end
+                end
+            end
+            local valid = insertedTrack ~= nil
+                and insertedGroup ~= nil
+                and insertedTrack:getNumGroups() == 1
+                and insertedGroup:getUUID() == plan.mainGroup:getUUID()
+                and insertedGroup:getUUID()
+                    ~= state.sourceMainGroup:getUUID()
+                and insertedGroup:getNumNotes() == 0
+                and safeCall(function()
+                    return insertedGroup:getNumPitchControls()
+                end, 0) == 0
+                and automationEmpty
+                and countGroupReferences(state.project, insertedGroup) == 1
+                and countGroupReferences(
+                    state.project,
+                    state.sourceMainGroup
+                ) == state.sourceMainReferenceCount
+                and snapshotCloneSourceGroup(
+                    state.sourceMainGroup,
+                    state.sourceMainReference
+                ) == state.sourceGroupSnapshot
+                and json.encode(
+                    serializeTrackSummary(
+                        state.sourceTrack,
+                        state.sourceTrackIndex
+                    )
+                ) == state.sourceTrackSnapshot
+                and snapshotCloneSourceReferences(state.sourceTrack)
+                    == state.sourceReferenceSnapshot
+            if not valid then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "The Vocal template Track was created but its shell or source isolation could not be verified",
+                    {
+                        trackIndex = plan.trackIndex,
+                        undoRequired = true
+                    }
+                )
+            end
+            local clonedVoiceSnapshot =
+                json.encode(
+                    sanitizeForJson(insertedReference:getVoice())
+                )
+            local result =
+                serializeTrackSummary(insertedTrack, plan.trackIndex)
+            result.mainGroup =
+                serializeMainGroupLocator(insertedTrack, plan.trackIndex)
+            result.cloneIntent = state.cloneIntent
+            result.sourceTrackIndex = state.sourceTrackIndex
+            result.vocalInheritance =
+                "hostTrackClone-unverifiedIdentity"
+            result.voicePropertiesMatched =
+                clonedVoiceSnapshot == state.sourceVoiceSnapshot
+            result.vocalIdentityReadable = false
+            result.removedGroupReferenceCount =
+                plan.removedGroupReferenceCount
+            result.clearedNoteCount = plan.clearedNoteCount
+            result.clearedPitchControlCount =
+                plan.clearedPitchControlCount
+            result.clearedAutomationPointCount =
+                plan.clearedAutomationPointCount
+            result.clearedAutomationParameters =
+                plan.clearedAutomationParameters
+            result.copyMixer = state.copyMixer
+            result.sourceSnapshotVerified = true
+            result.targetAssociationVerified = true
+            result.targetReferenceCount = 1
+            result.verifiedEmptyShell = true
+            return result
+        end
+    })
 end
 
 function handlers.create_harmony_track(payload)
@@ -6346,6 +6954,7 @@ function handlers.create_harmony_track(payload)
     end
     local direction = intervalSemitones > 0 and "+" or ""
     local result = handlers.clone_track({
+        cloneIntent = "isolated",
         trackIndex = sourceTrackIndex,
         trackFingerprint = sourceTrackFingerprint,
         name = optionalString(payload.name, "name", false)

@@ -91,12 +91,36 @@ test("Fake Host: component build mismatch is rejected before action dispatch", (
   assertMarker(context, "build-mismatch-blocks-command");
 });
 
-test("Fake Host: isolated clone receives a different Group UUID", (context) => {
-  assertMarker(context, "isolated-clone-uuid");
+test("CLN-001: linked reference keeps its Group UUID and increments reference count", (context) => {
+  assertMarker(context, "cln-001-linked-reference");
 });
 
-test("Fake Host: clearing an isolated clone leaves its source unchanged", (context) => {
-  assertMarker(context, "clone-source-unchanged");
+test("CLN-002: isolated clone has a distinct UUID and one reference", (context) => {
+  assertMarker(context, "cln-002-isolated-reference");
+});
+
+test("CLN-003: deleting the isolated clone note leaves source notes unchanged", (context) => {
+  assertMarker(context, "cln-003-isolated-note-delete");
+});
+
+test("CLN-004: isolated Automation mutation leaves the source curve unchanged", (context) => {
+  assertMarker(context, "cln-004-isolated-automation");
+});
+
+test("CLN-005: ambiguous non-main Track clone rejects before Undo", (context) => {
+  assertMarker(context, "cln-005-ambiguous-track-clone");
+});
+
+test("CLN-006: Track shell is verified empty without changing its source", (context) => {
+  assertMarker(context, "cln-006-empty-track-shell");
+});
+
+test("CLN-007: detached Vocal state requires manual review without identity claims", (context) => {
+  assertMarker(context, "cln-007-manual-vocal-review");
+});
+
+test("Fake Host: isolated clone preserves source notes, Automation, and Smart Pitch", (context) => {
+  assertMarker(context, "clone-source-snapshot-unchanged");
 });
 
 test("Fake Host: stale Automation rejects before Undo without raw fingerprints", (context) => {
