@@ -58,6 +58,12 @@ async function writeStatus(config: BridgeConfig): Promise<void> {
 
 async function serveOneCloneCommand(
   config: BridgeConfig,
+  response: Record<string, unknown> = {
+    changedCount: 1,
+    verified: true,
+    targetGroupUuid: "00000000-0000-4000-8000-000000000099",
+    trackIndex: 3,
+  },
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + 3_000;
   while (true) {
@@ -82,12 +88,7 @@ async function serveOneCloneCommand(
     id: request.requestId,
     t: request.traceId,
     b: EXECUTOR_BUILD_ID,
-    r: {
-      changedCount: 1,
-      verified: true,
-      targetGroupUuid: "00000000-0000-4000-8000-000000000099",
-      trackIndex: 3,
-    },
+    r: response,
   });
   await fs.rm(config.paths.processingFile, { force: true });
   return request.payload;
@@ -308,4 +309,76 @@ test("sv_command preserves cloneIntent through internal action parsing", async (
     assert.equal("deepCopy" in payload, false);
     assert.equal("linked" in payload, false);
   }
+});
+
+test("sv_command exposes detached Vocal review warnings through the bounded public outcome", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "synthv-v3-clone-warning-"),
+  );
+  const config = loadConfig(
+    {
+      SYNTHV_AGENT_BRIDGE_TIMEOUT_MS: "2000",
+      SYNTHV_AGENT_BRIDGE_POLL_MS: "5",
+      SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS: "3000",
+    },
+    directory,
+  );
+  await writeStatus(config);
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const server = createServer(config);
+  const client = new Client({
+    name: "v3-clone-warning-test",
+    version: "1.0.0",
+  });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  context.after(async () => {
+    await client.close();
+    await server.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  const bridge = serveOneCloneCommand(config, {
+    changedCount: 1,
+    verified: true,
+    trackIndex: 3,
+    manualReviewWarnings: [
+      {
+        code: "NON_MAIN_VOCAL_REVIEW_REQUIRED",
+        groupCount: 2,
+        message:
+          "Review each detached non-main Group Vocal in SynthV; the official scripting API cannot read or verify Vocal identity.",
+        notes: ["private lyric material"],
+      },
+    ],
+  });
+  const result = toolJson(
+    await client.callTool({
+      name: "sv_command",
+      arguments: {
+        action: "clone_track",
+        args: {
+          cloneIntent: "isolated",
+          trackIndex: 1,
+          nonMainGroupPolicy: "detach",
+        },
+      },
+    }),
+  );
+  await bridge;
+
+  assert.deepEqual(result.warnings, [
+    {
+      code: "NON_MAIN_VOCAL_REVIEW_REQUIRED",
+      groupCount: 2,
+      message:
+        "Review each detached non-main Group Vocal in SynthV; the official scripting API cannot read or verify Vocal identity.",
+      notes: "[redacted]",
+    },
+  ]);
+  assert.equal("manualReviewWarnings" in result, false);
+  assert.ok(JSON.stringify(result).length <= 2_048);
 });

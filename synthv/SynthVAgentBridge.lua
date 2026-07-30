@@ -2131,18 +2131,93 @@ local function serializeAutomation(group, parameterName)
     }
 end
 
-local CLONE_SOURCE_AUTOMATION_PARAMETERS = {
-    "pitchDelta",
-    "vibratoEnv",
-    "loudness",
-    "tension",
-    "breathiness",
-    "voicing",
-    "gender",
-    "toneShift",
-    "mouthOpening",
-    "rapIntonation"
+local CLONE_STATE = {
+    automationParameters = {
+        "pitchDelta",
+        "vibratoEnv",
+        "loudness",
+        "tension",
+        "breathiness",
+        "voicing",
+        "gender",
+        "toneShift",
+        "mouthOpening",
+        "rapIntonation"
+    }
 }
+
+function CLONE_STATE.requireState(callback, capability)
+    local ok, valueOrError = pcall(callback)
+    if not ok or valueOrError == nil then
+        raiseBridgeError(
+            "UNSUPPORTED_HOST_CAPABILITY",
+            "SynthV could not provide authoritative state required to verify clone ownership",
+            {
+                capability = capability,
+                cause =
+                    ok
+                        and "authoritative getter returned nil"
+                        or tostring(valueOrError)
+            }
+        )
+    end
+    return valueOrError
+end
+
+function CLONE_STATE.pitchControls(group)
+    local controls = json.array()
+    local count = CLONE_STATE.requireState(function()
+        return group:getNumPitchControls()
+    end, "NoteGroup.getNumPitchControls")
+    for controlIndex = 1, count do
+        local control = CLONE_STATE.requireState(function()
+            return group:getPitchControl(controlIndex)
+        end, "NoteGroup.getPitchControl")
+        controls[#controls + 1] =
+            serializePitchControl(group, control, controlIndex)
+    end
+    return controls
+end
+
+function CLONE_STATE.referenceFingerprint(reference)
+    local instrumental = CLONE_STATE.requireState(function()
+        return reference:isInstrumental()
+    end, "NoteGroupReference.isInstrumental")
+    local targetUuid = ""
+    local voice = {}
+    if not instrumental then
+        local target = CLONE_STATE.requireState(function()
+            return reference:getTarget()
+        end, "NoteGroupReference.getTarget")
+        targetUuid = target:getUUID()
+        voice = CLONE_STATE.requireState(function()
+            return reference:getVoice()
+        end, "NoteGroupReference.getVoice")
+    end
+    return table.concat({
+        instrumental and "instrumental" or "vocal",
+        targetUuid,
+        tostring(CLONE_STATE.requireState(function()
+            return reference:isMain()
+        end, "NoteGroupReference.isMain")),
+        tostring(CLONE_STATE.requireState(function()
+            return reference:isMuted()
+        end, "NoteGroupReference.isMuted")),
+        tostring(CLONE_STATE.requireState(function()
+            return reference:getTimeOffset()
+        end, "NoteGroupReference.getTimeOffset")),
+        tostring(CLONE_STATE.requireState(function()
+            return reference:getPitchOffset()
+        end, "NoteGroupReference.getPitchOffset")),
+        tostring(CLONE_STATE.requireState(function()
+            return reference:getOnset()
+        end, "NoteGroupReference.getOnset")),
+        tostring(CLONE_STATE.requireState(function()
+            return reference:getDuration()
+        end, "NoteGroupReference.getDuration")),
+        json.encode(sanitizeForJson(voice))
+    }, "|")
+end
 
 local function snapshotCloneSourceGroup(group, reference)
     local notes = json.array()
@@ -2162,12 +2237,12 @@ local function snapshotCloneSourceGroup(group, reference)
             automationNames[#automationNames + 1] = parameter
         end
     end
-    for index = 1, #CLONE_SOURCE_AUTOMATION_PARAMETERS do
-        addAutomationName(CLONE_SOURCE_AUTOMATION_PARAMETERS[index])
+    for index = 1, #CLONE_STATE.automationParameters do
+        addAutomationName(CLONE_STATE.automationParameters[index])
     end
-    local voice = safeCall(function()
+    local voice = CLONE_STATE.requireState(function()
         return reference:getVoice()
-    end, {})
+    end, "NoteGroupReference.getVoice")
     if type(voice.vocalModeParams) == "table" then
         for vocalModeName, _value in pairs(voice.vocalModeParams) do
             addAutomationName("vocalMode_" .. tostring(vocalModeName))
@@ -2189,7 +2264,7 @@ local function snapshotCloneSourceGroup(group, reference)
         groupUuid = group:getUUID(),
         notes = notes,
         automations = automations,
-        pitchControls = serializePitchControls(group)
+        pitchControls = CLONE_STATE.pitchControls(group)
     })
 end
 
@@ -2203,10 +2278,36 @@ local function snapshotCloneSourceReferences(track)
             groupIndex = groupIndex,
             instrumental = instrumental,
             groupUuid = target and target:getUUID() or JSON_NULL,
-            fingerprint = makeReferenceFingerprint(reference)
+            fingerprint = CLONE_STATE.referenceFingerprint(reference)
         }
     end
     return json.encode(references)
+end
+
+function CLONE_STATE.track(track, trackIndex)
+    local rawDisplayColor = CLONE_STATE.requireState(function()
+        return track:getDisplayColor()
+    end, "Track.getDisplayColor")
+    local color = describeDisplayColor(rawDisplayColor)
+    return json.encode({
+        trackIndex = trackIndex,
+        fingerprint = makeTrackFingerprint(track),
+        mainGroupUuid = getMainGroupUuid(track),
+        name = track:getName(),
+        displayColor = color.displayColor,
+        displayColorArgb = color.displayColorArgb or JSON_NULL,
+        displayColorRgb = color.displayColorRgb or JSON_NULL,
+        displayOrder = CLONE_STATE.requireState(function()
+            return track:getDisplayOrder()
+        end, "Track.getDisplayOrder"),
+        duration = track:getDuration(),
+        groupCount = track:getNumGroups(),
+        noteCount = countTrackNotes(track),
+        bounced = CLONE_STATE.requireState(function()
+            return track:isBounced()
+        end, "Track.isBounced"),
+        mixer = serializeMixer(track)
+    })
 end
 
 local function verifyPreparedAutomation(
@@ -6232,7 +6333,7 @@ function handlers.clone_track(payload)
                 sourceTrack = sourceTrack,
                 sourceTrackIndex = sourceTrackIndex,
                 sourceTrackSnapshot =
-                    json.encode(serializeTrackSummary(sourceTrack, sourceTrackIndex)),
+                    CLONE_STATE.track(sourceTrack, sourceTrackIndex),
                 sourceReferenceSnapshot =
                     snapshotCloneSourceReferences(sourceTrack),
                 sourceGroups = {},
@@ -6548,11 +6649,9 @@ function handlers.clone_track(payload)
                     == plan.clonedMainGroup:getUUID()
                 and insertedMainGroup:getUUID() ~= sourceMainUuid
                 and countGroupReferences(state.project, insertedMainGroup) == 1
-                and json.encode(
-                    serializeTrackSummary(
-                        state.sourceTrack,
-                        state.sourceTrackIndex
-                    )
+                and CLONE_STATE.track(
+                    state.sourceTrack,
+                    state.sourceTrackIndex
                 ) == state.sourceTrackSnapshot
                 and snapshotCloneSourceReferences(state.sourceTrack)
                     == state.sourceReferenceSnapshot
@@ -6653,7 +6752,7 @@ function handlers.clone_track(payload)
 end
 
 local TRACK_SHELL_AUTOMATION_PARAMETERS =
-    CLONE_SOURCE_AUTOMATION_PARAMETERS
+    CLONE_STATE.automationParameters
 
 function handlers.clone_track_shell(payload)
     payload = requireObject(payload, "payload")
@@ -6702,7 +6801,7 @@ function handlers.clone_track_shell(payload)
                 sourceTrack = sourceTrack,
                 sourceTrackIndex = sourceTrackIndex,
                 sourceTrackSnapshot =
-                    json.encode(serializeTrackSummary(sourceTrack, sourceTrackIndex)),
+                    CLONE_STATE.track(sourceTrack, sourceTrackIndex),
                 sourceReferenceSnapshot =
                     snapshotCloneSourceReferences(sourceTrack),
                 sourceMainReference = sourceMainReference,
@@ -6761,9 +6860,9 @@ function handlers.clone_track_shell(payload)
             for noteIndex = mainGroup:getNumNotes(), 1, -1 do
                 mainGroup:removeNote(noteIndex)
             end
-            local clearedPitchControlCount = safeCall(function()
+            local clearedPitchControlCount = CLONE_STATE.requireState(function()
                 return mainGroup:getNumPitchControls()
-            end, 0)
+            end, "NoteGroup.getNumPitchControls")
             for pitchControlIndex = clearedPitchControlCount, 1, -1 do
                 mainGroup:removePitchControl(pitchControlIndex)
             end
@@ -6780,9 +6879,9 @@ function handlers.clone_track_shell(payload)
                     TRACK_SHELL_AUTOMATION_PARAMETERS[index]
                 )
             end
-            local sourceVoice = safeCall(function()
+            local sourceVoice = CLONE_STATE.requireState(function()
                 return state.sourceMainReference:getVoice()
-            end, {})
+            end, "NoteGroupReference.getVoice")
             if type(sourceVoice.vocalModeParams) == "table" then
                 for vocalModeName, _value in pairs(
                     sourceVoice.vocalModeParams
@@ -6796,20 +6895,18 @@ function handlers.clone_track_shell(payload)
             local clearedAutomationParameters = json.array()
             for index = 1, #automationNames do
                 local parameter = automationNames[index]
-                local automation = safeCall(function()
+                local automation = CLONE_STATE.requireState(function()
                     return mainGroup:getParameter(parameter)
-                end, nil)
-                if automation then
-                    local points = safeCall(function()
-                        return automation:getAllPoints()
-                    end, {})
-                    clearedAutomationPointCount =
-                        clearedAutomationPointCount + #points
-                    automation:removeAll()
-                    clearedAutomationParameters[
-                        #clearedAutomationParameters + 1
-                    ] = parameter
-                end
+                end, "NoteGroup.getParameter(" .. parameter .. ")")
+                local points = CLONE_STATE.requireState(function()
+                    return automation:getAllPoints()
+                end, "Automation.getAllPoints(" .. parameter .. ")")
+                clearedAutomationPointCount =
+                    clearedAutomationPointCount + #points
+                automation:removeAll()
+                clearedAutomationParameters[
+                    #clearedAutomationParameters + 1
+                ] = parameter
             end
             local mixer = clonedTrack:getMixer()
             if not state.copyMixer then
@@ -6858,13 +6955,20 @@ function handlers.clone_track_shell(payload)
                     and insertedReference:getTarget()
                     or nil
             local automationEmpty = true
+            local pitchControlsEmpty = false
             if insertedGroup ~= nil then
+                pitchControlsEmpty =
+                    CLONE_STATE.requireState(function()
+                        return insertedGroup:getNumPitchControls()
+                    end, "NoteGroup.getNumPitchControls") == 0
                 for index = 1, #plan.automationNames do
-                    local points = safeCall(function()
-                        return insertedGroup
-                            :getParameter(plan.automationNames[index])
-                            :getAllPoints()
-                    end, {})
+                    local parameter = plan.automationNames[index]
+                    local automation = CLONE_STATE.requireState(function()
+                        return insertedGroup:getParameter(parameter)
+                    end, "NoteGroup.getParameter(" .. parameter .. ")")
+                    local points = CLONE_STATE.requireState(function()
+                        return automation:getAllPoints()
+                    end, "Automation.getAllPoints(" .. parameter .. ")")
                     if #points ~= 0 then
                         automationEmpty = false
                     end
@@ -6877,9 +6981,7 @@ function handlers.clone_track_shell(payload)
                 and insertedGroup:getUUID()
                     ~= state.sourceMainGroup:getUUID()
                 and insertedGroup:getNumNotes() == 0
-                and safeCall(function()
-                    return insertedGroup:getNumPitchControls()
-                end, 0) == 0
+                and pitchControlsEmpty
                 and automationEmpty
                 and countGroupReferences(state.project, insertedGroup) == 1
                 and countGroupReferences(
@@ -6890,11 +6992,9 @@ function handlers.clone_track_shell(payload)
                     state.sourceMainGroup,
                     state.sourceMainReference
                 ) == state.sourceGroupSnapshot
-                and json.encode(
-                    serializeTrackSummary(
-                        state.sourceTrack,
-                        state.sourceTrackIndex
-                    )
+                and CLONE_STATE.track(
+                    state.sourceTrack,
+                    state.sourceTrackIndex
                 ) == state.sourceTrackSnapshot
                 and snapshotCloneSourceReferences(state.sourceTrack)
                     == state.sourceReferenceSnapshot

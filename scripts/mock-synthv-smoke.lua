@@ -38,6 +38,10 @@ local phonemeStrengthWriteSupported = true
 mixerThrowAfterGain = false
 trackCloneDropInstrumental = false
 trackAddExtraReference = false
+trackClonePitchGetterFailure = false
+trackCloneAutomationGetterFailure = false
+trackShellPostconditionPitchGetterFailure = false
+trackShellPostconditionAutomationGetterFailure = false
 
 -- SynthV may return distinct Lua proxy values for the same native object.
 -- Delegate every member while intentionally preserving distinct identity.
@@ -223,6 +227,9 @@ local function makeAutomation(name)
     function a:getType() return self.name end
     function a:getInterpolationMethod() return "Linear" end
     function a:getAllPoints()
+        if self.ownerGroup and self.ownerGroup.failAutomationPointsRead then
+            error("forced Automation point read failure")
+        end
         local r={}
         for b,v in pairs(self.points) do r[#r+1]={b,v} end
         table.sort(r,function(x,y)return x[1]<y[1] end)
@@ -317,7 +324,12 @@ local function makeGroup()
         return indexOf(self.notes,n)
     end
     function g:removeNote(i) table.remove(self.notes,i) end
-    function g:getNumPitchControls() return #self.pitchControls end
+    function g:getNumPitchControls()
+        if self.failPitchControlRead then
+            error("forced Smart Pitch count read failure")
+        end
+        return #self.pitchControls
+    end
     function g:getPitchControl(i) return self.pitchControls[i] end
     function g:addPitchControl(control)
         control.parent=self
@@ -326,13 +338,20 @@ local function makeGroup()
         return indexOf(self.pitchControls,control)
     end
     function g:removePitchControl(i) table.remove(self.pitchControls,i) end
-    function g:getParameter(name) self.params[name]=self.params[name] or makeAutomation(name); return self.params[name] end
+    function g:getParameter(name)
+        self.params[name]=self.params[name] or makeAutomation(name)
+        self.params[name].ownerGroup=self
+        return self.params[name]
+    end
     function g:clone()
         local copy=makeGroup()
         copy.name=self.name
         for _,note in ipairs(self.notes) do copy:addNote(note:clone()) end
         for _,control in ipairs(self.pitchControls) do copy:addPitchControl(control:clone()) end
-        for name,automation in pairs(self.params) do copy.params[name]=automation:clone() end
+        for name,automation in pairs(self.params) do
+            copy.params[name]=automation:clone()
+            copy.params[name].ownerGroup=copy
+        end
         return copy
     end
     return g
@@ -383,7 +402,12 @@ local function makeReference(group, main)
     function r:setPitchOffset(v) self.pitchOffset=v end
     function r:getTarget() return proxyObject(self.group) end
     function r:setTarget(v) assert(self.group==nil,"target already set"); self.group=unwrapProxy(v) end
-    function r:getVoice() return deepCopy(self.voice) end
+    function r:getVoice()
+        if self.failVoiceRead then
+            error("forced Group Voice read failure")
+        end
+        return deepCopy(self.voice)
+    end
     function r:setVoice(v)
         local ranges={
             paramLoudness={-48,12},
@@ -518,6 +542,14 @@ local function makeTrack()
             end
         end
         trackCloneDropInstrumental=false
+        if trackClonePitchGetterFailure then
+            trackClonePitchGetterFailure=false
+            copy.refs[1].group.failPitchControlRead=true
+        end
+        if trackCloneAutomationGetterFailure then
+            trackCloneAutomationGetterFailure=false
+            copy.refs[1].group.failAutomationPointsRead=true
+        end
         return copy
     end
     return t
@@ -631,6 +663,14 @@ function project:getNumTracks() return #self.tracks end
 function project:getTrack(i) return self.tracks[i] end
 function project:addTrack(t)
     self.tracks[#self.tracks+1]=t
+    if trackShellPostconditionPitchGetterFailure then
+        trackShellPostconditionPitchGetterFailure=false
+        t.refs[1].group.failPitchControlRead=true
+    end
+    if trackShellPostconditionAutomationGetterFailure then
+        trackShellPostconditionAutomationGetterFailure=false
+        t.refs[1].group.failAutomationPointsRead=true
+    end
     if trackAddExtraReference then
         trackAddExtraReference=false
         t:addGroupReference(makeReference(makeGroup(),false))
@@ -1292,6 +1332,57 @@ local shellSourceNoteCount=shellSourceMain:getNumNotes()
 local shellSourcePitchControlCount=shellSourceMain:getNumPitchControls()
 local shellSourceAutomationPoints=shellSourceMain:getParameter("loudness"):getAllPoints()
 local shellSourceToneShiftPoints=shellSourceMain:getParameter("toneShift"):getAllPoints()
+local sourceSnapshotGetterUndoBefore=project.undo
+shellSourceMain.failPitchControlRead=true
+callExpectError(
+    "clone_track_shell",
+    '{"cloneIntent":"shell","trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Unreadable Source Smart Pitch"}',
+    "UNSUPPORTED_HOST_CAPABILITY"
+)
+shellSourceMain.failPitchControlRead=false
+project.tracks[2].refs[1].failVoiceRead=true
+callExpectError(
+    "clone_track",
+    '{"cloneIntent":"isolated","trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Unreadable Source Voice","nonMainGroupPolicy":"detach"}',
+    "UNSUPPORTED_HOST_CAPABILITY"
+)
+project.tracks[2].refs[1].failVoiceRead=false
+assert(project.undo==sourceSnapshotGetterUndoBefore,"source snapshot getter failures created an undo record")
+print("CASE:clone-source-snapshot-getter-failure")
+local shellPreflightGetterUndoBefore=project.undo
+trackClonePitchGetterFailure=true
+callExpectError(
+    "clone_track_shell",
+    '{"cloneIntent":"shell","trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Unreadable Shell Smart Pitch"}',
+    "UNSUPPORTED_HOST_CAPABILITY"
+)
+trackCloneAutomationGetterFailure=true
+callExpectError(
+    "clone_track_shell",
+    '{"cloneIntent":"shell","trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Unreadable Shell Automation"}',
+    "UNSUPPORTED_HOST_CAPABILITY"
+)
+assert(project.undo==shellPreflightGetterUndoBefore,"shell preflight getter failures created an undo record")
+print("CASE:clone-shell-preflight-getter-failure")
+local shellPostconditionGetterUndoBefore=project.undo
+trackShellPostconditionPitchGetterFailure=true
+local pitchPostconditionError=callExpectError(
+    "clone_track_shell",
+    '{"cloneIntent":"shell","trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Unverifiable Shell Smart Pitch"}',
+    "UNSUPPORTED_HOST_CAPABILITY"
+)
+assert(pitchPostconditionError:find('"undoRequired":true',1,true),"Smart Pitch postcondition getter failure omitted Undo guidance")
+project:removeTrack(#project.tracks)
+trackShellPostconditionAutomationGetterFailure=true
+local automationPostconditionError=callExpectError(
+    "clone_track_shell",
+    '{"cloneIntent":"shell","trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Unverifiable Shell Automation"}',
+    "UNSUPPORTED_HOST_CAPABILITY"
+)
+assert(automationPostconditionError:find('"undoRequired":true',1,true),"Automation postcondition getter failure omitted Undo guidance")
+project:removeTrack(#project.tracks)
+assert(project.undo==shellPostconditionGetterUndoBefore+2,"shell postcondition getter failures did not retain one Undo boundary each")
+print("CASE:clone-shell-postcondition-getter-failure")
 local shellUndoBefore=project.undo
 local shellResult=callWrite(
     "clone_track_shell",
@@ -1959,5 +2050,5 @@ do
 end
 end
 
-assert(project.undo==71,"expected 71 undo records, got "..project.undo)
+assert(project.undo==73,"expected 73 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

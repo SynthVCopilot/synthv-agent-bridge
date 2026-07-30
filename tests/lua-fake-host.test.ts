@@ -115,6 +115,18 @@ test("CLN-006: Track shell is verified empty without changing its source", (cont
   assertMarker(context, "cln-006-empty-track-shell");
 });
 
+test("Fake Host: clone source snapshots fail closed on authoritative getter failures", (context) => {
+  assertMarker(context, "clone-source-snapshot-getter-failure");
+});
+
+test("Fake Host: Track shell preflight fails closed on authoritative getter failures", (context) => {
+  assertMarker(context, "clone-shell-preflight-getter-failure");
+});
+
+test("Fake Host: Track shell postconditions fail closed with Undo guidance on authoritative getter failures", (context) => {
+  assertMarker(context, "clone-shell-postcondition-getter-failure");
+});
+
 test("CLN-007: detached Vocal state requires manual review without identity claims", (context) => {
   assertMarker(context, "cln-007-manual-vocal-review");
 });

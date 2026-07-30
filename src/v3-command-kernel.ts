@@ -310,8 +310,14 @@ export function commandOutcome(
   if (typeof result.contextId === "string") {
     projected.contextId = result.contextId;
   }
-  if (Array.isArray(result.warnings) && result.warnings.length > 0) {
-    projected.warnings = result.warnings
+  const warnings = [
+    ...(Array.isArray(result.warnings) ? result.warnings : []),
+    ...(Array.isArray(result.manualReviewWarnings)
+      ? result.manualReviewWarnings
+      : []),
+  ];
+  if (warnings.length > 0) {
+    projected.warnings = warnings
       .slice(0, 4)
       .map((warning) => redactValue(warning));
   }
