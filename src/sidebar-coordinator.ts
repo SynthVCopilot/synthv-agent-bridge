@@ -453,6 +453,8 @@ function parseCommand(text: string): SidebarCommand {
 export class SidebarCoordinator {
   private pollTimer: NodeJS.Timeout | null = null;
   private polling = false;
+  private readonly backgroundTasks = new Set<Promise<void>>();
+  private stopPromise: Promise<void> | null = null;
   private lastHeartbeatAt = 0;
   private lastError: { readonly code: string; readonly message: string } | null =
     null;
@@ -463,26 +465,38 @@ export class SidebarCoordinator {
   ) {}
 
   public start(): void {
-    if (this.pollTimer !== null) {
+    if (this.pollTimer !== null || this.stopPromise !== null) {
       return;
     }
     this.pollTimer = setInterval(() => {
-      void this.pollOnce().catch(async (error: unknown) => {
-        this.lastError = toPublicError(error);
-        await this.writeClientStatus("running").catch(() => undefined);
-      });
+      this.trackBackground(
+        this.pollOnce().catch(async (error: unknown) => {
+          this.lastError = toPublicError(error);
+          await this.writeClientStatus("running").catch(() => undefined);
+        }),
+      );
     }, Math.max(100, this.config.pollIntervalMs));
     this.pollTimer.unref();
     this.lastHeartbeatAt = Date.now();
-    void this.writeClientStatus("running").catch(() => undefined);
+    this.trackBackground(
+      this.writeClientStatus("running").catch(() => undefined),
+    );
   }
 
-  public stop(): void {
+  public stop(): Promise<void> {
+    if (this.stopPromise !== null) {
+      return this.stopPromise;
+    }
     if (this.pollTimer !== null) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
-    void this.writeClientStatus("stopped").catch(() => undefined);
+    const pendingTasks = [...this.backgroundTasks];
+    this.stopPromise = (async () => {
+      await Promise.allSettled(pendingTasks);
+      await this.writeClientStatus("stopped").catch(() => undefined);
+    })();
+    return this.stopPromise;
   }
 
   public async getInstruction(): Promise<SidebarInstructionSnapshot> {
@@ -697,6 +711,15 @@ export class SidebarCoordinator {
     } finally {
       this.polling = false;
     }
+  }
+
+  private trackBackground(operation: Promise<void>): void {
+    let tracked: Promise<void>;
+    tracked = operation.finally(() => {
+      this.backgroundTasks.delete(tracked);
+    });
+    this.backgroundTasks.add(tracked);
+    void tracked.catch(() => undefined);
   }
 
   private async readPlan(): Promise<SidebarPlan | null> {

@@ -8,6 +8,9 @@ import { loadConfig } from "../src/config.js";
 import type { FileIpcClient } from "../src/ipc/file-ipc-client.js";
 import { SidebarCoordinator } from "../src/sidebar-coordinator.js";
 
+const sleep = (milliseconds: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+
 interface CleanupContext {
   after(callback: () => void | Promise<void>): void;
 }
@@ -68,6 +71,52 @@ async function writeCommand(
     "utf8",
   );
 }
+
+test("sidebar stop drains in-flight polling once and remains stopped", async (context) => {
+  const fixture = await createFixture(context);
+  let releasePoll: () => void = () => undefined;
+  const pollReleased = new Promise<void>((resolve) => {
+    releasePoll = resolve;
+  });
+  let reportPollStarted: () => void = () => undefined;
+  const pollStarted = new Promise<void>((resolve) => {
+    reportPollStarted = resolve;
+  });
+  let pollCount = 0;
+  fixture.coordinator.pollOnce = async () => {
+    pollCount += 1;
+    reportPollStarted();
+    await pollReleased;
+  };
+  fixture.coordinator.start();
+  await Promise.race([
+    pollStarted,
+    sleep(1_000).then(() => {
+      throw new Error("Sidebar poll did not start within the test deadline.");
+    }),
+  ]);
+
+  const stopped = fixture.coordinator.stop();
+  const repeatedStop = fixture.coordinator.stop();
+
+  assert.strictEqual(stopped, repeatedStop);
+  assert.ok(stopped instanceof Promise);
+  let settled = false;
+  void stopped.then(() => {
+    settled = true;
+  });
+  await sleep(10);
+  assert.equal(settled, false);
+  releasePoll();
+  await stopped;
+  const status = await fs.readFile(
+    fixture.config.paths.sidebarClientStatusFile,
+    "utf8",
+  );
+  assert.match(status, /state=stopped/u);
+  await sleep(150);
+  assert.equal(pollCount, 1);
+});
 
 test("sidebar request can be read and acknowledged by publishing a preview", async (context) => {
   const fixture = await createFixture(context);

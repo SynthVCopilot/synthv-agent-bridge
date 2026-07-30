@@ -41,6 +41,10 @@ const TRACE_METADATA_KEYS = new Set([
   "cache",
   "entryCount",
   "outcome",
+  "projectionParity",
+  "comparedFieldCount",
+  "differenceCount",
+  "privateFieldCount",
 ]);
 const MAX_TRACE_STAGES = 64;
 

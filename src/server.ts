@@ -717,7 +717,31 @@ export function createServer(config: BridgeConfig): McpServer {
     return registered;
   }) as McpServer["registerTool"];
   sidebar.start();
-  server.server.onclose = () => sidebar.stop();
+  server.server.onclose = () => {
+    void sidebar.stop();
+  };
+  const closeServer = server.close.bind(server);
+  let closePromise: Promise<void> | null = null;
+  server.close = () => {
+    if (closePromise !== null) {
+      return closePromise;
+    }
+    const transportClose = Promise.resolve().then(closeServer);
+    const sidebarClose = sidebar.stop();
+    closePromise = (async () => {
+      const [transportResult, sidebarResult] = await Promise.allSettled([
+        transportClose,
+        sidebarClose,
+      ]);
+      if (transportResult.status === "rejected") {
+        throw transportResult.reason;
+      }
+      if (sidebarResult.status === "rejected") {
+        throw sidebarResult.reason;
+      }
+    })();
+    return closePromise;
+  };
 
   server.registerTool(
     "bridge_status",

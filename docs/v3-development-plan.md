@@ -76,11 +76,16 @@ Implemented alpha slice:
   remaining legacy-adapter commands;
 - explicit `sv_status(operation="diagnostics")` support/debug projections,
   bounded to 8 KB/16 KB and absent from ordinary status responses.
+- real SynthV Studio 2 Pro 2.2.1 standalone confirmation of the installed
+  telemetry path. A 30-sample read-only `get_track_mixer` run observed 149 ms
+  tool-side p95 and 77 ms Bridge-internal p95, within the ordinary 300 ms
+  operation budget.
 
 Still required before closing the phase:
 
-- real SynthV confirmation of the installed telemetry build;
-- measured ordinary-operation tracing overhead against the 5% p95 target.
+- a controlled tracing-on/tracing-off comparison against the 5% p95 overhead
+  target. The current sample measures the instrumented path, not tracing's
+  isolated incremental cost.
 
 Exit criteria:
 
@@ -117,6 +122,42 @@ The first focused-query slice is also implemented: `get_track_mixer` carries a
 private Track guard to Node, so a `writeIntent` query can mint one directly
 reusable Track `contextId`. The public projection removes the Guard and keeps
 the intended one-focused-read plus one-logical-command workflow.
+
+The same Mixer read is the first shadow-projection slice. The new Query
+Projector independently builds a bounded candidate from the already-returned
+host result, compares it with the established public projection, and records
+only parity and field counts. It performs no second host read and keeps the
+established projection public while parity validation expands to other
+queries.
+
+Current slice record:
+
+- Goal: prove the Query Projector seam on `get_track_mixer` using the same raw
+  host result as the established projection.
+- Non-goals: changing the public Mixer DTO, authorizing writes, enabling the
+  Snapshot cache, or migrating other Query actions.
+- Existing action/path: `sv_query` -> private `sv_read` adapter ->
+  `get_track_mixer`.
+- Target aggregate: `TrackShell` Mixer state.
+- Public compatibility: the established projection remains the returned
+  result; the candidate never becomes model-facing in this slice.
+- Safety invariants: private fingerprints remain excluded even when requested,
+  comparison telemetry contains only allowlisted counts, and no second host
+  request is made.
+- Regression fixture: one real file-IPC request with a private Track
+  fingerprint, explicit public/private field selection, parity/mismatch unit
+  cases, and debug Trace inspection.
+- Automated acceptance: candidate parity, mismatch count, private-field count,
+  one host read, Context issuance, and unchanged public values.
+- Real SynthV acceptance: restart the Node MCP process, run one read-only Mixer
+  query, and inspect its `shadowProjected` debug stage. Completed on
+  SynthV Studio 2 Pro 2.2.1 standalone: the 73 ms Query used one IPC host
+  request, the 6 ms shadow stage matched all 7 compared fields with 0
+  differences, and 1 private fingerprint field remained excluded.
+- Performance budget: no additional IPC; pure projection remains within the
+  10 ms target.
+- Rollback: remove the shadow call and module; the established public
+  projection is unchanged.
 
 Exit criteria:
 

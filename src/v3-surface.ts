@@ -16,7 +16,9 @@ import {
 import { V3SnapshotCache } from "./v3-snapshot-cache.js";
 import {
   commandOutcome,
+  traceStage,
 } from "./v3-command-kernel.js";
+import { shadowQueryProjection } from "./v3-query-projector.js";
 
 type JsonRecord = Record<string, unknown>;
 type RegisterTool = McpServer["registerTool"];
@@ -1813,6 +1815,8 @@ export function registerV3Surface(
           return result;
         }
         const root = asRecord(readJsonResult(result), "result");
+        const shadowSource =
+          input.action === "get_track_mixer" ? { ...root } : undefined;
         if (sessionChange !== undefined) {
           root.sessionReset = sessionResetResult(sessionChange);
         }
@@ -1834,9 +1838,24 @@ export function registerV3Surface(
         denseNotes(root, input.dense);
         const fields =
           input.fields ?? defaultReadFields(input.action);
-        return jsonResult(
-          fields === undefined ? root : projectFields(root, fields),
+        const publicProjection =
+          fields === undefined ? root : projectFields(root, fields);
+        const shadow = shadowQueryProjection(
+          input.action,
+          shadowSource ?? root,
+          publicProjection,
+          fields,
         );
+        if (shadow !== undefined) {
+          traceStage("shadowProjected", {
+            action: input.action,
+            projectionParity: shadow.state,
+            comparedFieldCount: shadow.comparedFieldCount,
+            differenceCount: shadow.differenceCount,
+            privateFieldCount: shadow.privateFieldCount,
+          });
+        }
+        return jsonResult(publicProjection);
       } catch (error) {
         return errorResult(error);
       }

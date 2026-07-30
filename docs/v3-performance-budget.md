@@ -61,6 +61,45 @@ Initial local engineering targets, measured without audio-render completion:
 Host-computed pitch, phonemes, large Automation sampling, dialogs, and actual
 rendering are reported separately and do not use the ordinary 300 ms target.
 
+### Current real-host sample
+
+On 2026-07-30, the following preliminary real-host sample was recorded:
+
+| Field | Observed value |
+|---|---|
+| Bridge / protocol | `0.2.0-alpha.1` / v3 |
+| Node runtime | `v26.1.0` |
+| Installed Git commit | `612afb2815146edb95b5892be943ecc23c57d81c` |
+| Node build fingerprint | `3f48948394ecdd850601cd41e78d39665839dfe93db888a25b828760135a4502` |
+| Lua executor | `sv3-lua-0.2.0-alpha.1-6` |
+| Sidebar | `sv3-sidebar-0.2.0-alpha.1-3`, matched |
+| Host / mode | SynthV Studio 2 Pro 2.2.1 / standalone / Windows 11 |
+| Project size | 2 Tracks, 84 Notes total; target Track 1 has 42 Notes |
+| Derived-data counts | Pitch controls: N/A; Automation points: N/A (Mixer-only query) |
+| Action / projection | 30 sequential `get_track_mixer` / `readOnly` / default fields |
+| Cache / freshness | not used; every sample reached the authoritative host and was `hostVerified` |
+| Tool-side latency | 60 ms minimum, 83 ms median, 149 ms p95, 151 ms maximum |
+| Bridge-internal latency | 77 ms p95 from the 15 most recent bounded summaries |
+| IPC queue stage | 4 ms p95 in the retained internal summaries |
+| Lua and final projection | Lua schema/read/projection 0-3 ms; Node final projection 2-5 ms |
+| Example payload sizes | 130 request characters, 398 Lua response characters, 160 model-facing characters |
+| Outcome / Undo | success / read-only / 0 Undo records |
+| Preflight, mutation, verification | not applicable to this read-only action |
+
+This confirms the instrumented ordinary-read path is below the 300 ms target.
+It does not yet prove the less-than-5% tracing overhead target because the
+running build has no tracing-off comparison mode. That relative claim remains
+open until a controlled A/B benchmark exists.
+
+The first Query Projector real-host acceptance used Node build fingerprint
+`91cc96454c8fcee1439f9db94e393cf925974b46f3a6a10614713bf1f323c4ba`
+at Git commit `efba4bb50889824baad5b86130e87eb17c9c1210`. One
+`get_track_mixer` read completed in 73 ms; its independently built shadow
+projection took 6 ms, matched all 7 compared fields with 0 differences, and
+reported 1 private source field without exposing its value. The Trace contained
+one `ipcPublished`/`ipcResponded` pair, so the shadow comparison introduced no
+second host read. Node, Lua, and Sidebar Build Identity were `matched`.
+
 ## Cache targets
 
 - Cache memory is bounded by both entry count and estimated weight.

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -61,6 +63,33 @@ test("MCP tool text results use compact JSON", async () => {
     compiledServer,
     /JSON\.stringify\(value,\s*null,\s*2\)/,
   );
+});
+
+test("server close is idempotent and stops Sidebar after transport failure", async (context) => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "synthv-server-close-test-"),
+  );
+  context.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  const server = createServer(loadConfig({}, directory));
+  let transportCloseCount = 0;
+  server.server.close = async () => {
+    transportCloseCount += 1;
+    throw new Error("injected transport close failure");
+  };
+
+  const firstClose = server.close();
+  const concurrentClose = server.close();
+
+  assert.strictEqual(firstClose, concurrentClose);
+  await assert.rejects(firstClose, /injected transport close failure/u);
+  assert.equal(transportCloseCount, 1);
+  const status = await readFile(
+    loadConfig({}, directory).paths.sidebarClientStatusFile,
+    "utf8",
+  );
+  assert.match(status, /state=stopped/u);
 });
 
 test("v3 exposes six semantic tools under a 6 KB metadata budget", async () => {
