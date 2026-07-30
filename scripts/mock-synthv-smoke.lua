@@ -323,6 +323,7 @@ local function makeReference(group, main)
         timeOffset=0,
         pitchOffset=0,
         muted=false,
+        vocalDatabaseId="mock-default-vocal",
         supportedVocalModes={
             Airy=true,
             Bright=true,
@@ -421,6 +422,7 @@ local function makeReference(group, main)
         copy.muted=self.muted
         copy.rangeDuration=self.rangeDuration
         copy.instrumental=self.instrumental
+        copy.vocalDatabaseId=self.vocalDatabaseId
         copy.supportedVocalModes=deepCopy(self.supportedVocalModes)
         copy.voice=deepCopy(self.voice)
         return copy
@@ -474,13 +476,12 @@ local function makeTrack()
         copy.mixer.muted=self.mixer.muted
         copy.mixer.solo=self.mixer.solo
         copy.refs={}
-        local groupCopies={}
         for _,sourceRef in ipairs(self.refs) do
-            local groupCopy=groupCopies[sourceRef.group]
-            if not groupCopy then
-                groupCopy=sourceRef.group:clone()
-                groupCopies[sourceRef.group]=groupCopy
-            end
+            -- Match SynthV 2: Track:clone() owns an independent main group,
+            -- while cloned non-main references still point at their library
+            -- Note Group because NoteGroupReference:clone() does not own it.
+            local groupCopy=sourceRef.main
+                and sourceRef.group:clone() or sourceRef.group
             local refCopy=sourceRef:clone()
             refCopy.group=groupCopy
             refCopy.parent=copy
@@ -1085,15 +1086,153 @@ callExpectError("set_group_voice",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'
 assert(project.undo==undoBeforeOutOfRangeVocalMode,"out-of-range Vocal Mode must fail before an undo record")
 callWrite("update_group",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","name":"Lead Main","voice":{"paramLoudness":-2}}')
 call("get_computed_group_data",'{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","pitchSample":{"absoluteStart":0,"interval":352800000,"frames":4}}')
-callWrite("clone_track",'{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Harmony -3st","transposeSemitones":-3}')
+
+do
+local sharedCloneSource=makeGroup()
+sharedCloneSource:setName("Shared Clone Source")
+local sharedCloneNote=makeNote()
+sharedCloneNote:setPitch(65)
+sharedCloneSource:addNote(sharedCloneNote)
+project:addNoteGroup(sharedCloneSource)
+local sharedCloneReferenceA=makeReference(sharedCloneSource,false)
+project.tracks[2]:addGroupReference(sharedCloneReferenceA)
+local sharedCloneReferenceB=makeReference(sharedCloneSource,false)
+project.tracks[1]:addGroupReference(sharedCloneReferenceB)
+local sharedCloneUuid=sharedCloneSource.uuid
+local undoBeforeSharedWrite=project.undo
+callExpectError(
+    "add_notes",
+    '{"trackIndex":2,"groupIndex":2,"groupUuid":"'..sharedCloneUuid..'","notes":[{"onset":705600000,"duration":705600000,"pitch":67,"lyrics":"la"}]}',
+    "SHARED_GROUP_WRITE"
+)
+assert(project.undo==undoBeforeSharedWrite,"shared Group rejection must happen before an undo record")
+assert(sharedCloneSource:getNumNotes()==1,"rejected shared Group write changed source notes")
+callWrite(
+    "add_notes",
+    '{"trackIndex":2,"groupIndex":2,"groupUuid":"'..sharedCloneUuid..'","sharedGroupPolicy":"allowAllReferences","expectedReferenceCount":2,"notes":[{"onset":705600000,"duration":705600000,"pitch":67,"lyrics":"la"}]}'
+)
+assert(sharedCloneSource:getNumNotes()==2,"explicit linked Group write was not applied")
+local undoBeforeSharedRename=project.undo
+callExpectError(
+    "update_group",
+    '{"trackIndex":2,"groupIndex":2,"groupUuid":"'..sharedCloneUuid..'","name":"Wrong"}',
+    "SHARED_GROUP_WRITE"
+)
+assert(project.undo==undoBeforeSharedRename,"shared Group rename rejection created an undo record")
+callWrite(
+    "update_group",
+    '{"trackIndex":2,"groupIndex":2,"groupUuid":"'..sharedCloneUuid..'","muted":true}'
+)
+assert(sharedCloneReferenceA.muted==true,"reference-local edit was incorrectly blocked on a shared Group")
+
+local crossTrackSharedScopeUndoBefore=project.undo
+local crossTrackSharedScopeNameBefore=sharedCloneSource.name
+callExpectError(
+    "apply_transaction",
+    '{"summary":"Reject cross-track writes to one shared Group","steps":['..
+        '{"action":"update_group","payload":{"trackIndex":1,"groupIndex":2,"groupUuid":"'..sharedCloneUuid..'","sharedGroupPolicy":"allowAllReferences","expectedReferenceCount":2,"name":"Cross Track A"}},'..
+        '{"action":"update_group","payload":{"trackIndex":2,"groupIndex":2,"groupUuid":"'..sharedCloneUuid..'","sharedGroupPolicy":"allowAllReferences","expectedReferenceCount":2,"name":"Cross Track B"}}'..
+    ']}',
+    "TRANSACTION_SCOPE_CONFLICT"
+)
+assert(project.undo==crossTrackSharedScopeUndoBefore,"shared Group scope conflict created an undo record")
+assert(sharedCloneSource.name==crossTrackSharedScopeNameBefore,"shared Group scope conflict changed the Group")
+
+local sameTrackDistinctGroupUndoBefore=project.undo
+local sameTrackDistinctGroupResponse=call(
+    "apply_transaction",
+    '{"summary":"Allow two distinct Groups on one track","steps":['..
+        '{"action":"update_group","payload":{"trackIndex":2,"groupIndex":1,"groupUuid":"'..track2GroupUuid..'","name":"Lead Main Tx"}},'..
+        '{"action":"update_group","payload":{"trackIndex":2,"groupIndex":2,"groupUuid":"'..sharedCloneUuid..'","sharedGroupPolicy":"allowAllReferences","expectedReferenceCount":2,"name":"Shared Clone Tx"}}'..
+    ']}'
+)
+assert(project.undo==sameTrackDistinctGroupUndoBefore+1,"distinct Group transaction must create one undo record")
+assert(project.tracks[2].refs[1].group.name=="Lead Main Tx","main Group transaction write was not applied")
+assert(sharedCloneSource.name=="Shared Clone Tx","non-main Group transaction write was not applied")
+assert(sameTrackDistinctGroupResponse:find('"fullyPreflightedBeforeWrite":true',1,true),"independent Group transaction was not fully preflighted")
+
+do
+local shiftGroupA=makeGroup()
+local shiftGroupB=makeGroup()
+local shiftGroupC=makeGroup()
+project.tracks[2]:addGroupReference(makeReference(shiftGroupA,false))
+project.tracks[2]:addGroupReference(makeReference(shiftGroupB,false))
+project.tracks[2]:addGroupReference(makeReference(shiftGroupC,false))
+local shiftGroupCountBefore=project.tracks[2]:getNumGroups()
+local shiftUndoBefore=project.undo
+callExpectError(
+    "apply_transaction",
+    '{"summary":"Reject index-shifting Group reference deletes","steps":['..
+        '{"action":"delete_group_reference","payload":{"trackIndex":2,"groupIndex":3}},'..
+        '{"action":"delete_group_reference","payload":{"trackIndex":2,"groupIndex":4}}'..
+    ']}',
+    "TRANSACTION_SCOPE_CONFLICT"
+)
+assert(project.undo==shiftUndoBefore,"index-shifting Group reference deletes created an undo record")
+assert(project.tracks[2]:getNumGroups()==shiftGroupCountBefore,"rejected Group reference deletes changed the track")
+assert(project.tracks[2]:getGroupReference(3):getTarget():getUUID()==shiftGroupA:getUUID(),"rejected Group reference transaction retargeted Group A")
+assert(project.tracks[2]:getGroupReference(4):getTarget():getUUID()==shiftGroupB:getUUID(),"rejected Group reference transaction retargeted Group B")
+assert(project.tracks[2]:getGroupReference(5):getTarget():getUUID()==shiftGroupC:getUUID(),"rejected Group reference transaction retargeted Group C")
+for groupIndex=project.tracks[2]:getNumGroups(),shiftGroupCountBefore-2,-1 do
+    project.tracks[2]:removeGroupReference(groupIndex)
+end
+end
+
+project.tracks[2].refs[1].vocalDatabaseId="mock-source-vocal"
+local shellSourceMain=project.tracks[2].refs[1].group
+shellSourceMain:addPitchControl(makePitchControl("point"))
+shellSourceMain:getParameter("loudness"):add(0,-2)
+local shellSourceNoteCount=shellSourceMain:getNumNotes()
+local shellSourcePitchControlCount=shellSourceMain:getNumPitchControls()
+local shellResult=callWrite(
+    "clone_track_shell",
+    '{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Safe Vocal Shell"}'
+)
+assert(shellResult:find('"verifiedEmptyShell":true',1,true),"Vocal template track did not verify its empty shell")
+assert(shellResult:find('"vocalIdentityReadable":false',1,true),"Vocal template track overstated API visibility")
+assert(project.tracks[3]:getNumGroups()==1,"Vocal template track retained non-main Groups")
+assert(project.tracks[3].refs[1].group:getNumNotes()==0,"Vocal template track retained notes")
+assert(project.tracks[3].refs[1].group:getNumPitchControls()==0,"Vocal template track retained pitch controls")
+assert(#project.tracks[3].refs[1].group:getParameter("loudness"):getAllPoints()==0,"Vocal template track retained automation")
+assert(project.tracks[3].refs[1].vocalDatabaseId=="mock-source-vocal","host Track clone did not preserve opaque Vocal identity")
+assert(project.tracks[3].mixer.gain==0 and project.tracks[3].mixer.pan==0,"Vocal template track mixer was not reset")
+assert(shellSourceMain:getNumNotes()==shellSourceNoteCount,"Vocal template track changed source notes")
+assert(shellSourceMain:getNumPitchControls()==shellSourcePitchControlCount,"Vocal template track changed source pitch controls")
+local shellTrackFingerprint="main-group:"..project.tracks[3].refs[1].group.uuid
+callWrite("delete_track",'{"trackIndex":3,"trackFingerprint":"'..shellTrackFingerprint..'"}')
+
+local undoBeforeImplicitNonMainClone=project.undo
+callExpectError(
+    "clone_track",
+    '{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Unsafe Copy"}',
+    "NON_MAIN_GROUP_CLONE_REQUIRES_POLICY"
+)
+assert(project.undo==undoBeforeImplicitNonMainClone,"rejected non-main clone created an undo record")
+callWrite("clone_track",'{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Harmony -3st","transposeSemitones":-3,"nonMainGroupPolicy":"detach"}')
 assert(project.tracks[3].refs[1].group.notes[1].pitch==57,"clone_track must transpose cloned notes")
 assert(project.tracks[3].refs[1].voice.paramLoudness==-2,"clone_track must inherit voice properties")
+assert(project.tracks[3].refs[2].group.uuid~=sharedCloneUuid,"clone_track must detach non-main library Groups")
+assert(project.tracks[3].refs[2].group.notes[1].pitch==62,"clone_track must transpose the detached non-main Group")
+assert(sharedCloneSource.notes[1].pitch==65,"clone_track transposed the shared source Group")
+local cloneWithClearedGroups=callWrite(
+    "clone_track",
+    '{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Voice Shell","clearNotes":true,"nonMainGroupPolicy":"detach"}'
+)
+assert(cloneWithClearedGroups:find('"independentGroupsVerified":true',1,true),"clone_track did not report independent Group verification")
+assert(project.tracks[4].refs[1].group:getNumNotes()==0,"clearNotes did not clear the cloned main Group")
+assert(project.tracks[4].refs[2].group:getNumNotes()==0,"clearNotes did not clear the detached non-main Group")
+assert(sharedCloneSource:getNumNotes()==2,"clearNotes changed a shared source Group")
 local undoBeforeStaleTrack=project.undo
 callExpectError("update_track",'{"trackIndex":2,"trackFingerprint":"stale","name":"wrong"}',"STALE_TRACK")
 assert(project.undo==undoBeforeStaleTrack,"stale track edit must not create an undo record")
+local track4Fingerprint="main-group:"..project.tracks[4].refs[1].group.uuid
+callWrite("delete_track",'{"trackIndex":4,"trackFingerprint":"'..track4Fingerprint..'"}')
 local track3Fingerprint="main-group:"..project.tracks[3].refs[1].group.uuid
 callWrite("delete_track",'{"trackIndex":3,"trackFingerprint":"'..track3Fingerprint..'"}')
 assert(#project.tracks==2,"delete_track must remove the target track")
+callWrite("delete_note_group",'{"groupUuid":"'..sharedCloneUuid..'"}')
+assert(project.tracks[1]:getNumGroups()==1 and project.tracks[2]:getNumGroups()==1,"shared clone fixture was not cleaned up")
+end
 
 local extraGroup=makeGroup()
 local extraReference=makeReference(extraGroup,false)
@@ -1263,6 +1402,58 @@ callWrite("rollback_transaction",'{"transactionId":"'..escape(transactionId)..'"
 assert(project.tracks[1].name=="Track","transaction rollback did not restore the track name")
 assert(project.tracks[2].mixer.gain==0,"transaction rollback did not restore the mixer")
 
+local dependentTransactionUndoBefore=project.undo
+local dependentTransactionTrackCountBefore=#project.tracks
+local dependentTransactionResponse=call(
+    "apply_transaction",
+    '{"summary":"Create and name a track from the prior result","steps":['..
+        '{"action":"add_track","payload":{"name":"Dependent Draft"}},'..
+        '{"action":"update_track","payload":{'..
+            '"trackIndex":{"$result":{"step":1,"path":["trackIndex"]}},'..
+            '"trackFingerprint":{"$result":{"step":1,"path":["fingerprint"]}},'..
+            '"name":"Dependent Final"}}'..
+    ']}'
+)
+assert(project.undo==dependentTransactionUndoBefore+1,"dependent transaction must create one undo record")
+assert(#project.tracks==dependentTransactionTrackCountBefore+1,"dependent transaction did not create its track")
+assert(project.tracks[#project.tracks].name=="Dependent Final","dependent step did not consume the prior result")
+assert(dependentTransactionResponse:find('"dependentStepCount":1',1,true),"dependent transaction count was not returned")
+assert(dependentTransactionResponse:find('"fullyPreflightedBeforeWrite":false',1,true),"dependent transaction overstated full preflight")
+local dependentTrackFingerprint="main-group:"..project.tracks[#project.tracks].refs[1].group.uuid
+callWrite("delete_track",'{"trackIndex":'..#project.tracks..',"trackFingerprint":"'..dependentTrackFingerprint..'"}')
+
+local invalidForwardUndoBefore=project.undo
+local invalidForwardTrackCountBefore=#project.tracks
+callExpectError(
+    "apply_transaction",
+    '{"summary":"Reject a future result reference","steps":['..
+        '{"action":"add_track","payload":{"name":{"$result":{"step":2,"path":["name"]}}}},'..
+        '{"action":"add_track","payload":{"name":"Future"}}'..
+    ']}',
+    "INVALID_TRANSACTION_REFERENCE"
+)
+assert(project.undo==invalidForwardUndoBefore,"invalid forward reference created an undo record")
+assert(#project.tracks==invalidForwardTrackCountBefore,"invalid forward reference changed tracks")
+
+local dependentFailureUndoBefore=project.undo
+local dependentFailureTrackCountBefore=#project.tracks
+local dependentFailureResponse=callExpectError(
+    "apply_transaction",
+    '{"summary":"Expose a dependent preflight failure","steps":['..
+        '{"action":"add_track","payload":{"name":"Partial Dependency Fixture"}},'..
+        '{"action":"update_track","payload":{'..
+            '"trackIndex":{"$result":{"step":1,"path":["trackIndex"]}},'..
+            '"trackFingerprint":{"$result":{"step":1,"path":["fingerprint"]}}}}'..
+    ']}',
+    "TRANSACTION_EXECUTION_FAILED"
+)
+assert(project.undo==dependentFailureUndoBefore+1,"dependent failure must retain the transaction undo record")
+assert(#project.tracks==dependentFailureTrackCountBefore+1,"dependent failure fixture did not expose the completed first step")
+assert(dependentFailureResponse:find('"failurePhase":"dependentPreflight"',1,true),"dependent failure phase was not reported")
+assert(dependentFailureResponse:find('"completedStepCount":1',1,true),"dependent failure completed-step count was not reported")
+assert(dependentFailureResponse:find('"undoRequired":true',1,true),"dependent failure did not require one Undo")
+project:removeTrack(#project.tracks)
+
 local transactionFailureUndoBefore=project.undo
 local transactionFailureNameBefore=project.tracks[1].name
 callExpectError(
@@ -1292,7 +1483,7 @@ assert(#project.tracks==exclusiveDeleteTrackCountBefore,"exclusive delete reject
 local harmonyTrackCountBefore=#project.tracks
 callWrite(
     "create_harmony_track",
-    '{"sourceTrackIndex":2,"sourceTrackFingerprint":"'..track2Fingerprint..'","name":"Harmony +7","intervalSemitones":7,"minimumPitch":55,"maximumPitch":76,"rangePolicy":"octave","gainDecibel":-5,"pan":0.4}'
+    '{"sourceTrackIndex":2,"sourceTrackFingerprint":"'..track2Fingerprint..'","name":"Harmony +7","intervalSemitones":7,"minimumPitch":55,"maximumPitch":76,"rangePolicy":"octave","nonMainGroupPolicy":"detach","gainDecibel":-5,"pan":0.4}'
 )
 assert(#project.tracks==harmonyTrackCountBefore+1,"harmony track was not created")
 local harmonyTrack=project.tracks[#project.tracks]
@@ -1397,5 +1588,5 @@ failureAutomation.points=failureAutomationBefore
 local finalNotes=call("get_track_notes",'{"trackIndex":1,"offset":0,"limit":100}')
 local finalFingerprint=extractJsonString(finalNotes,"fingerprint")
 callWrite("delete_notes",'{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(finalFingerprint)..'"}]}')
-assert(project.undo==48,"expected 48 undo records, got "..project.undo)
+assert(project.undo==59,"expected 59 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

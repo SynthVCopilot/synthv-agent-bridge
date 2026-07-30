@@ -48,9 +48,10 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 | Voice and phonemes | Read and edit Group Voice, Vocal Mode axes, experimental Unison fields, phoneset overrides, syllable timing, pronunciation, and per-phoneme timing or strength. |
 | Pitch and expression | Adjust pitch transitions and pitch curves; manage Smart Pitch controls and AI Retakes; apply scoop, falloff, vibrato, crescendo, or breathiness presets. |
 | Automation | Read, add, replace, sample, simplify, or clear pitch deviation, loudness, tension, breathiness, voicing, gender, and Vocal Mode curves. |
-| Tracks, Groups, and harmony | Create, clone, reuse, update, or delete library Groups, Group references, and tracks; inherit an existing singer and create range-constrained harmony tracks. |
+| Tracks, Groups, and harmony | Create, clone, reuse, update, or delete library Groups, Group references, and tracks; create an empty host-cloned Vocal template track; and create range-constrained harmony tracks. Shared Group content writes fail closed unless all references are explicitly acknowledged. |
+| Local score import | Inspect an explicitly supplied local MusicXML (`.xml`, `.musicxml`, `.mxl`) or SMF MIDI (`.mid`, `.midi`) file, then import one rights-confirmed monophonic lane through the guarded note-write path. URLs and `.svp` files are not accepted. |
 | Timing, editor, and playback | Convert seconds, quarter notes, and blicks; edit tempo/time signatures; control selection, viewport, clipboard, grid snapping, coordinates, mixer, and playback. |
-| Safe editing | Protect writes with fresh fingerprints and Guard Tokens; preflight up to 32 independent steps; create one SynthV undo record and optionally retain a guarded rollback plan. |
+| Safe editing | Protect writes with fresh fingerprints, typed/scope-bound `contextId` values, and Guard Tokens; fully preflight independent transaction steps, resolve forward dependencies just in time, create one SynthV undo record, and optionally retain a guarded rollback plan. |
 | Review and local privacy | Review, apply, dismiss, or cancel guarded previews in the optional native side panel. File IPC stays local: the Bridge does not parse `.svp` files, open a network port, or call an AI API. |
 
 ## Responsibility boundaries
@@ -68,14 +69,17 @@ SynthV stores the result, and the user makes the final listening decision.
 | Decide whether to tune a short phrase or a larger scope | Agent | Depends on the goal, review cost, and token budget |
 | Convert terms such as warm, restrained, or bright into explicit parameters | Agent | The Bridge must not interpret artistic language |
 | Choose a fresh target scope and explicit numeric batch transform | Agent | Target selection and musical values belong to the current task |
+| Choose a legal local score and confirm the right to import it | Agent + user | The Bridge cannot determine copyright or license authority |
 | Provide current Group, note, Voice, and automation data | Lua Bridge | SynthV's live object model is authoritative |
-| Cache and expand `contextId` and Guard data | TypeScript MCP | Avoids repeating large fingerprints while preserving stale-write protection |
+| Cache and expand typed, scope-bound `contextId` and Guard data | TypeScript MCP | Avoids repeating large fingerprints while failing closed on incompatible scope |
+| Inspect and convert an explicitly supplied local MusicXML/MIDI lane | TypeScript MCP | Keeps bounded local parsing outside SynthV without implying permission to use the file |
 | Project compact reads and minimal write acknowledgements | TypeScript MCP | Keeps irrelevant host data out of the model context |
 | Detect SynthV restart or Bridge reload | TypeScript MCP | Old Context and Guard data must be invalidated before another write |
 | Validate request structure, routing, indices, and stable protocol ranges | TypeScript MCP | Rejects malformed work before file IPC |
 | Read the current Automation `definition.range` | Lua Bridge | The range can vary with the host, voice, and parameter |
 | Expand deterministic note transforms and other batch mechanics | Lua Bridge | Mechanical calculations should be centralized and reproducible |
 | Validate fingerprints and the complete prepared batch | Lua Bridge | Prevents overwriting user edits or partially applying invalid work |
+| Block accidental edits to multiply referenced Note Group content | Lua Bridge | Group content is shared even when references appear on different tracks |
 | Create one undo record and verify host postconditions | Lua Bridge + SynthV | Provides one recovery boundary and avoids false success |
 | Save, audition, undo, and approve the final result | User + SynthV | The user is the final artistic authority |
 
@@ -149,6 +153,11 @@ Codex / another local stdio MCP host
 ```
 
 File IPC is deliberately used for the first version because it works within SynthV's documented Lua environment and is easy to inspect and recover. See [docs/architecture.md](docs/architecture.md).
+
+Local score inspection is the bounded exception to the Node server's
+project-data pass-through role: it reads only an explicitly supplied absolute
+MusicXML/MIDI path. Inspection stays in Node; an approved import sends converted
+notes through the same guarded Lua `add_notes` path. It never parses `.svp`.
 
 ## Requirements
 
@@ -305,8 +314,12 @@ The normal tuning sequence is:
 4. Read again after `UNKNOWN_CONTEXT` or any `STALE_*` result.
 
 `contextId` stores only locators and concurrency guards in bounded Node memory.
-It does not cache mutable note, voice, selection, or automation content.
-SynthV still checks every complete fingerprint before creating an undo record.
+Each handle is bound to a target kind and source scope. Reusing it with an
+incompatible action, or combining it with a conflicting explicit locator or
+guard, fails closed instead of silently retargeting the call. Locator-only
+reads do not mint write-capable Contexts. A Context does not cache mutable note,
+voice, selection, or automation content; SynthV still checks every complete
+fingerprint before creating an undo record.
 
 Phrase reads accept an `include` projection over `notes`, `voice`,
 `automation`, `analysis`, `recommendations`, `pitchAnalysis`, `selection`, and
@@ -316,7 +329,7 @@ at least 24 notes use a column/row representation when `dense: "auto"`; use
 end positions and report `noteDefaults.absolutePitch: "pitch"` when equal
 absolute/local pitches were omitted.
 
-### SynthV action catalog
+### Action catalog
 
 These actions are routed internally through the eight MCP v2 tools. They are
 not registered as standalone MCP tools; request their current schemas through
@@ -335,6 +348,7 @@ not registered as standalone MCP tools; request their current schemas through
 | `show_dialog` | Control | Show message, input, confirmation, or custom-form dialogs. |
 | `convert_pitch` | Read | Convert MIDI pitch and frequency and identify black keys. |
 | `get_project_info` | Read | Project, timing, playback, host, and current editor location. |
+| `inspect_score_file` | Read | Inspect an explicitly supplied local MusicXML or SMF MIDI file in Node, return a SHA-256 file guard and selectable parts/voices/staves or tracks/channels, and preview a bounded monophonic lane without changing SynthV. |
 | `get_time_axis` | Read | All tempo/time-signature marks and a safe-write fingerprint. |
 | `convert_time` | Read | Convert seconds, quarter notes, or blicks through the current tempo map, with optional Blick-grid rounding. |
 | `set_time_axis` | Destructive | Add, replace, or remove tempo/time-signature marks. |
@@ -350,16 +364,18 @@ not registered as standalone MCP tools; request their current schemas through
 | `get_note_phoneme_data` | Read | User/computed phonemes, phoneset overrides, per-phoneme attributes, and note selection state, with optional compact note-index or seconds-range filtering. |
 | `get_phrase_context` | Read | One compact, write-ready selected/ranged phrase read with note and automation Guard Tokens, voice/Vocal Modes, diagnostics, and recommendation-only review targets. |
 | `get_selection` | Read | Selected groups, notes, Smart Pitch controls, and requested automation points. |
-| `set_selection` | Control | Replace, add, remove, or clear editor selections. |
+| `set_selection` | Control | Replace, add, remove, or clear editor selections and return the selection actually reported by SynthV. |
 | `get_computed_group_data` | Read | Computed phonemes/rap attributes and optional pitch samples. |
 | `add_track` | Write | Create a track and return its main Group locator. |
 | `update_track` | Write | Rename, recolor, or change Render Panel inclusion. |
-| `clone_track` | Write | Deep-clone a track, preserving its singer/database, with optional clear/transpose. |
+| `clone_track` | Write | Host-clone a track's main Vocal context with optional clear/transpose. A source containing non-main vocal Groups is rejected by default; `nonMainGroupPolicy=detach` makes their Group content independent, but their non-main Vocal identities must be reviewed manually. |
+| `clone_track_shell` | Write | Host-clone the source track's main Vocal context into one verified-empty track, removing notes, pitch controls, known automation, non-main Groups, and—by default—mixer state. The API cannot read or name the inherited Vocal identity. |
 | `delete_track` | Destructive | Delete a fingerprint-verified non-final track. |
 | `update_group` | Write | Change vocal/instrumental reference state and supported vocal properties. |
 | `set_group_voice` | Write | Fingerprint-verified typed voice, Vocal Mode, and host-validated experimental Unison updates, with an optional current-Group guard. |
 | `apply_group_tuning` | Destructive | Prevalidate and apply one same-Group Voice/Vocal Mode, note/phoneme, and multi-automation tuning pass in one undo record. Unexpected execution failures explicitly require one SynthV Undo before retrying. |
 | `delete_group_reference` | Destructive | Remove a non-main vocal or instrumental reference. |
+| `import_monophonic_score` | Write | Import at most 512 notes from one freshly inspected, rights-confirmed local MusicXML/MIDI lane through guarded `add_notes`; the SHA-256 guard must match and source tempo is reported but not applied. |
 | `add_notes` | Write | Add notes to a target group. V2 defaults to `grouping=ensureNonMain`, creating a reusable non-main group/reference when the target is the track main group; use `grouping=target` to write to the exact group. |
 | `edit_notes` | Write | Edit fingerprint-verified notes. |
 | `transform_notes` | Destructive | Apply one explicit guarded batch offset/scale to note onset, duration, or pitch. V2 can transform every note in a fresh Context without repeating indices. |
@@ -379,19 +395,19 @@ not registered as standalone MCP tools; request their current schemas through
 | `set_automation_points` | Write | Add/update fingerprint/Guard-verified points, optionally clearing all or a range first and returning a compact acknowledgement. |
 | `clear_automation` | Destructive | Clear a complete curve or a selected range. |
 | `get_editor_view` | Read | Read editor time/value ranges and pixel scales. |
-| `set_editor_view` | Control | Move or scale the main-editor or arrangement viewport. |
+| `set_editor_view` | Control | Move or scale the main-editor or arrangement viewport and return the host's resulting navigation state. |
 | `snap_position` | Read | Snap a position using current editor grid settings. |
 | `convert_editor_coordinates` | Read | Convert time/value and x/y editor coordinates. |
 | `script_data` | Read/Write | Manage namespaced Bridge JSON metadata on SynthV objects. |
 | `get_track_mixer` | Read | Read gain, pan, mute, and solo. |
 | `set_track_mixer` | Write | Change gain, pan, mute, and solo. |
-| `apply_transaction` | Destructive | Preflight up to 32 independent write steps and apply them in one undo record, optionally storing guarded reverse steps. |
+| `apply_transaction` | Destructive | Apply up to 32 writes in one undo record. Independent steps are fully preflighted; later steps may consume earlier results with `$result` and are preflighted just in time. This is a single-Undo recovery boundary, not automatic rollback. |
 | `rollback_transaction` | Destructive | Apply the stored guarded reverse steps for a transaction in one new undo record. |
 | `create_harmony_track` | Write | Clone a guarded vocal track, transpose it, octave-fit an optional voice range, and set its mixer. |
 | `humanize_notes` | Destructive | Apply deterministic fingerprint-guarded onset/duration variation, optionally preserving chord alignment. |
 | `apply_expression_preset` | Destructive | Apply scoop, falloff, vibrato, crescendo, or breathiness through note attributes or automation. |
 | `fit_lyrics` | Destructive | Assign syllables and optional phonemes to fingerprint-verified notes. |
-| `playback` | Control | Read status, play, pause, stop, seek, or loop. |
+| `playback` | Control | Read status, play, pause, stop, seek, or loop, then return the host's observed status and playhead. |
 
 All track, group, and note indices are **1-based**, matching the SynthV Lua API. Note and automation coordinates are group-local blicks unless the returned field explicitly says `absolute`. Playback positions are seconds.
 
@@ -496,10 +512,16 @@ The Codex Agent rules require this sequence:
    change.
 2. Present or internally construct a small, reviewable change.
 3. Copy the latest applicable group/reference UUIDs and fingerprints, track fingerprint, automation/time-axis fingerprint, and note or Smart Pitch fingerprints.
-4. Call the smallest write tool that completes the intended change. Prefer
+4. Call the smallest write tool that completes the intended change. Group
+   content writes reject a multiply referenced Note Group by default. Use
+   `sharedGroupPolicy=allowAllReferences` only when changing every linked
+   occurrence is intentional, and pair it with the fresh
+   `expectedReferenceCount`. Prefer
    `apply_group_tuning` when one pass changes Voice/Vocal Modes,
    notes/phonemes, or multiple automation curves in the same Group. Use
-   `apply_transaction` for complete independent multi-object batches.
+   `apply_transaction` for a bounded multi-object batch; independent steps are
+   preflighted before writing, while a step that uses an earlier `$result` is
+   necessarily checked just before that dependent step executes.
 5. If SynthV reports any `STALE_*` error, read again rather than guessing.
 
 One compact read should feed one complete batch of related changes. Do not
@@ -528,7 +550,14 @@ notes outside MIDI 0–127.
 
 ```text
 Read track 1, then clone it as "Harmony -3st" with transposeSemitones -3.
-Use the latest track fingerprint so the cloned track inherits the same singer.
+Use the latest track fingerprint. If it has non-main vocal Groups, stop unless
+I explicitly approve detaching their content and reviewing their Vocals.
+```
+
+```text
+Inspect D:\scores\melody.musicxml without editing SynthV. Show the selectable
+part/voice/staff, overlap status, SHA-256 guard, and note preview. Import one
+chosen monophonic lane only after I confirm that I have the right to use it.
 ```
 
 More examples are in [examples/prompts.md](examples/prompts.md).
@@ -593,13 +622,18 @@ modifies the project or installed files.
 - A client-side timeout is ambiguous: SynthV may still finish the operation. The processing marker remains until the Lua host completes, and the agent should read the current project before deciding whether to retry a write.
 - The side panel holds one pending preview at a time. That preview may contain
   either one write or one `apply_transaction` batch.
-- Generic transactions deliberately reject multiple steps that mutate the
-  same guarded scope and cannot feed a newly created object into a later
-  forward step. Index-shifting track/library-group deletes must be the only
-  step. Purpose-built semantic actions cover common dependent edits.
-- Transaction validation failures make no project changes. An unexpected host
-  failure after execution begins may leave a partial batch inside the single
-  undo record; immediately use **Edit > Undo**.
+- Generic transactions reject conflicting writes to the same guarded scope.
+  A later step may use an earlier result through a complete-field `$result`
+  reference. Independent steps are fully preflighted before writing; dependent
+  steps are resolved and checked just in time because their targets do not yet
+  exist during the first pass. Index-shifting track/library-group deletes must
+  be the only step.
+- `atomicity: "singleUndoRecord"` means one SynthV recovery boundary, not
+  automatic rollback.
+  An independent preflight failure makes no project changes. A dependent
+  validation or unexpected host failure can occur after earlier steps have
+  written; when the error reports `undoRequired`, immediately use
+  **Edit > Undo** once before rereading or retrying.
 - Rollback plans are held in Bridge memory for the current project/session and
   are lost when the Bridge reloads or SynthV closes. A rollback is a new
   guarded write and is refused if its fingerprints are stale.
@@ -608,7 +642,16 @@ modifies the project or installed files.
 - SynthV's public scripting API does not expose an Undo command. The panel shows
   the latest write and directs the user to click the main editor before using
   **Ctrl+Z**, with **Edit > Undo** as the focus-independent fallback.
-- SynthV's public scripting API does not expose project save, audio rendering, selecting an installed singer database by display name, or Voice Panel scale/mode settings. These remain out of scope; `clone_track` can inherit an already-selected singer.
+- SynthV's public scripting API does not expose project save, audio rendering,
+  selecting an installed singer database by display name, reading Vocal
+  identity, or Voice Panel scale/mode settings. `clone_track_shell` can
+  host-clone a source track's main Vocal context without naming it.
+- Local score support is intentionally import-only and bounded. It accepts
+  absolute local `.xml`, `.musicxml`, `.mxl`, `.mid`, or `.midi` paths after
+  explicit inspection and rights confirmation. It rejects URLs, `.svp`,
+  XML `DOCTYPE`/`ENTITY`, ambiguous/polyphonic lanes, changed file hashes, and
+  imports above 512 notes. Source tempo is returned for review but is not
+  silently applied to the project.
 - `singers` and `spacing` are returned by SynthV 2.2.1 but are not documented in the public `getVoice` field list. The typed Unison surface is therefore experimental and refuses writes unless the host returns and retains the requested fields on a cloned reference.
 - The Retake API does not enumerate Take IDs or expose the active Take ID. The bridge therefore activates and deletes only the default Take or IDs it generated and stored itself.
 - Expression presets are intentionally small building blocks, not phrase

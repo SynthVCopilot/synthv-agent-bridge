@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import path from "node:path";
 import * as z from "zod/v4";
 
 import {
@@ -20,9 +21,20 @@ import {
   resolvePhonemeGuardPayload,
   resolveTransactionGuardPayload,
 } from "./compact-results.js";
-import { toPublicError } from "./errors.js";
+import { BridgeError, toPublicError } from "./errors.js";
 import { GuardTokenStore } from "./guard-token-store.js";
 import { FileIpcClient } from "./ipc/file-ipc-client.js";
+import {
+  importScoreSnapshotMonophonic,
+  inspectScoreSnapshot,
+  readLocalScoreSnapshot,
+  ScoreImportError,
+  type MidiSelection,
+  type LocalScoreInspection,
+  type MusicXmlSelection,
+  type LocalScoreImportResult,
+  type ScorePreview,
+} from "./score-import.js";
 import {
   SIDEBAR_PREVIEW_ACTIONS,
   SidebarCoordinator,
@@ -440,8 +452,204 @@ const sidebarPreviewChangeSchema = z.object({
 
 const transactionStepSchema = z.object({
   action: z.enum(TRANSACTION_STEP_ACTIONS),
-  payload: z.record(z.string(), z.unknown()),
+  payload: z
+    .record(z.string(), z.unknown())
+    .describe(
+      "Action payload. In forward steps after step 1, any complete field value may be {$result:{step:1,path:['field']}} to use an earlier step result.",
+    ),
 });
+
+const MAX_LOCAL_SCORE_BYTES = 16 * 1024 * 1024;
+const MAX_IMPORTED_SCORE_NOTES = 512;
+
+const localScoreFileSchema = z
+  .string()
+  .min(1)
+  .max(32_767)
+  .refine((value) => path.isAbsolute(value), {
+    message: "filePath must be an absolute local path.",
+  });
+
+const localScoreSelectionShape = {
+  partIndex: indexSchema.optional().describe("1-based MusicXML part index."),
+  partId: z.string().min(1).max(500).optional(),
+  voice: z.string().min(1).max(100).optional(),
+  staff: indexSchema.optional(),
+  midiTrackIndex: indexSchema
+    .optional()
+    .describe("1-based SMF track index; this is separate from SynthV trackIndex."),
+  midiChannel: z.number().int().min(1).max(16).optional(),
+};
+
+const localScoreConversionShape = {
+  onsetBlickOffset: blickSchema.default(0),
+  transposeSemitones: z.number().int().min(-127).max(127).default(0),
+  defaultLyric: z.string().max(400).default("la"),
+};
+
+const localScoreReadShape = {
+  filePath: localScoreFileSchema,
+  maxFileBytes: z
+    .number()
+    .int()
+    .min(1)
+    .max(64 * 1024 * 1024)
+    .default(MAX_LOCAL_SCORE_BYTES),
+};
+
+interface LocalScoreSelectionInput {
+  readonly partIndex?: number | undefined;
+  readonly partId?: string | undefined;
+  readonly voice?: string | undefined;
+  readonly staff?: number | undefined;
+  readonly midiTrackIndex?: number | undefined;
+  readonly midiChannel?: number | undefined;
+}
+
+function scoreSelection(
+  inspection: LocalScoreInspection,
+  input: LocalScoreSelectionInput,
+  requireUnambiguous: boolean,
+): MusicXmlSelection | MidiSelection {
+  const hasMusicXmlSelection =
+    input.partIndex !== undefined ||
+    input.partId !== undefined ||
+    input.voice !== undefined ||
+    input.staff !== undefined;
+  const hasMidiSelection =
+    input.midiTrackIndex !== undefined || input.midiChannel !== undefined;
+
+  if (inspection.format === "musicxml") {
+    if (hasMidiSelection) {
+      throw new ScoreImportError(
+        "INVALID_SCORE_SELECTION",
+        "MusicXML selection cannot use midiTrackIndex or midiChannel.",
+      );
+    }
+    const nonEmptyParts = inspection.parts.filter((part) => part.noteCount > 0);
+    if (
+      requireUnambiguous &&
+      input.partIndex === undefined &&
+      input.partId === undefined &&
+      nonEmptyParts.length > 1
+    ) {
+      throw new ScoreImportError(
+        "INVALID_SCORE_SELECTION",
+        "MusicXML contains multiple non-empty parts; choose partIndex or partId from inspect_score_file.",
+        { availableParts: nonEmptyParts.map((part) => ({
+          partIndex: part.partIndex,
+          partId: part.partId,
+          name: part.name,
+        })) },
+      );
+    }
+    const fallbackPart = nonEmptyParts[0] ?? inspection.parts[0];
+    return {
+      ...(input.partIndex === undefined &&
+      input.partId === undefined &&
+      fallbackPart !== undefined
+        ? { partIndex: fallbackPart.partIndex }
+        : {}),
+      ...(input.partIndex === undefined ? {} : { partIndex: input.partIndex }),
+      ...(input.partId === undefined ? {} : { partId: input.partId }),
+      ...(input.voice === undefined ? {} : { voice: input.voice }),
+      ...(input.staff === undefined ? {} : { staff: input.staff }),
+    };
+  }
+
+  if (hasMusicXmlSelection) {
+    throw new ScoreImportError(
+      "INVALID_SCORE_SELECTION",
+      "MIDI selection cannot use MusicXML part, voice, or staff fields.",
+    );
+  }
+  const nonEmptyTracks = inspection.tracks.filter((track) => track.noteCount > 0);
+  if (
+    requireUnambiguous &&
+    input.midiTrackIndex === undefined &&
+    nonEmptyTracks.length > 1
+  ) {
+    throw new ScoreImportError(
+      "INVALID_SCORE_SELECTION",
+      "MIDI contains multiple non-empty tracks; choose midiTrackIndex from inspect_score_file.",
+      {
+        availableTracks: nonEmptyTracks.map((track) => ({
+          midiTrackIndex: track.trackIndex,
+          name: track.name,
+          noteCount: track.noteCount,
+        })),
+      },
+    );
+  }
+  const trackIndex =
+    input.midiTrackIndex ?? nonEmptyTracks[0]?.trackIndex ?? inspection.tracks[0]?.trackIndex;
+  if (trackIndex === undefined) {
+    throw new ScoreImportError(
+      "NO_NOTES",
+      "MIDI file contains no selectable track.",
+    );
+  }
+  const selectedTrack = inspection.tracks.find(
+    (track) => track.trackIndex === trackIndex,
+  );
+  const activeChannels =
+    selectedTrack?.channels.filter((channel) => channel.noteCount > 0) ?? [];
+  if (
+    requireUnambiguous &&
+    input.midiChannel === undefined &&
+    activeChannels.length > 1
+  ) {
+    throw new ScoreImportError(
+      "INVALID_SCORE_SELECTION",
+      "Selected MIDI track contains multiple active channels; choose midiChannel from inspect_score_file.",
+      {
+        midiTrackIndex: trackIndex,
+        availableChannels: activeChannels.map((channel) => channel.channel),
+      },
+    );
+  }
+  const channel =
+    input.midiChannel ??
+    (activeChannels.length === 1 ? activeChannels[0]?.channel : undefined);
+  return channel === undefined ? { trackIndex } : { trackIndex, channel };
+}
+
+function compactScorePreview(
+  preview: ScorePreview,
+  noteLimit: number,
+): Record<string, unknown> {
+  return {
+    ...preview,
+    notes: preview.notes.slice(0, noteLimit),
+    returnedNoteCount: Math.min(preview.noteCount, noteLimit),
+    notesTruncated: preview.noteCount > noteLimit,
+  };
+}
+
+function compactScoreImport(
+  imported: LocalScoreImportResult,
+  noteLimit: number,
+): Record<string, unknown> {
+  return {
+    format: imported.format,
+    sourcePath: imported.sourcePath,
+    sourceSize: imported.sourceSize,
+    container: imported.container,
+    fileFingerprint: imported.fileFingerprint,
+    selection: imported.selection,
+    preview: compactScorePreview(imported.preview, noteLimit),
+    tempoPointCount: imported.tempoMap.length,
+    tempoMap: imported.tempoMap.slice(0, 256),
+    tempoMapTruncated: imported.tempoMap.length > 256,
+    warnings: imported.warnings,
+  };
+}
+
+function asScoreBridgeError(error: unknown): unknown {
+  return error instanceof ScoreImportError
+    ? new BridgeError(error.message, error.code, error.details)
+    : error;
+}
 
 function jsonToolResult(value: unknown): CallToolResult {
   return {
@@ -755,6 +963,66 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async () => runTool(async () => client.send("get_project_info")),
+  );
+
+  server.registerTool(
+    "inspect_score_file",
+    {
+      title: "Inspect Local MusicXML or MIDI",
+      description:
+        "Read one explicitly supplied local MusicXML (.xml, .musicxml, or .mxl) or SMF MIDI (.mid or .midi) file without editing SynthV. Returns a SHA-256 file guard, 1-based selectable parts/voices/staves or tracks/channels, and a bounded monophonic note preview. URLs and .svp files are rejected; XML entities are never resolved.",
+      inputSchema: {
+        ...localScoreReadShape,
+        ...localScoreSelectionShape,
+        ...localScoreConversionShape,
+        previewNoteLimit: z.number().int().min(1).max(512).default(64),
+      },
+      annotations: {
+        readOnlyHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => {
+        try {
+          const snapshot = await readLocalScoreSnapshot(input.filePath, {
+            maxFileBytes: input.maxFileBytes,
+          });
+          const inspection = inspectScoreSnapshot(snapshot, {
+            onsetBlickOffset: input.onsetBlickOffset,
+          });
+          let selectedPreview: Record<string, unknown> | undefined;
+          let previewError: ReturnType<typeof toPublicError> | undefined;
+          try {
+            const selection = scoreSelection(inspection, input, false);
+            const imported = importScoreSnapshotMonophonic(
+              snapshot,
+              selection,
+              snapshot.fileFingerprint,
+              {
+                onsetBlickOffset: input.onsetBlickOffset,
+                transposeSemitones: input.transposeSemitones,
+                defaultLyric: input.defaultLyric,
+              },
+            );
+            selectedPreview = compactScoreImport(
+              imported,
+              input.previewNoteLimit,
+            );
+          } catch (error) {
+            previewError = toPublicError(asScoreBridgeError(error));
+          }
+          return {
+            ...inspection,
+            writesProject: false,
+            sourceTempoAppliedToProject: false,
+            ...(selectedPreview === undefined ? {} : { selectedPreview }),
+            ...(previewError === undefined ? {} : { previewError }),
+          };
+        } catch (error) {
+          throw asScoreBridgeError(error);
+        }
+      }),
   );
 
   server.registerTool(
@@ -1326,7 +1594,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Clone SynthV Track",
       description:
-        "Deep-clone a track so its singer/database, groups, notes, automation, and mixer settings are inherited. Optionally clear notes or transpose all cloned vocal notes atomically.",
+        "Deep-clone a track so its main Vocal, groups, notes, automation, and mixer settings are inherited. Non-main vocal Groups require explicit detachment because the official API cannot verify or assign their Vocal database identities; review those Vocals after cloning.",
       inputSchema: {
         ...trackGuardShape,
         name: z.string().min(1).max(200).optional(),
@@ -1334,6 +1602,12 @@ export function createServer(config: BridgeConfig): McpServer {
         bounced: z.boolean().optional(),
         clearNotes: z.boolean().default(false),
         transposeSemitones: z.number().int().min(-127).max(127).default(0),
+        nonMainGroupPolicy: z
+          .enum(["reject", "detach"])
+          .default("reject")
+          .describe(
+            "Reject tracks with non-main vocal Groups by default. detach clones their content into independent library Groups, but their Vocal assignments must be reviewed manually.",
+          ),
       },
       annotations: {
         readOnlyHint: false,
@@ -1343,6 +1617,36 @@ export function createServer(config: BridgeConfig): McpServer {
       },
     },
     async (input) => runTool(async () => client.send("clone_track", input)),
+  );
+
+  server.registerTool(
+    "clone_track_shell",
+    {
+      title: "Create Vocal Template Track",
+      description:
+        "Clone only a source track's host-owned main Vocal context into a new empty track. Notes, pitch controls, known automation, and every non-main Group are removed before insertion. The official API cannot reveal the Vocal database identity, so the result reports host-clone inheritance without naming the Vocal.",
+      inputSchema: {
+        ...trackGuardShape,
+        name: z.string().min(1).max(200).optional(),
+        groupName: z.string().min(1).max(200).optional(),
+        displayColor: displayColorSchema.optional(),
+        bounced: z.boolean().default(false),
+        copyMixer: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Copy the source mixer when true; otherwise reset gain, pan, mute, and solo.",
+          ),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("clone_track_shell", input)),
   );
 
   server.registerTool(
@@ -1495,6 +1799,117 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     async (input) =>
       runTool(async () => client.send("delete_group_reference", input)),
+  );
+
+  server.registerTool(
+    "import_monophonic_score",
+    {
+      title: "Import Local Monophonic Score",
+      description:
+        "Convert one inspected, rights-cleared local MusicXML or SMF MIDI lane into Group-local SynthV notes and apply it through the ordinary guarded add_notes path in exactly one undo record. The SHA-256 guard must still match; ambiguous selection, overlap/polyphony, unsafe XML, more than 512 notes, URLs, and .svp files are rejected before any project write. Source tempo is reported but never silently applied to the project.",
+      inputSchema: {
+        ...groupLocatorShape,
+        ...localScoreReadShape,
+        ...localScoreSelectionShape,
+        ...localScoreConversionShape,
+        expectedFileFingerprint: z
+          .string()
+          .regex(/^sha256:[0-9a-f]{64}$/u)
+          .describe("Fresh fileFingerprint returned by inspect_score_file."),
+        rightsConfirmed: z
+          .literal(true)
+          .describe(
+            "Confirm that the user is authorized to import this local score.",
+          ),
+        grouping: z
+          .enum(["target", "ensureNonMain"])
+          .default("ensureNonMain")
+          .describe(
+            "ensureNonMain safely creates an editable non-main Group when the target is the track main Group.",
+          ),
+        groupName: z.string().min(1).max(200).optional(),
+        sharedGroupPolicy: z
+          .enum(["reject", "allowAllReferences"])
+          .default("reject"),
+        expectedReferenceCount: z.number().int().min(1).optional(),
+        previewNoteLimit: z.number().int().min(1).max(512).default(64),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => {
+        try {
+          const snapshot = await readLocalScoreSnapshot(input.filePath, {
+            maxFileBytes: input.maxFileBytes,
+          });
+          const inspection = inspectScoreSnapshot(snapshot, {
+            onsetBlickOffset: input.onsetBlickOffset,
+          });
+          const selection = scoreSelection(inspection, input, true);
+          const imported = importScoreSnapshotMonophonic(
+            snapshot,
+            selection,
+            input.expectedFileFingerprint,
+            {
+              onsetBlickOffset: input.onsetBlickOffset,
+              transposeSemitones: input.transposeSemitones,
+              defaultLyric: input.defaultLyric,
+            },
+          );
+          if (imported.notes.length > MAX_IMPORTED_SCORE_NOTES) {
+            throw new BridgeError(
+              `The selected score lane contains ${imported.notes.length} notes; SynthV imports are limited to ${MAX_IMPORTED_SCORE_NOTES} notes per undo record.`,
+              "SCORE_NOTE_LIMIT_EXCEEDED",
+              {
+                noteCount: imported.notes.length,
+                maximum: MAX_IMPORTED_SCORE_NOTES,
+                requiredAction:
+                  "Select a smaller source lane or split the legal source file before importing.",
+              },
+            );
+          }
+          const hostResult = await client.send("add_notes", {
+            trackIndex: input.trackIndex,
+            groupIndex: input.groupIndex,
+            ...(input.groupUuid === undefined
+              ? {}
+              : { groupUuid: input.groupUuid }),
+            notes: imported.notes,
+            grouping: input.grouping,
+            ...(input.groupName === undefined
+              ? {}
+              : { groupName: input.groupName }),
+            sharedGroupPolicy: input.sharedGroupPolicy,
+            ...(input.expectedReferenceCount === undefined
+              ? {}
+              : {
+                  expectedReferenceCount: input.expectedReferenceCount,
+                }),
+          });
+          const hostRecord =
+            typeof hostResult === "object" &&
+            hostResult !== null &&
+            !Array.isArray(hostResult)
+              ? (hostResult as Record<string, unknown>)
+              : { hostResult };
+          return {
+            ...hostRecord,
+            sourceScore: compactScoreImport(
+              imported,
+              input.previewNoteLimit,
+            ),
+            sourceTempoAppliedToProject: false,
+            undoRecordCount: 1,
+          };
+        } catch (error) {
+          throw asScoreBridgeError(error);
+        }
+      }),
   );
 
   server.registerTool(
@@ -2149,10 +2564,16 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Apply SynthV Transaction",
       description:
-        "Preflight every independent project-write step, then execute the complete batch in one SynthV undo record. Validation failures leave the project unchanged. Optional reverse steps are stored for guarded rollback during the current Bridge session.",
+        "Preflight all independent project writes, resolve dependent steps from earlier results, and execute the batch in one SynthV undo record. Independent validation failures leave the project unchanged. Dependent validation or host execution can fail after writes begin; the error reports failedStepIndex and whether one SynthV Undo is required. Optional reverse steps are stored for guarded rollback during the current Bridge session.",
       inputSchema: {
         summary: z.string().min(1).max(1000),
-        steps: z.array(transactionStepSchema).min(1).max(32),
+        steps: z
+          .array(transactionStepSchema)
+          .min(1)
+          .max(32)
+          .describe(
+            "Ordered project writes. A step may reference only earlier step results with {$result:{step:N,path:[...]}}. Steps without such references are fully preflighted before the single undo record.",
+          ),
         rollbackSteps: z
           .array(transactionStepSchema)
           .max(32)
@@ -2201,7 +2622,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Create SynthV Harmony Track",
       description:
-        "Clone a fingerprint-verified vocal track, transpose its notes, keep pitches inside an optional voice range by octave displacement, and set the cloned track mixer in one undo record.",
+        "Clone a fingerprint-verified vocal track, transpose its notes, keep pitches inside an optional voice range by octave displacement, and set the cloned track mixer in one undo record. Non-main vocal Groups require the same explicit detach-and-review policy as clone_track.",
       inputSchema: {
         sourceTrackIndex: indexSchema,
         sourceTrackFingerprint: fingerprintSchema,
@@ -2210,6 +2631,9 @@ export function createServer(config: BridgeConfig): McpServer {
         minimumPitch: midiPitchSchema.default(0),
         maximumPitch: midiPitchSchema.default(127),
         rangePolicy: z.enum(["reject", "octave"]).default("octave"),
+        nonMainGroupPolicy: z
+          .enum(["reject", "detach"])
+          .default("reject"),
         gainDecibel: z.number().finite().min(-24).max(24).optional(),
         pan: z.number().finite().min(-1).max(1).optional(),
         displayColor: displayColorSchema.optional(),

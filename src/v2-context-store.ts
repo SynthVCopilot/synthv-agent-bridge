@@ -2,7 +2,17 @@ import { randomBytes } from "node:crypto";
 
 import { BridgeError, BridgeProtocolError } from "./errors.js";
 
+export type V2ContextTargetKind =
+  | "automation"
+  | "group"
+  | "libraryGroup"
+  | "timeAxis"
+  | "track"
+  | "unknown";
+
 export interface V2ContextEntry {
+  readonly sourceAction?: string;
+  readonly targetKind?: V2ContextTargetKind;
   readonly trackIndex?: number;
   readonly groupIndex?: number;
   readonly groupUuid?: string;

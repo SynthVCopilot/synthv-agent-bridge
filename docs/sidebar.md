@@ -73,12 +73,20 @@ view of those summaries.
 - Only project-write actions, `apply_transaction`, and guarded rollback are
   accepted as panel previews.
 - The preview payload must already contain every UUID and fingerprint required
-  by the selected Bridge action.
+  by independent work. A dependent transaction field may instead contain a
+  valid `$result` reference to an earlier step whose result will supply that
+  locator or guard.
 - Only one pending or applying preview is allowed unless Codex explicitly
   replaces it.
 - The existing `FileIpcClient` lock and serialization remain authoritative.
 - Failed and stale writes stay visible and are not automatically retried.
 - A successful write or transaction remains one native SynthV undo record.
+  For transactions this is a single-Undo recovery boundary, not automatic
+  rollback. Independent steps are fully preflighted; a step that consumes an
+  earlier `$result` is resolved and checked immediately before it executes.
+- If a dependent validation or host execution failure occurs after writes
+  begin, the reported `undoRequired` state remains visible and directs the user
+  to invoke SynthV Undo once before retrying.
 - Cancel removes a queued request or unapplied preview; it does not interrupt a
   write that the Lua host has already started.
 
@@ -105,7 +113,9 @@ read-only checks outside SynthV.
 ## Current limitations
 
 - One preview can be pending at a time, although it may contain a transaction
-  of up to 32 independent write steps.
+  of up to 32 write steps. Later steps may reference earlier results; those
+  dependent steps cannot be fully preflighted until their result-derived
+  locators exist.
 - The user must paste the copied handoff prompt into Codex; an MCP server cannot
   initiate a model turn.
 - History contains summaries only and is intentionally capped at 20 entries.

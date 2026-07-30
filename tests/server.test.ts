@@ -6,7 +6,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { loadConfig } from "../src/config.js";
+import { LOCAL_ACTIONS } from "../src/local-actions.js";
 import { BRIDGE_ACTIONS } from "../src/protocol.js";
+import { TRANSACTION_STEP_ACTIONS } from "../src/sidebar-coordinator.js";
 import {
   createServer,
   TRACK_DISPLAY_COLOR_PATTERN,
@@ -42,8 +44,12 @@ test("every protocol action has exactly one internal action definition", async (
           name !== "sidebar_publish_preview",
       )
       .sort(),
-    [...BRIDGE_ACTIONS].sort(),
+    [...BRIDGE_ACTIONS, ...LOCAL_ACTIONS].sort(),
   );
+});
+
+test("Vocal template track creation is available to transactions and sidebar previews", () => {
+  assert.ok(TRANSACTION_STEP_ACTIONS.includes("clone_track_shell"));
 });
 
 test("MCP tool text results use compact JSON", async () => {

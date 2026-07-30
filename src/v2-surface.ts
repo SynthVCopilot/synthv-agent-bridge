@@ -10,6 +10,7 @@ import type { GuardTokenStore } from "./guard-token-store.js";
 import {
   V2ContextStore,
   type V2ContextEntry,
+  type V2ContextTargetKind,
 } from "./v2-context-store.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -96,9 +97,15 @@ const PITCH_ARRAY_FIELDS: Readonly<Record<string, string>> = {
 
 const TRACK_GUARD_ACTIONS = new Set([
   "clone_track",
+  "clone_track_shell",
   "delete_track",
   "set_track_mixer",
   "update_track",
+]);
+
+const TRACK_LOCATOR_ACTIONS = new Set([
+  "get_track_mixer",
+  "get_track_notes",
 ]);
 
 const REFERENCE_GUARD_ACTIONS = new Set([
@@ -118,6 +125,30 @@ const RETAKE_GUARD_ACTIONS = new Set([
   "activate_note_retake",
   "delete_note_retake",
   "generate_note_retake",
+]);
+
+const SHARED_GROUP_CONTENT_WRITE_ACTIONS = new Set([
+  "activate_note_retake",
+  "add_notes",
+  "add_pitch_controls",
+  "apply_expression_preset",
+  "apply_group_tuning",
+  "clear_automation",
+  "delete_note_retake",
+  "delete_notes",
+  "delete_pitch_controls",
+  "edit_notes",
+  "edit_pitch_controls",
+  "fit_lyrics",
+  "generate_note_retake",
+  "humanize_notes",
+  "import_monophonic_score",
+  "script_data",
+  "set_automation_points",
+  "set_note_phoneme_properties",
+  "simplify_automation",
+  "transform_notes",
+  "update_group",
 ]);
 
 const GROUP_LOCATOR_ACTIONS = new Set([
@@ -143,6 +174,7 @@ const GROUP_LOCATOR_ACTIONS = new Set([
   "get_phrase_context",
   "get_pitch_controls",
   "humanize_notes",
+  "import_monophonic_score",
   "sample_automation",
   "set_automation_points",
   "set_group_voice",
@@ -233,11 +265,80 @@ function readJsonResult(result: CallToolResult): unknown {
   }
 }
 
-function parseActionInput(tool: RegisteredTool, args: JsonRecord): unknown {
+function parseActionInput(
+  tool: RegisteredTool,
+  action: string,
+  args: JsonRecord,
+): unknown {
   const schema = tool.inputSchema as
-    | { parse?: (value: unknown) => unknown }
+    | {
+        parse?: (value: unknown) => unknown;
+        safeParse?: (value: unknown) =>
+          | { readonly success: true; readonly data: unknown }
+          | {
+              readonly success: false;
+              readonly error: {
+                readonly issues: readonly {
+                  readonly code: string;
+                  readonly path: readonly PropertyKey[];
+                  readonly message: string;
+                }[];
+              };
+            };
+      }
     | undefined;
-  return typeof schema?.parse === "function" ? schema.parse(args) : args;
+  let parsed: unknown = args;
+  if (typeof schema?.safeParse === "function") {
+    const validation = schema.safeParse(args);
+    if (!validation.success) {
+      throw new BridgeError(
+        `Invalid arguments for ${action}`,
+        "INVALID_ARGUMENT",
+        {
+          action,
+          issues: validation.error.issues.map(({ code, path, message }) => ({
+            code,
+            path,
+            message,
+          })),
+        },
+      );
+    }
+    parsed = validation.data;
+  } else if (typeof schema?.parse === "function") {
+    parsed = schema.parse(args);
+  }
+  if (!SHARED_GROUP_CONTENT_WRITE_ACTIONS.has(action)) {
+    return parsed;
+  }
+  const result = asRecord(parsed, `${action} args`);
+  const policy = args.sharedGroupPolicy;
+  if (
+    policy !== undefined &&
+    policy !== "reject" &&
+    policy !== "allowAllReferences"
+  ) {
+    throw new BridgeProtocolError(
+      "sharedGroupPolicy must be reject or allowAllReferences",
+    );
+  }
+  const expectedReferenceCount = args.expectedReferenceCount;
+  if (
+    expectedReferenceCount !== undefined &&
+    (!Number.isInteger(expectedReferenceCount) ||
+      (expectedReferenceCount as number) < 1)
+  ) {
+    throw new BridgeProtocolError(
+      "expectedReferenceCount must be a positive integer",
+    );
+  }
+  if (policy !== undefined) {
+    result.sharedGroupPolicy = policy;
+  }
+  if (expectedReferenceCount !== undefined) {
+    result.expectedReferenceCount = expectedReferenceCount;
+  }
+  return result;
 }
 
 async function invokeActionTool(
@@ -252,7 +353,7 @@ async function invokeActionTool(
   if (typeof tool.handler !== "function") {
     throw new BridgeProtocolError(`SynthV action ${action} is not directly callable`);
   }
-  const parsed = parseActionInput(tool, args);
+  const parsed = parseActionInput(tool, action, args);
   const handler = tool.handler as (
     input: unknown,
     extra?: unknown,
@@ -302,6 +403,7 @@ function assertActionCategory(
 }
 
 function contextEntry(
+  sourceAction: string,
   root: JsonRecord,
   noteFingerprints: ReadonlyMap<number, string> = new Map(),
   pitchControlFingerprints: ReadonlyMap<number, string> = new Map(),
@@ -322,7 +424,24 @@ function contextEntry(
   const expectedFingerprint = optionalString(
     root.expectedFingerprint ?? root.fingerprint,
   );
+  const targetKind: V2ContextTargetKind =
+    sourceAction === "get_time_axis" || sourceAction === "set_time_axis"
+      ? "timeAxis"
+      : sourceAction === "list_note_groups" ||
+          libraryIndex !== undefined
+        ? "libraryGroup"
+        : automationFingerprints.size > 0 ||
+            sourceAction === "get_automation" ||
+            sourceAction === "sample_automation"
+          ? "automation"
+          : groupUuid !== undefined
+            ? "group"
+            : trackFingerprint !== undefined
+              ? "track"
+              : "unknown";
   return {
+    sourceAction,
+    targetKind,
     ...(trackIndex === undefined ? {} : { trackIndex }),
     ...(groupIndex === undefined ? {} : { groupIndex }),
     ...(groupUuid === undefined ? {} : { groupUuid }),
@@ -442,8 +561,6 @@ function consumeAutomationGuards(
 
 function hasContextGuards(entry: V2ContextEntry): boolean {
   return (
-    entry.trackIndex !== undefined ||
-    entry.groupUuid !== undefined ||
     entry.trackFingerprint !== undefined ||
     entry.referenceFingerprint !== undefined ||
     entry.expectedFingerprint !== undefined ||
@@ -454,6 +571,7 @@ function hasContextGuards(entry: V2ContextEntry): boolean {
 }
 
 function addRootContext(
+  sourceAction: string,
   root: JsonRecord,
   contexts: V2ContextStore,
   guardTokens: GuardTokenStore,
@@ -466,6 +584,7 @@ function addRootContext(
     guardTokens,
   );
   const entry = contextEntry(
+    sourceAction,
     root,
     noteFingerprints,
     pitchFingerprints,
@@ -495,24 +614,35 @@ function addNestedContexts(
 ): void {
   if (action === "list_tracks" && Array.isArray(root.tracks)) {
     for (const value of root.tracks) {
-      addRootContext(asRecord(value, "result.tracks[]"), contexts, guardTokens);
+      addRootContext(
+        action,
+        asRecord(value, "result.tracks[]"),
+        contexts,
+        guardTokens,
+      );
     }
     return;
   }
   if (action === "list_note_groups" && Array.isArray(root.groups)) {
     for (const value of root.groups) {
-      addRootContext(asRecord(value, "result.groups[]"), contexts, guardTokens);
+      addRootContext(
+        action,
+        asRecord(value, "result.groups[]"),
+        contexts,
+        guardTokens,
+      );
     }
     return;
   }
   if (action === "get_track_notes" && Array.isArray(root.groups)) {
-    const trackIndex = optionalInteger(root.trackIndex);
+    const track = optionalRecord(root.track, "result.track");
+    const trackIndex = optionalInteger(root.trackIndex ?? track?.trackIndex);
     for (const value of root.groups) {
       const group = asRecord(value, "result.groups[]");
       if (trackIndex !== undefined) {
         group.trackIndex = trackIndex;
       }
-      addRootContext(group, contexts, guardTokens);
+      addRootContext(action, group, contexts, guardTokens);
     }
     delete root.trackFingerprint;
     return;
@@ -524,7 +654,12 @@ function addNestedContexts(
       const selectedPitchControls = root.selectedPitchControls;
       current.notes = selectedNotes;
       current.pitchControls = selectedPitchControls;
-      const contextId = addRootContext(current, contexts, guardTokens);
+      const contextId = addRootContext(
+        action,
+        current,
+        contexts,
+        guardTokens,
+      );
       if (contextId !== undefined) {
         root.contextId = contextId;
       }
@@ -535,7 +670,7 @@ function addNestedContexts(
     }
     return;
   }
-  addRootContext(root, contexts, guardTokens);
+  addRootContext(action, root, contexts, guardTokens);
 }
 
 function stripDiagnostics(root: JsonRecord): void {
@@ -746,8 +881,137 @@ function expandGuardedArray(
         );
       }
       item.fingerprint = fingerprint;
+    } else {
+      const fingerprint = fingerprints.get(index);
+      if (fingerprint !== undefined && item.fingerprint !== fingerprint) {
+        throw new BridgeError(
+          `The explicit ${canonical} guard conflicts with contextId`,
+          "CONTEXT_SCOPE_MISMATCH",
+          { field: `${field}[].fingerprint`, index },
+        );
+      }
     }
   }
+}
+
+function mergeContextField(
+  result: JsonRecord,
+  field: string,
+  contextValue: unknown,
+  contextId: string,
+): void {
+  if (contextValue === undefined) {
+    return;
+  }
+  const explicitValue = result[field];
+  if (explicitValue !== undefined && explicitValue !== contextValue) {
+    throw new BridgeError(
+      `${field} conflicts with the target bound to contextId`,
+      "CONTEXT_SCOPE_MISMATCH",
+      {
+        contextId,
+        field,
+        expected: contextValue,
+        actual: explicitValue,
+      },
+    );
+  }
+  result[field] ??= contextValue;
+}
+
+function compatibleContextKinds(
+  action: string,
+  args: JsonRecord,
+): readonly V2ContextTargetKind[] {
+  if (action === "set_time_axis") {
+    return ["timeAxis"];
+  }
+  if (action === "delete_note_group") {
+    return ["libraryGroup"];
+  }
+  if (action === "clone_note_group") {
+    return ["group", "automation", "libraryGroup"];
+  }
+  if (action === "add_group_reference") {
+    return ["track", "libraryGroup"];
+  }
+  if (action === "clone_group_reference") {
+    return ["track", "group", "automation"];
+  }
+  if (action === "create_harmony_track") {
+    return ["track"];
+  }
+  if (action === "script_data") {
+    const objectType = optionalString(args.objectType);
+    if (objectType === "track" || objectType === "mixer") {
+      return ["track"];
+    }
+    if (
+      objectType === "group" ||
+      objectType === "reference" ||
+      objectType === "note" ||
+      objectType === "retakes" ||
+      objectType === "automation" ||
+      objectType === "pitchControl"
+    ) {
+      return ["group", "automation"];
+    }
+    if (objectType === "timeAxis") {
+      return ["timeAxis"];
+    }
+    return [];
+  }
+  if (action === "set_selection") {
+    const scope = optionalString(args.scope) ?? "pianoRoll";
+    const operation = optionalString(args.operation);
+    const kind = optionalString(args.kind);
+    if (
+      scope === "pianoRoll" &&
+      (operation === "replace" ||
+        operation === "add" ||
+        operation === "remove") &&
+      (kind === "notes" ||
+        kind === "pitchControls" ||
+        kind === "automationPoints")
+    ) {
+      return ["group", "automation"];
+    }
+    return [];
+  }
+  if (GROUP_LOCATOR_ACTIONS.has(action)) {
+    return ["group", "automation"];
+  }
+  if (TRACK_GUARD_ACTIONS.has(action) || TRACK_LOCATOR_ACTIONS.has(action)) {
+    return ["track"];
+  }
+  return [];
+}
+
+function assertContextCompatible(
+  action: string,
+  args: JsonRecord,
+  contextId: string,
+  context: V2ContextEntry,
+): void {
+  const accepted = compatibleContextKinds(action, args);
+  if (
+    context.targetKind !== undefined &&
+    accepted.includes(context.targetKind)
+  ) {
+    return;
+  }
+  throw new BridgeError(
+    `contextId from ${context.sourceAction ?? "another read"} cannot target ${action}`,
+    "CONTEXT_INCOMPATIBLE",
+    {
+      contextId,
+      action,
+      sourceAction: context.sourceAction,
+      targetKind: context.targetKind,
+      acceptedTargetKinds: accepted,
+      untypedContext: context.targetKind === undefined,
+    },
+  );
 }
 
 function expandContext(
@@ -757,7 +1021,7 @@ function expandContext(
   contexts: V2ContextStore,
 ): JsonRecord {
   const result = { ...args };
-  if (action === "add_notes") {
+  if (action === "add_notes" || action === "import_monophonic_score") {
     result.grouping ??= "ensureNonMain";
   }
   if (
@@ -782,6 +1046,7 @@ function expandContext(
     return result;
   }
   const context = contexts.resolve(contextId);
+  assertContextCompatible(action, result, contextId, context);
 
   if (action === "transform_notes" && result.target === "contextNotes") {
     if (result.notes !== undefined) {
@@ -806,68 +1071,175 @@ function expandContext(
     delete result.target;
   }
 
-  if (GROUP_LOCATOR_ACTIONS.has(action)) {
-    result.trackIndex ??= context.trackIndex;
-    result.groupIndex ??= context.groupIndex;
-    result.groupUuid ??= context.groupUuid;
+  if (
+    GROUP_LOCATOR_ACTIONS.has(action) ||
+    (action === "set_selection" &&
+      compatibleContextKinds(action, result).length > 0)
+  ) {
+    mergeContextField(result, "trackIndex", context.trackIndex, contextId);
+    mergeContextField(result, "groupIndex", context.groupIndex, contextId);
+    mergeContextField(result, "groupUuid", context.groupUuid, contextId);
   }
   if (TRACK_GUARD_ACTIONS.has(action)) {
-    result.trackIndex ??= context.trackIndex;
-    result.trackFingerprint ??= context.trackFingerprint;
+    mergeContextField(result, "trackIndex", context.trackIndex, contextId);
+    mergeContextField(
+      result,
+      "trackFingerprint",
+      context.trackFingerprint,
+      contextId,
+    );
+  }
+  if (TRACK_LOCATOR_ACTIONS.has(action)) {
+    mergeContextField(result, "trackIndex", context.trackIndex, contextId);
   }
   if (REFERENCE_GUARD_ACTIONS.has(action)) {
-    result.referenceFingerprint ??= context.referenceFingerprint;
+    mergeContextField(
+      result,
+      "referenceFingerprint",
+      context.referenceFingerprint,
+      contextId,
+    );
   }
   if (action === "set_time_axis") {
-    result.expectedFingerprint ??= context.expectedFingerprint;
+    mergeContextField(
+      result,
+      "expectedFingerprint",
+      context.expectedFingerprint,
+      contextId,
+    );
   }
   if (action === "delete_note_group") {
-    result.libraryIndex ??= context.libraryIndex;
-    result.groupUuid ??= context.groupUuid;
-    result.expectedFingerprint ??= context.expectedFingerprint;
+    mergeContextField(result, "libraryIndex", context.libraryIndex, contextId);
+    mergeContextField(result, "groupUuid", context.groupUuid, contextId);
+    mergeContextField(
+      result,
+      "expectedFingerprint",
+      context.expectedFingerprint,
+      contextId,
+    );
   }
   if (action === "clone_note_group") {
-    result.libraryIndex ??= context.libraryIndex;
-    result.groupUuid ??= context.groupUuid;
-    result.expectedFingerprint ??= context.expectedFingerprint;
-    result.trackIndex ??= context.trackIndex;
-    result.groupIndex ??= context.groupIndex;
+    mergeContextField(result, "libraryIndex", context.libraryIndex, contextId);
+    mergeContextField(result, "groupUuid", context.groupUuid, contextId);
+    mergeContextField(
+      result,
+      "expectedFingerprint",
+      context.expectedFingerprint,
+      contextId,
+    );
+    mergeContextField(result, "trackIndex", context.trackIndex, contextId);
+    mergeContextField(result, "groupIndex", context.groupIndex, contextId);
   }
   if (action === "add_group_reference") {
-    result.trackIndex ??= context.trackIndex;
-    result.trackFingerprint ??= context.trackFingerprint;
+    mergeContextField(result, "trackIndex", context.trackIndex, contextId);
+    mergeContextField(
+      result,
+      "trackFingerprint",
+      context.trackFingerprint,
+      contextId,
+    );
     if (context.libraryIndex !== undefined) {
-      result.targetLibraryIndex ??= context.libraryIndex;
-      result.targetGroupUuid ??= context.groupUuid;
-      result.targetFingerprint ??= context.expectedFingerprint;
+      mergeContextField(
+        result,
+        "targetLibraryIndex",
+        context.libraryIndex,
+        contextId,
+      );
+      mergeContextField(
+        result,
+        "targetGroupUuid",
+        context.groupUuid,
+        contextId,
+      );
+      mergeContextField(
+        result,
+        "targetFingerprint",
+        context.expectedFingerprint,
+        contextId,
+      );
     }
   }
   if (action === "clone_group_reference") {
     if (context.referenceFingerprint !== undefined) {
-      result.sourceTrackIndex ??= context.trackIndex;
-      result.sourceGroupIndex ??= context.groupIndex;
-      result.sourceGroupUuid ??= context.groupUuid;
-      result.sourceReferenceFingerprint ??= context.referenceFingerprint;
+      mergeContextField(
+        result,
+        "sourceTrackIndex",
+        context.trackIndex,
+        contextId,
+      );
+      mergeContextField(
+        result,
+        "sourceGroupIndex",
+        context.groupIndex,
+        contextId,
+      );
+      mergeContextField(
+        result,
+        "sourceGroupUuid",
+        context.groupUuid,
+        contextId,
+      );
+      mergeContextField(
+        result,
+        "sourceReferenceFingerprint",
+        context.referenceFingerprint,
+        contextId,
+      );
     } else {
-      result.targetTrackIndex ??= context.trackIndex;
-      result.targetTrackFingerprint ??= context.trackFingerprint;
+      mergeContextField(
+        result,
+        "targetTrackIndex",
+        context.trackIndex,
+        contextId,
+      );
+      mergeContextField(
+        result,
+        "targetTrackFingerprint",
+        context.trackFingerprint,
+        contextId,
+      );
     }
   }
   if (action === "create_harmony_track") {
-    result.sourceTrackIndex ??= context.trackIndex;
-    result.sourceTrackFingerprint ??= context.trackFingerprint;
+    mergeContextField(
+      result,
+      "sourceTrackIndex",
+      context.trackIndex,
+      contextId,
+    );
+    mergeContextField(
+      result,
+      "sourceTrackFingerprint",
+      context.trackFingerprint,
+      contextId,
+    );
   }
   if (action === "script_data") {
-    result.trackIndex ??= context.trackIndex;
-    result.groupIndex ??= context.groupIndex;
-    result.groupUuid ??= context.groupUuid;
+    mergeContextField(result, "trackIndex", context.trackIndex, contextId);
+    mergeContextField(result, "groupIndex", context.groupIndex, contextId);
+    mergeContextField(result, "groupUuid", context.groupUuid, contextId);
     const objectType = optionalString(result.objectType);
     if (objectType === "track" || objectType === "mixer") {
-      result.trackFingerprint ??= context.trackFingerprint;
+      mergeContextField(
+        result,
+        "trackFingerprint",
+        context.trackFingerprint,
+        contextId,
+      );
     } else if (objectType === "reference") {
-      result.referenceFingerprint ??= context.referenceFingerprint;
+      mergeContextField(
+        result,
+        "referenceFingerprint",
+        context.referenceFingerprint,
+        contextId,
+      );
     } else if (objectType === "timeAxis" || objectType === "automation") {
-      result.expectedFingerprint ??= context.expectedFingerprint;
+      mergeContextField(
+        result,
+        "expectedFingerprint",
+        context.expectedFingerprint,
+        contextId,
+      );
     }
   }
 
@@ -882,7 +1254,12 @@ function expandContext(
   }
   if (RETAKE_GUARD_ACTIONS.has(action)) {
     const noteIndex = normalizeItemIndex(result, "noteIndex");
-    result.fingerprint ??= context.noteFingerprints.get(noteIndex);
+    mergeContextField(
+      result,
+      "fingerprint",
+      context.noteFingerprints.get(noteIndex),
+      contextId,
+    );
   }
   const pitchField = PITCH_ARRAY_FIELDS[action];
   if (pitchField !== undefined) {
@@ -896,15 +1273,23 @@ function expandContext(
   if (AUTOMATION_GUARD_ACTIONS.has(action)) {
     const parameter = optionalString(result.parameter);
     if (parameter !== undefined) {
-      result.expectedFingerprint ??=
-        context.automationFingerprints.get(parameter);
+      mergeContextField(
+        result,
+        "expectedFingerprint",
+        context.automationFingerprints.get(parameter),
+        contextId,
+      );
     }
   }
   if (action === "apply_expression_preset") {
     const parameter =
       result.preset === "breathiness" ? "breathiness" : "loudness";
-    result.expectedAutomationFingerprint ??=
-      context.automationFingerprints.get(parameter);
+    mergeContextField(
+      result,
+      "expectedAutomationFingerprint",
+      context.automationFingerprints.get(parameter),
+      contextId,
+    );
   }
   if (action === "apply_group_tuning" && Array.isArray(result.automations)) {
     for (const value of result.automations) {
@@ -916,6 +1301,18 @@ function expandContext(
       ) {
         update.expectedFingerprint =
           context.automationFingerprints.get(parameter);
+      } else if (parameter !== undefined) {
+        const fingerprint = context.automationFingerprints.get(parameter);
+        if (
+          fingerprint !== undefined &&
+          update.expectedFingerprint !== fingerprint
+        ) {
+          throw new BridgeError(
+            "An automation guard conflicts with contextId",
+            "CONTEXT_SCOPE_MISMATCH",
+            { contextId, parameter },
+          );
+        }
       }
     }
   }
@@ -923,6 +1320,7 @@ function expandContext(
 }
 
 export const v2Testing = {
+  addNestedContexts,
   compactPhraseNotes,
   defaultReadFields,
   denseNotes,
@@ -1025,6 +1423,34 @@ function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
     } catch {
       inputSchema = { type: "object" };
     }
+  }
+  if (
+    SHARED_GROUP_CONTENT_WRITE_ACTIONS.has(name) &&
+    typeof inputSchema === "object" &&
+    inputSchema !== null &&
+    !Array.isArray(inputSchema)
+  ) {
+    const schemaRecord = inputSchema as JsonRecord;
+    const properties =
+      typeof schemaRecord.properties === "object" &&
+      schemaRecord.properties !== null &&
+      !Array.isArray(schemaRecord.properties)
+        ? (schemaRecord.properties as JsonRecord)
+        : {};
+    properties.sharedGroupPolicy = {
+      type: "string",
+      enum: ["reject", "allowAllReferences"],
+      default: "reject",
+      description:
+        "Reject content writes when the Note Group has multiple references. Use allowAllReferences only for an intentional linked edit and also supply expectedReferenceCount.",
+    };
+    properties.expectedReferenceCount = {
+      type: "integer",
+      minimum: 1,
+      description:
+        "Fresh referenceCount from list_note_groups. Required with sharedGroupPolicy=allowAllReferences and checked again before writing.",
+    };
+    schemaRecord.properties = properties;
   }
   const contextHint =
     name === "transform_notes"

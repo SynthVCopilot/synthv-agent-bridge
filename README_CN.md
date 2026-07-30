@@ -48,9 +48,10 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 | Voice 与音素 | 读取和编辑 Group Voice、Vocal Mode 轴、实验性 Unison 字段、音素集覆盖、音节时值、发音，以及单音素时值或强度。 |
 | 音高与表情 | 调整音高过渡和音高曲线；管理 Smart Pitch 控制和 AI Retake；应用 Scoop、Falloff、Vibrato、Crescendo 或 Breathiness 预设。 |
 | 自动化 | 读取、添加、替换、采样、简化或清除音高偏差、响度、张力、气声、发声、性别和 Vocal Mode 曲线。 |
-| 轨道、Group 与和声 | 创建、克隆、复用、更新或删除库 Group、Group 引用和轨道；继承现有歌手，并创建受音域约束的和声轨。 |
+| 轨道、Group 与和声 | 创建、克隆、复用、更新或删除库 Group、Group 引用和轨道；创建宿主克隆 Vocal 上下文的空白模板轨；并创建受音域约束的和声轨。共享 Group 内容写入默认安全失败，除非明确确认要影响全部引用。 |
+| 本地曲谱导入 | 检查明确提供的本地 MusicXML（`.xml`、`.musicxml`、`.mxl`）或 SMF MIDI（`.mid`、`.midi`），再通过受保护音符写入路径导入一个已确认权利的单旋律声部。不接受 URL 或 `.svp`。 |
 | 时序、编辑器与播放 | 转换秒、四分音符和 blick；编辑速度/拍号；控制选区、视口、剪贴板、网格吸附、坐标、混音器和播放。 |
-| 安全编辑 | 使用最新指纹和 Guard Token 保护写入；预检最多 32 个独立步骤；创建一个 SynthV 撤销记录，并可选保留受保护回滚计划。 |
+| 安全编辑 | 使用最新指纹、带类型/作用域的 `contextId` 和 Guard Token 保护写入；完整预检独立事务步骤，按需解析正向依赖；创建一个 SynthV 撤销记录，并可选保留受保护回滚计划。 |
 | 审核与本地隐私 | 在可选原生侧边栏中审核、应用、放弃或取消受保护预览。文件 IPC 保持本地：Bridge 不解析 `.svp` 文件、不打开网络端口，也不调用 AI API。 |
 
 ## 责任边界
@@ -67,14 +68,17 @@ SynthV 保存结果，用户负责最终听感判断。
 | 决定先调一小段还是更大范围 | Agent | 需要结合用户目标、审核成本和 token 成本 |
 | 把温柔、明亮、克制等要求转换成明确参数 | Agent | Bridge 不应自行解释艺术语言 |
 | 选择新鲜目标范围和明确的批量数值变换 | Agent | 目标和音乐数值属于当前任务决策 |
+| 选择合法本地曲谱并确认有权导入 | Agent＋用户 | Bridge 无法判断版权或许可权限 |
 | 提供当前 Group、音符、Voice 和自动化数据 | Lua Bridge | SynthV 实时对象模型才是权威数据源 |
-| 缓存并展开 `contextId` 和 Guard 数据 | TypeScript MCP | 避免重复传输大型指纹，同时保留陈旧写入保护 |
+| 缓存并展开带类型/作用域的 `contextId` 和 Guard 数据 | TypeScript MCP | 避免重复传输大型指纹，同时对不兼容作用域安全失败 |
+| 检查并转换明确提供的本地 MusicXML/MIDI 声部 | TypeScript MCP | 在 SynthV 外有界本地解析，但不代表用户有权使用文件 |
 | 压缩读取结果和写入确认 | TypeScript MCP | 避免无关宿主数据进入模型上下文 |
 | 检测 SynthV 重启或 Bridge 重载 | TypeScript MCP | 再次写入前必须清除旧 Context 和 Guard |
 | 校验请求结构、路由、索引和稳定协议范围 | TypeScript MCP | 在文件 IPC 前拒绝错误请求 |
 | 读取当前 Automation `definition.range` | Lua Bridge | 范围可能随宿主、歌手和参数变化 |
 | 展开确定性音符变换和其他批处理机械计算 | Lua Bridge | 机械计算应集中、可复现 |
 | 校验指纹和完整的预备批次 | Lua Bridge | 防止覆盖用户修改或只执行部分无效请求 |
+| 阻止意外修改有多个引用的 Note Group 内容 | Lua Bridge | 即使引用位于不同轨道，Group 内容仍然共享 |
 | 创建一个撤销记录并验证宿主写入结果 | Lua Bridge＋SynthV | 提供一个恢复边界并避免假成功 |
 | 保存、试听、撤销并确认最终效果 | 用户＋SynthV | 用户是最终艺术判断者 |
 
@@ -136,6 +140,10 @@ Codex / 其他本地 stdio MCP 宿主
 
 第一版有意采用文件 IPC，因为它可在 SynthV 文档规定的 Lua 环境中工作，
 并且便于检查和恢复。参阅 [docs/architecture.md](docs/architecture.md)。
+
+本地曲谱检查是 Node 服务器单纯转发工程数据职责的有界例外：它只读取明确
+提供的绝对 MusicXML/MIDI 路径。检查留在 Node；获准导入后，转换出的音符
+仍通过受保护 Lua `add_notes` 路径写入。它绝不解析 `.svp`。
 
 ## 要求
 
@@ -287,9 +295,11 @@ Apply 命令由 Node 协调器消费，并通过 MCP 工具使用的同一个串
    `contextId`。
 4. 遇到 `UNKNOWN_CONTEXT` 或任何 `STALE_*` 结果后重新读取。
 
-`contextId` 只在有界的 Node 内存中保存定位器和并发保护，不缓存可变的
-音符、Voice、选区或自动化内容。SynthV 在创建撤销记录前仍会检查每一个
-完整指纹。
+`contextId` 只在有界的 Node 内存中保存定位器和并发保护。每个句柄都绑定
+目标类型和来源作用域；把它用于不兼容操作，或同时提供互相冲突的显式定位器/
+Guard，会安全失败，而不会静默改换目标。只有定位器、没有保护信息的读取不会
+生成可用于写入的 Context。Context 不缓存可变的音符、Voice、选区或自动化
+内容；SynthV 在创建撤销记录前仍会检查每一个完整指纹。
 
 乐句读取支持对 `notes`、`voice`、`automation`、`analysis`、
 `recommendations`、`pitchAnalysis`、`selection` 和 `diagnostics` 进行
@@ -316,6 +326,7 @@ Apply 命令由 Node 协调器消费，并通过 MCP 工具使用的同一个串
 | `show_dialog` | 控制 | 显示消息、输入、确认或自定义表单对话框。 |
 | `convert_pitch` | 读取 | 转换 MIDI 音高和频率，并识别黑键。 |
 | `get_project_info` | 读取 | 读取工程、时序、播放、宿主和当前编辑器位置。 |
+| `inspect_score_file` | 读取 | 在 Node 中检查明确提供的本地 MusicXML 或 SMF MIDI，返回 SHA-256 文件保护和可选 part/voice/staff 或 track/channel，并在不修改 SynthV 的前提下预览有界单旋律声部。 |
 | `get_time_axis` | 读取 | 读取全部速度/拍号标记及安全写入指纹。 |
 | `convert_time` | 读取 | 通过当前速度图转换秒、四分音符或 blick，并可按 Blick 网格取整。 |
 | `set_time_axis` | 破坏性 | 添加、替换或删除速度/拍号标记。 |
@@ -331,16 +342,18 @@ Apply 命令由 Node 协调器消费，并通过 MCP 工具使用的同一个串
 | `get_note_phoneme_data` | 读取 | 读取用户/计算音素、音素集覆盖、单音素属性和音符选区状态，可选紧凑音符索引或秒范围过滤。 |
 | `get_phrase_context` | 读取 | 一次紧凑、可直接写入的选中/范围乐句读取，包含音符与自动化 Guard Token、Voice/Vocal Mode、诊断和仅供建议的审核目标。 |
 | `get_selection` | 读取 | 读取选中的 Group、音符、Smart Pitch 控制和指定自动化点。 |
-| `set_selection` | 控制 | 替换、添加、删除或清空编辑器选区。 |
+| `set_selection` | 控制 | 替换、添加、删除或清空编辑器选区，并返回 SynthV 实际报告的选区。 |
 | `get_computed_group_data` | 读取 | 读取计算音素/说唱属性和可选音高采样。 |
 | `add_track` | 写入 | 创建轨道并返回其主 Group 定位器。 |
 | `update_track` | 写入 | 重命名、重新着色或修改 Render Panel 包含状态。 |
-| `clone_track` | 写入 | 深度克隆轨道，保留歌手/数据库，可选清空或移调。 |
+| `clone_track` | 写入 | 通过宿主克隆继承轨道主 Vocal 上下文，可选清空或移调。含非主人声 Group 的源轨默认被拒绝；`nonMainGroupPolicy=detach` 可使其 Group 内容独立，但必须人工核对这些非主 Group 的 Vocal 身份。 |
+| `clone_track_shell` | 写入 | 通过宿主克隆把源轨主 Group 的 Vocal 上下文带到一条已验证为空的轨道，同时移除音符、Smart Pitch、已知自动化、非主 Group，并默认重置混音器。API 无法读取或命名继承到的 Vocal 身份。 |
 | `delete_track` | 破坏性 | 删除经过指纹验证且不是最后一条的轨道。 |
 | `update_group` | 写入 | 修改人声/乐器引用状态和受支持的人声属性。 |
 | `set_group_voice` | 写入 | 使用指纹验证更新类型化 Voice、Vocal Mode 和经宿主验证的实验性 Unison，可选当前 Group 保护。 |
 | `apply_group_tuning` | 破坏性 | 完整预检后，在一个撤销记录中应用同一 Group 的 Voice/唱法、音符/音素及多条自动化调音；若宿主在执行期意外失败，重试前必须先在 SynthV 中撤销一次。 |
 | `delete_group_reference` | 破坏性 | 删除非主人声或乐器引用。 |
+| `import_monophonic_score` | 写入 | 通过受保护 `add_notes` 从刚检查且已确认使用权的本地 MusicXML/MIDI 单旋律声部导入最多 512 个音符；SHA-256 必须仍匹配，源速度只返回审核而不自动应用。 |
 | `add_notes` | 写入 | 向目标 Group 添加音符。V2 默认为 `grouping=ensureNonMain`：目标为轨道主 Group 时创建可复用的非主 Group/引用；使用 `grouping=target` 可写入准确目标 Group。 |
 | `edit_notes` | 写入 | 编辑经过指纹验证的音符。 |
 | `transform_notes` | 破坏性 | 对受保护音符批量应用明确的起音偏移、时值缩放/偏移或音高偏移。V2 可直接变换新鲜 Context 中的全部音符，无需重复索引。 |
@@ -360,19 +373,19 @@ Apply 命令由 Node 协调器消费，并通过 MCP 工具使用的同一个串
 | `set_automation_points` | 写入 | 添加/更新经过指纹或 Guard 验证的点，可先清除全部或一个范围，并返回紧凑确认。 |
 | `clear_automation` | 破坏性 | 清除完整曲线或选中范围。 |
 | `get_editor_view` | 读取 | 读取编辑器时间/数值范围和像素比例。 |
-| `set_editor_view` | 控制 | 移动或缩放主编辑器/编曲视口。 |
+| `set_editor_view` | 控制 | 移动或缩放主编辑器/编曲视口，并返回宿主最终的导航状态。 |
 | `snap_position` | 读取 | 使用当前编辑器网格设置吸附位置。 |
 | `convert_editor_coordinates` | 读取 | 转换时间/数值与 x/y 编辑器坐标。 |
 | `script_data` | 读/写 | 管理 SynthV 对象上具有命名空间的 Bridge JSON 元数据。 |
 | `get_track_mixer` | 读取 | 读取增益、声像、静音和独奏。 |
 | `set_track_mixer` | 写入 | 修改增益、声像、静音和独奏。 |
-| `apply_transaction` | 破坏性 | 预检最多 32 个独立写入步骤，并在一个撤销记录中应用，可选保存受保护反向步骤。 |
+| `apply_transaction` | 破坏性 | 在一个撤销记录中应用最多 32 个写入。独立步骤会完整预检；后续步骤可用 `$result` 取得前一步结果，并在执行前即时预检。它提供单次撤销恢复边界，不是自动回滚。 |
 | `rollback_transaction` | 破坏性 | 在一个新的撤销记录中应用已保存的受保护事务反向步骤。 |
 | `create_harmony_track` | 写入 | 克隆受保护人声轨、移调、把可选音域适配到八度，并设置混音器。 |
 | `humanize_notes` | 破坏性 | 对起音/时值应用确定性的指纹保护变化，可选保留和弦对齐。 |
 | `apply_expression_preset` | 破坏性 | 通过音符属性或自动化应用 Scoop、Falloff、Vibrato、Crescendo 或 Breathiness。 |
 | `fit_lyrics` | 破坏性 | 把音节和可选音素分配到经过指纹验证的音符。 |
-| `playback` | 控制 | 读取状态、播放、暂停、停止、定位或循环。 |
+| `playback` | 控制 | 读取状态、播放、暂停、停止、定位或循环，并返回宿主实际状态和播放头。 |
 
 所有轨道、Group 和音符索引均从 **1 开始**，与 SynthV Lua API 一致。
 除非返回字段明确标记为 `absolute`，音符和自动化坐标均为 Group 局部 blick。
@@ -465,10 +478,13 @@ Codex Agent 规则要求按以下顺序执行：
 2. 展示或在内部构建一个小型、便于审核的变更。
 3. 复制最新适用的 Group/引用 UUID 和指纹、轨道指纹、自动化/时间轴指纹，
    以及音符或 Smart Pitch 指纹。
-4. 调用能完成目标的最小写入工具。同一次调音会修改同一 Group 的
+4. 调用能完成目标的最小写入工具。Group 内容写入默认拒绝有多个引用的
+   Note Group。只有确实要修改全部链接位置时，才使用
+   `sharedGroupPolicy=allowAllReferences`，并同时提供刚读取的
+   `expectedReferenceCount`。同一次调音会修改同一 Group 的
    Voice/唱法、音符/音素或多条自动化时，优先使用
-   `apply_group_tuning`；完整且相互独立的多对象批处理再使用
-   `apply_transaction`。
+   `apply_group_tuning`；有界的多对象批处理使用 `apply_transaction`。
+   独立步骤在写入前预检；依赖前一步 `$result` 的步骤只能在执行前即时检查。
 5. SynthV 返回任何 `STALE_*` 错误时重新读取，不进行猜测。
 
 一次紧凑读取应支持一批完整的相关变更。如果只修改了 Group Voice，不要
@@ -497,7 +513,14 @@ Agent 把旧计划应用到用户已经修改的音符。
 
 ```text
 读取轨道 1，然后将其克隆为“和声 -3st”，transposeSemitones 设为 -3。
-使用最新轨道指纹，使克隆轨道继承同一个歌手。
+使用最新轨道指纹。如果它包含非主人声 Group，除非我明确同意分离其内容并
+人工核对这些 Vocal，否则停止。
+```
+
+```text
+检查 D:\scores\melody.musicxml，但不要修改 SynthV。列出可选的
+part/voice/staff、重叠状态、SHA-256 保护和音符预览。只有在我确认有权使用
+该文件后，才导入选定的单旋律声部。
 ```
 
 更多示例见 [examples/prompts.md](examples/prompts.md)。
@@ -567,11 +590,15 @@ Codex 配置。添加 `--json` 可获得机器可读输出。它不会修改工�
   Lua 宿主执行结束；Agent 应先读取当前工程，再决定是否重试写入。
 - 侧边栏同一时间只保存一个待处理预览。该预览可以包含一个写入或一批
   `apply_transaction`。
-- 通用事务会有意拒绝多个修改同一受保护作用域的步骤，也无法把新创建的
-  对象提供给后续正向步骤。会改变索引的轨道/库 Group 删除必须是唯一
-  步骤。常见依赖编辑由专用语义操作覆盖。
-- 事务验证失败不会修改工程。执行开始后如果宿主发生意外失败，单个撤销
-  记录内可能留下部分批处理；请立即使用 **编辑 → 撤销**。
+- 通用事务会拒绝多个冲突修改同一受保护作用域的步骤。后续步骤可以用完整
+  字段形式的 `$result` 引用前一步结果。独立步骤在写入前完整预检；依赖
+  步骤由于目标尚不存在，只能解析结果后即时预检。会改变索引的轨道/库
+  Group 删除必须是唯一步骤。
+- `atomicity: "singleUndoRecord"` 表示一个 SynthV 恢复边界，不表示自动
+  回滚。独立预检失败不会修改工程；依赖预检或宿主执行失败可能发生在前面
+  步骤已经写入之后。
+  错误返回 `undoRequired` 时，重新读取或重试前请立即执行一次
+  **编辑 → 撤销**。
 - 回滚计划保存在当前工程/会话的 Bridge 内存中，Bridge 重载或 SynthV
   关闭后会丢失。回滚本身是新的受保护写入；指纹陈旧时会被拒绝。
 - 面板无法自行启动 Codex 回合。**Copy & queue** 会写入本地请求，并把
@@ -580,8 +607,13 @@ Codex 配置。添加 `--json` 可获得机器可读输出。它不会修改工�
   先点击主编辑区再按 **Ctrl+Z**；无论焦点在哪里都可使用
   **编辑 → 撤销**。
 - SynthV 公开脚本 API 不支持工程保存、音频渲染、按显示名称选择已安装
-  歌手数据库或 Voice Panel 音阶/模式设置。这些功能不在范围内；
-  `clone_track` 可以继承已经选中的歌手。
+  歌手数据库、读取 Vocal 身份或 Voice Panel 音阶/模式设置。
+  `clone_track_shell` 可以通过宿主克隆继承源轨主 Vocal 上下文，但无法命名它。
+- 本地曲谱支持有意限定为有界导入。它只接受绝对本地 `.xml`、`.musicxml`、
+  `.mxl`、`.mid` 或 `.midi` 路径，并要求先检查、再确认使用权；URL、
+  `.svp`、XML `DOCTYPE`/`ENTITY`、含歧义或复调的声部、已变化的文件哈希，
+  以及超过 512 个音符的导入都会被拒绝。源速度会返回供审核，但不会静默
+  应用到工程。
 - SynthV 2.2.1 会返回 `singers` 和 `spacing`，但公开 `getVoice` 字段列表
   没有记录它们。因此类型化 Unison 表面属于实验性功能；只有宿主在克隆
   引用上返回并保留请求字段时才允许写入。

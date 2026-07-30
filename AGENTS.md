@@ -8,9 +8,19 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
 
 - Keep the MCP server network-free by default.
 - Keep track, group, and note indices 1-based at the protocol boundary.
-- Validate complete write requests before calling `Project:newUndoRecord()`.
+- Validate every ordinary write and every independent transaction step before
+  calling `Project:newUndoRecord()`. A forward transaction step that explicitly
+  depends on an earlier `$result` must resolve and preflight immediately before
+  its own mutation; report the single Undo recovery requirement if that
+  just-in-time check fails after earlier steps wrote.
 - Require current fingerprints for note edits and deletes.
 - Do not parse or mutate `.svp` files directly.
+- Local score support may parse only an explicitly supplied absolute local
+  `.xml`, `.musicxml`, `.mxl`, `.mid`, or `.midi` path in the Node process.
+  Reject URLs, `.svp`, XML `DOCTYPE`/`ENTITY`, changed SHA-256 guards,
+  ambiguous or polyphonic lanes, and imports above 512 notes. Require
+  `rightsConfirmed: true`; return source tempo for review but never apply it to
+  the project implicitly.
 - Do not log project lyrics or note data to stderr unless explicitly requested for debugging.
 - Keep file IPC protocol v2 as the sole request/response envelope. Reject
   protocol v1 with `PROTOCOL_MISMATCH`; add a new version for any future
@@ -22,14 +32,38 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
   - The Agent and user own intent, lyric/emotion/style interpretation, target
     choice, Vocal/Vocal Mode onboarding, and the requested musical values.
   - The TypeScript MCP layer owns schemas, action routing, compact projections,
-    `contextId`/Guard expansion, session invalidation, and minimal
-    acknowledgements. It must not invent musical values.
+    target-typed/scope-bound `contextId`/Guard expansion, session invalidation,
+    minimal acknowledgements, and bounded Node-local score inspection/
+    conversion. Incompatible Context kinds and conflicting explicit locators or
+    guards must fail closed; locator-only reads must not mint write-capable
+    Contexts. It must not invent musical values or decide score-import rights.
   - The Lua executor owns authoritative SynthV reads, host capability and
     dynamic-range checks, deterministic batch expansion, complete preflight,
     one undo boundary, and postcondition verification. It must not infer
     emotion, style, singer identity, or which notes deserve emphasis.
   - SynthV remains the project-state authority; the user remains the final
     listening and artistic authority.
+- Treat Note Group content as shared across every reference. Group-content
+  writes default to `sharedGroupPolicy=reject`; when the fresh reference count
+  is greater than one, require the caller to explicitly choose
+  `allowAllReferences` and supply the matching `expectedReferenceCount`.
+  Reference-local fields such as offset and mute remain reference-local.
+- `clone_track` must reject tracks containing non-main vocal Groups by default.
+  `nonMainGroupPolicy=detach` must produce independent Group content without
+  claiming that the official API preserved or verified those non-main Vocal
+  identities; require manual Vocal review. Prefer `clone_track_shell` when the
+  goal is one verified-empty track that inherits the host-cloned main Vocal
+  context. Never claim that the API can read or name that Vocal.
+- Forward transaction `$result` references may target earlier 1-based step
+  results only and must occupy the complete field value. Fully preflight
+  independent steps, preflight dependent steps just in time, and describe
+  `atomicity: "singleUndoRecord"` as a recovery boundary rather than automatic
+  rollback.
+  When execution reports `undoRequired`, require one SynthV Undo before reread
+  or retry.
+- UI control actions must return the actual state reported by the host after
+  the request: selection writes reread selection, viewport writes serialize the
+  resulting navigation state, and playback returns current status/playhead.
 - Do not probe tuning ranges at startup or at the start of each conversation.
   Treat Group Voice loudness as `-48..12`, Group Voice
   tension/breathiness/gender/tone shift as `-1..1`, Vocal Mode
