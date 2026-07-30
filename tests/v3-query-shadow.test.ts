@@ -131,6 +131,32 @@ function trackListResult(): Record<string, unknown> {
   };
 }
 
+function noteGroupListResult(): Record<string, unknown> {
+  return {
+    groupCount: 2,
+    groups: [
+      {
+        libraryIndex: 1,
+        groupUuid: "private-group-uuid-1",
+        fingerprint: "private-group-fingerprint-1",
+        name: "Shared Lead",
+        noteCount: 42,
+        pitchControlCount: 5,
+        referenceCount: 2,
+      },
+      {
+        libraryIndex: 2,
+        groupUuid: "private-group-uuid-2",
+        fingerprint: "private-group-fingerprint-2",
+        name: "Isolated Harmony",
+        noteCount: 21,
+        pitchControlCount: 0,
+        referenceCount: 1,
+      },
+    ],
+  };
+}
+
 function toolJson(result: unknown): Record<string, unknown> {
   const root = result as {
     readonly content?: readonly {
@@ -301,6 +327,81 @@ test("v3 Track collection mismatch reports counts without Track values", () => {
   assert.doesNotMatch(
     JSON.stringify(report),
     /Source secret name|Different public name/u,
+  );
+});
+
+test("v3 Note Group collection projector preserves ownership summaries and nested Contexts", () => {
+  const report = shadowQueryProjection(
+    "list_note_groups",
+    noteGroupListResult(),
+    {
+      groupCount: 2,
+      groups: [
+        {
+          libraryIndex: 1,
+          name: "Shared Lead",
+          noteCount: 42,
+          pitchControlCount: 5,
+          referenceCount: 2,
+          contextId: "ctx_group_1",
+        },
+        {
+          libraryIndex: 2,
+          name: "Isolated Harmony",
+          noteCount: 21,
+          pitchControlCount: 0,
+          referenceCount: 1,
+          contextId: "ctx_group_2",
+        },
+      ],
+    },
+  );
+  assert.deepEqual(report, {
+    state: "matched",
+    comparedFieldCount: 2,
+    comparedItemCount: 2,
+    differenceCount: 0,
+    privateFieldCount: 4,
+  });
+});
+
+test("v3 Note Group collection mismatch reports counts without Group values", () => {
+  const report = shadowQueryProjection(
+    "list_note_groups",
+    {
+      groupCount: 1,
+      groups: [
+        {
+          libraryIndex: 1,
+          groupUuid: "private-group-uuid",
+          fingerprint: "private-group-fingerprint",
+          name: "Source secret name",
+          referenceCount: 2,
+        },
+      ],
+    },
+    {
+      groupCount: 1,
+      groups: [
+        {
+          libraryIndex: 1,
+          name: "Different public name",
+          referenceCount: 1,
+          contextId: "ctx_group",
+        },
+      ],
+    },
+  );
+  assert.deepEqual(report, {
+    state: "mismatch",
+    comparedFieldCount: 2,
+    comparedItemCount: 1,
+    differenceCount: 1,
+    privateFieldCount: 2,
+  });
+  assert.doesNotMatch(
+    JSON.stringify(report),
+    /Source secret name|Different public name|private-group/u,
   );
 });
 
@@ -732,5 +833,153 @@ test("v3 Track collection shadow-compares nested Contexts with one host read", a
     comparedItemCount: 0,
     differenceCount: 0,
     privateFieldCount: 2,
+  });
+});
+
+test("v3 Note Group collection shadow-compares ownership Contexts with one host read", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "synthv-v3-note-group-list-shadow-"),
+  );
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const config = loadConfig(
+    {
+      SYNTHV_AGENT_BRIDGE_DIR: directory,
+      SYNTHV_AGENT_BRIDGE_TIMEOUT_MS: "2000",
+      SYNTHV_AGENT_BRIDGE_POLL_MS: "5",
+      SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS: "3000",
+    },
+    directory,
+  );
+  await writeStatus(config);
+
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const server = createServer(config);
+  const client = new Client({
+    name: "v3-note-group-list-shadow-test",
+    version: "1.0.0",
+  });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  context.after(async () => {
+    await client.close();
+    await server.close();
+  });
+
+  const bridge = serveRead(
+    config,
+    "list_note_groups",
+    noteGroupListResult(),
+  );
+  const queryResult = await client.callTool({
+    name: "sv_query",
+    arguments: {
+      action: "list_note_groups",
+      contextMode: "writeIntent",
+      args: {},
+    },
+  });
+  assert.equal(await bridge, 1);
+  const query = toolJson(queryResult);
+  assert.equal(query.groupCount, 2);
+  const groups = query.groups as Record<string, unknown>[];
+  assert.deepEqual(
+    groups.map((group) => group.name),
+    ["Shared Lead", "Isolated Harmony"],
+  );
+  assert.deepEqual(
+    groups.map((group) => group.referenceCount),
+    [2, 1],
+  );
+  assert.equal(typeof groups[0]?.contextId, "string");
+  assert.equal(typeof groups[1]?.contextId, "string");
+  assert.equal(groups[0]?.groupUuid, undefined);
+  assert.equal(groups[0]?.fingerprint, undefined);
+
+  const diagnostics = toolJson(
+    await client.callTool({
+      name: "sv_status",
+      arguments: {
+        operation: "diagnostics",
+        level: "debug",
+        traceId: query.traceId,
+        limit: 1,
+      },
+    }),
+  );
+  const observability = diagnostics.observability as {
+    readonly traces: readonly {
+      readonly stages: readonly {
+        readonly stage: string;
+        readonly metadata?: Readonly<Record<string, unknown>>;
+      }[];
+    }[];
+  };
+  const shadowStage = observability.traces[0]?.stages.find(
+    (stage) => stage.stage === "shadowProjected",
+  );
+  assert.deepEqual(shadowStage?.metadata, {
+    action: "list_note_groups",
+    projectionParity: "matched",
+    comparedFieldCount: 2,
+    comparedItemCount: 2,
+    differenceCount: 0,
+    privateFieldCount: 4,
+  });
+
+  const countBridge = serveRead(
+    config,
+    "list_note_groups",
+    noteGroupListResult(),
+  );
+  const countResult = await client.callTool({
+    name: "sv_query",
+    arguments: {
+      action: "list_note_groups",
+      contextMode: "readOnly",
+      args: {},
+      fields: ["groupCount"],
+    },
+  });
+  assert.equal(await countBridge, 1);
+  const countQuery = toolJson(countResult);
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(countQuery).filter(([key]) => key !== "traceId"),
+    ),
+    { groupCount: 2 },
+  );
+  const countDiagnostics = toolJson(
+    await client.callTool({
+      name: "sv_status",
+      arguments: {
+        operation: "diagnostics",
+        level: "debug",
+        traceId: countQuery.traceId,
+        limit: 1,
+      },
+    }),
+  );
+  const countObservability = countDiagnostics.observability as {
+    readonly traces: readonly {
+      readonly stages: readonly {
+        readonly stage: string;
+        readonly metadata?: Readonly<Record<string, unknown>>;
+      }[];
+    }[];
+  };
+  const countShadowStage =
+    countObservability.traces[0]?.stages.find(
+      (stage) => stage.stage === "shadowProjected",
+    );
+  assert.deepEqual(countShadowStage?.metadata, {
+    action: "list_note_groups",
+    projectionParity: "matched",
+    comparedFieldCount: 1,
+    comparedItemCount: 0,
+    differenceCount: 0,
+    privateFieldCount: 4,
   });
 });

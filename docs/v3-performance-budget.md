@@ -119,6 +119,20 @@ full collection, counted two private Track fingerprints without exposing them,
 and each used one IPC host request. Component Build Identity remained
 `matched`.
 
+The library-ownership collection acceptance used Node build fingerprint
+`e4bf1c1632120863c2fc68df67a2ac2b99517bc9c55bcc6637ec67f3d8f0b16a`
+at Git commit `0f748b6df0ebc608858717c58c165d0bda472874`. A two-item
+write-intent `list_note_groups` Query completed in 75 ms with a 7 ms shadow
+projection; the `groupCount`-only Query completed in 74 ms with a 3 ms shadow
+projection. They reported 0 differences, retained two nested library-Group
+Contexts in the full collection, counted four private UUID/fingerprint fields
+without exposing them, and each used one IPC host request. The model-facing
+JSON was 357 and 48 characters respectively. Both authoritative Lua responses
+were 30,429 bytes because the current private content fingerprints serialize
+the complete Group definition; this remains an internal transport/projection
+optimization opportunity rather than model-token exposure. Component Build
+Identity remained `matched`.
+
 ## Cache targets
 
 - Cache memory is bounded by both entry count and estimated weight.

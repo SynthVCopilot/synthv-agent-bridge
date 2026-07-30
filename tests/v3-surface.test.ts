@@ -324,6 +324,50 @@ test("get_track_notes nested Group contexts retain the parent track locator", ()
   assert.equal(context.noteFingerprints.get(7), "note-7");
 });
 
+test("list_note_groups writeIntent Context retains private library guards", () => {
+  const contexts = new V2ContextStore();
+  const result: {
+    groups: Record<string, unknown>[];
+  } = {
+    groups: [
+      {
+        libraryIndex: 3,
+        groupUuid: GROUP_UUID,
+        fingerprint: "library-group-fingerprint",
+        name: "Shared Group",
+        referenceCount: 2,
+      },
+    ],
+  };
+
+  v2Testing.addNestedContexts(
+    "list_note_groups",
+    result,
+    contexts,
+    new GuardTokenStore(),
+    "writeIntent",
+    "library-session",
+  );
+
+  const group = result.groups[0];
+  assert.equal(typeof group?.contextId, "string");
+  assert.equal(group?.groupUuid, undefined);
+  assert.equal(group?.fingerprint, undefined);
+  assert.deepEqual(
+    v2Testing.expandContext(
+      "delete_note_group",
+      {},
+      group?.contextId as string,
+      contexts,
+    ),
+    {
+      libraryIndex: 3,
+      groupUuid: GROUP_UUID,
+      expectedFingerprint: "library-group-fingerprint",
+    },
+  );
+});
+
 test("locator-only reads do not mint write-capable contexts", () => {
   const contexts = new V2ContextStore();
   const result: Record<string, unknown> = {

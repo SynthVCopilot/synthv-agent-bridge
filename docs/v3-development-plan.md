@@ -221,6 +221,42 @@ Following collection slice:
 - Rollback: remove `list_tracks` from the shadow registry; the established
   public projection remains unchanged.
 
+Ownership collection slice:
+
+- Goal: extend collection shadow validation to `list_note_groups`, retaining
+  the reference counts required for shared-Group write policy.
+- Non-goals: changing Group ownership, authorizing a write from a read-only
+  Context, exposing Group UUIDs/fingerprints, or enabling Snapshot cache reuse.
+- Existing action/path: `sv_query` -> private `sv_read` adapter ->
+  `list_note_groups`.
+- Target aggregate: ordered library `GroupContent` summaries.
+- Public compatibility: `groupCount`, library order, `libraryIndex`, `name`,
+  note/pitch-control/reference counts, and nested `contextId` values remain
+  unchanged.
+- Safety invariants: every Group UUID and content fingerprint remains private;
+  a `writeIntent` query retains both inside a typed Context; fresh
+  `referenceCount` remains public; Trace metadata contains counts only; and no
+  second host read occurs.
+- Regression fixture: one multiply referenced Group and one isolated Group,
+  each with private UUID/fingerprint values and distinct note/pitch-control
+  counts.
+- Automated acceptance: ordered collection parity, ownership-summary parity,
+  nested Context parity, private-field counting, mismatch counts without
+  values, count-only projection, and one IPC request per Query. Completed with
+  134 repository tests, including compatible-command expansion of the private
+  library Group guards.
+- Real SynthV acceptance: completed on two library Groups in SynthV Studio 2
+  Pro 2.2.1 standalone. The write-intent full collection completed in 75 ms
+  with a 7 ms shadow stage (`2` root fields, `2` items, `0` differences, `4`
+  private fields); the `groupCount`-only Query completed in 74 ms with a 3 ms
+  shadow stage (`1` root field, `0` projected items, `0` differences, `4`
+  private fields). Both used one IPC request and created no project mutation or
+  Undo.
+- Performance budget: no additional IPC and pure Node collection projection
+  within 10 ms for the current small project.
+- Rollback: remove `list_note_groups` from the shadow registry; the established
+  public projection remains unchanged.
+
 Exit criteria:
 
 - ordinary reads/writes meet size targets;

@@ -120,6 +120,20 @@ const QUERY_PROJECTION_DEFINITIONS: Readonly<
     ],
     ["fingerprint", "trackFingerprint", "referenceFingerprint"],
   ),
+  list_note_groups: collectionProjectionDefinition(
+    ["groupCount", "groups"],
+    ["groupCount", "groups"],
+    [],
+    "groups",
+    [
+      "libraryIndex",
+      "name",
+      "noteCount",
+      "pitchControlCount",
+      "referenceCount",
+    ],
+    ["groupUuid", "fingerprint"],
+  ),
 };
 
 const ENVELOPE_FIELDS = [

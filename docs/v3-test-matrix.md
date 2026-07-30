@@ -4,7 +4,7 @@ Status: baseline
 
 Date: 2026-07-30
 
-Current automated baseline: 130 passing tests. Recorded real-host acceptance
+Current automated baseline: 134 passing tests. Recorded real-host acceptance
 uses SynthV Studio 2 Pro 2.2.1 standalone and a saved disposable test project.
 It currently covers the Mixer command/no-op path, Session invalidation,
 Sidebar Apply/Undo, isolated clone/source preservation, and closed-range
@@ -12,7 +12,12 @@ Automation/Undo scenarios, plus the first Mixer Query Projector shadow-parity
 slice and the compact/explicit Group Voice Query Projector slice; it does not
 certify every Semantic action. Collection acceptance additionally covers
 `list_tracks` order, optional public fields, nested read-only Contexts, private
-fingerprint isolation, and count-only projection.
+fingerprint isolation, and count-only projection. Automated collection
+coverage also includes `list_note_groups` order, shared ownership summaries,
+nested write-intent Contexts, private Group UUID/fingerprint isolation, and
+count-only projection. Its real-host gate confirms the same projection and
+privacy behavior on two current library Groups; the multiply referenced case
+remains covered by the deterministic fixture.
 
 This matrix turns architecture and known production-session failures into
 release gates. It supplements the current tests; it does not replace the
