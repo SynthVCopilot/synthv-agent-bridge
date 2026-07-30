@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
   access,
+  cp,
   mkdir,
   mkdtemp,
   readFile,
@@ -18,6 +19,164 @@ import {
   EXECUTOR_BUILD_ID,
   SIDEBAR_BUILD_ID,
 } from "../src/build-info.js";
+
+const componentBuildIdentity = await import(
+  new URL("../../scripts/component-build-identity.mjs", import.meta.url).href,
+);
+
+async function writeIdentityFixture(
+  fixture: string,
+  sources: {
+    readonly executorSource: string;
+    readonly sidebarSource: string;
+  },
+) {
+  const repositoryRoot = path.join(fixture, "repository");
+  await mkdir(path.join(repositoryRoot, "synthv"), { recursive: true });
+  await writeFile(
+    path.join(repositoryRoot, "package.json"),
+    `${JSON.stringify({ version: "0.2.0-test" })}\n`,
+    "utf8",
+  );
+  await writeFile(
+    path.join(repositoryRoot, "synthv", "SynthVAgentBridge.lua"),
+    sources.executorSource,
+    "utf8",
+  );
+  await writeFile(
+    path.join(repositoryRoot, "synthv", "SynthVAgentSidebar.lua"),
+    sources.sidebarSource,
+    "utf8",
+  );
+  return repositoryRoot;
+}
+
+async function writeInstallerFixture(
+  fixture: string,
+  sidebarSource: string,
+) {
+  const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
+  const repositoryRoot = path.join(fixture, "repository");
+  await mkdir(path.join(repositoryRoot, "scripts"), { recursive: true });
+  await mkdir(path.join(repositoryRoot, "synthv"), { recursive: true });
+  await Promise.all([
+    cp(
+      path.join(sourceRoot, "package.json"),
+      path.join(repositoryRoot, "package.json"),
+    ),
+    cp(
+      path.join(sourceRoot, "scripts", "component-build-identity.mjs"),
+      path.join(repositoryRoot, "scripts", "component-build-identity.mjs"),
+    ),
+    cp(
+      path.join(sourceRoot, "scripts", "install-synthv-bridge.mjs"),
+      path.join(repositoryRoot, "scripts", "install-synthv-bridge.mjs"),
+    ),
+    cp(
+      path.join(sourceRoot, "synthv", "SynthVAgentBridge.lua"),
+      path.join(repositoryRoot, "synthv", "SynthVAgentBridge.lua"),
+    ),
+    cp(
+      path.join(sourceRoot, "synthv", "StopSynthVAgentBridge.lua"),
+      path.join(repositoryRoot, "synthv", "StopSynthVAgentBridge.lua"),
+    ),
+  ]);
+  await writeFile(
+    path.join(repositoryRoot, "synthv", "SynthVAgentSidebar.lua"),
+    sidebarSource,
+    "utf8",
+  );
+  return repositoryRoot;
+}
+
+test("component build identity rejects missing and duplicate executor and sidebar markers", async (context) => {
+  const fixture = await mkdtemp(path.join(os.tmpdir(), "synthv-identity-test-"));
+  context.after(async () => rm(fixture, { recursive: true, force: true }));
+  const executorMarker = "__SYNTHV_AGENT_EXECUTOR_BUILD_ID__";
+  const sidebarMarker = "__SYNTHV_AGENT_SIDEBAR_BUILD_ID__";
+  const cases = [
+    {
+      name: "missing executor marker",
+      executorSource: "EXECUTOR_BUILD_ID = \"missing\"\n",
+      sidebarSource: `SIDEBAR_BUILD_ID = \"${sidebarMarker}\"\n`,
+    },
+    {
+      name: "duplicate executor marker",
+      executorSource:
+        `EXECUTOR_BUILD_ID = \"${executorMarker}\"\n` +
+        `-- ${executorMarker}\n`,
+      sidebarSource: `SIDEBAR_BUILD_ID = \"${sidebarMarker}\"\n`,
+    },
+    {
+      name: "missing sidebar marker",
+      executorSource: `EXECUTOR_BUILD_ID = \"${executorMarker}\"\n`,
+      sidebarSource: "SIDEBAR_BUILD_ID = \"missing\"\n",
+    },
+    {
+      name: "duplicate sidebar marker",
+      executorSource: `EXECUTOR_BUILD_ID = \"${executorMarker}\"\n`,
+      sidebarSource:
+        `SIDEBAR_BUILD_ID = \"${sidebarMarker}\"\n` +
+        `-- ${sidebarMarker}\n`,
+    },
+  ];
+
+  for (const fixtureCase of cases) {
+    const repositoryRoot = await writeIdentityFixture(
+      path.join(fixture, fixtureCase.name.replaceAll(" ", "-")),
+      fixtureCase,
+    );
+    await assert.rejects(
+      componentBuildIdentity.readComponentBuildIdentity(repositoryRoot),
+      fixtureCase.name,
+    );
+  }
+});
+
+test("core-only installation ignores a sidebar source without a build-ID marker", async (context) => {
+  const fixture = await mkdtemp(path.join(os.tmpdir(), "synthv-install-test-"));
+  context.after(async () => rm(fixture, { recursive: true, force: true }));
+  const repositoryRoot = await writeInstallerFixture(
+    fixture,
+    "SIDEBAR_BUILD_ID = \"missing\"\n",
+  );
+  const target = path.join(fixture, "scripts");
+  const ipcDirectory = path.join(fixture, "ipc");
+  const result = spawnSync(
+    process.execPath,
+    [
+      path.join(repositoryRoot, "scripts", "install-synthv-bridge.mjs"),
+      "--target",
+      target,
+      "--no-reload",
+      "--without-sidebar",
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SYNTHV_AGENT_BRIDGE_DIR: ipcDirectory,
+      },
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const installedDirectory = path.join(target, "SynthV Agent Bridge");
+  await access(path.join(installedDirectory, "SynthVAgentBridge.lua"));
+  await assert.rejects(
+    access(path.join(installedDirectory, "SynthVAgentSidebar.lua")),
+    { code: "ENOENT" },
+  );
+  const installManifest = JSON.parse(
+    await readFile(
+      path.join(ipcDirectory, "synthv-agent-bridge.install.json"),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+  assert.equal(installManifest.sidebarBuildId, null);
+  assert.equal(installManifest.sidebarSourceFingerprint, null);
+  assert.match(result.stdout, /Skipped the optional side-panel script/u);
+});
 
 test("core-only installation omits the optional sidebar without deleting one", async (context) => {
   const fixture = await mkdtemp(path.join(os.tmpdir(), "synthv-install-test-"));

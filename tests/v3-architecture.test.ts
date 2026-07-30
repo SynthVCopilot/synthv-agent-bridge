@@ -48,11 +48,11 @@ test("local builds capture the current Git commit in Build Identity", () => {
 test("component Build IDs derive from the exact Lua source fingerprints", () => {
   assert.equal(
     EXECUTOR_BUILD_ID,
-    `sv3-lua-${BUILD_IDENTITY.version}-${BUILD_IDENTITY.executor.sourceFingerprint.slice(0, 12)}`,
+    `sv3-lua-${BUILD_IDENTITY.version}-${BUILD_IDENTITY.executor.sourceFingerprint}`,
   );
   assert.equal(
     SIDEBAR_BUILD_ID,
-    `sv3-sidebar-${BUILD_IDENTITY.version}-${BUILD_IDENTITY.sidebar.sourceFingerprint.slice(0, 12)}`,
+    `sv3-sidebar-${BUILD_IDENTITY.version}-${BUILD_IDENTITY.sidebar.sourceFingerprint}`,
   );
 });
 

@@ -246,25 +246,26 @@ if (!suppliedTarget) {
     await readFile(path.join(repositoryRoot, "package.json"), "utf8"),
   );
   const componentIdentity =
-    await readComponentBuildIdentity(repositoryRoot);
+    await readComponentBuildIdentity(repositoryRoot, { includeSidebar: installSidebar });
   const sourceDirectory = path.join(repositoryRoot, "synthv");
   const destinationDirectory = path.resolve(suppliedTarget, "SynthV Agent Bridge");
   const destinationBridgeFile = path.join(
     destinationDirectory,
     "SynthVAgentBridge.lua",
   );
-  const destinationSidebarFile = path.join(
-    destinationDirectory,
-    "SynthVAgentSidebar.lua",
-  );
   const sourceBridge = componentIdentity.prepareExecutorSource();
   const installedBridgeBefore =
     await readOptionalText(destinationBridgeFile);
   const bridgeChanged =
     installedBridgeBefore !== sourceBridge;
-  const sourceSidebar = componentIdentity.prepareSidebarSource();
   let sidebarChanged = false;
+  let sourceSidebar;
   if (installSidebar) {
+    const destinationSidebarFile = path.join(
+      destinationDirectory,
+      "SynthVAgentSidebar.lua",
+    );
+    sourceSidebar = componentIdentity.prepareSidebarSource();
     const installedSidebarBefore =
       await readOptionalText(destinationSidebarFile);
     sidebarChanged =

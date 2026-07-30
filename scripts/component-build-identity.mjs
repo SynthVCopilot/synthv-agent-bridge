@@ -11,17 +11,24 @@ function sha256(content) {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
 
-function injectMarker(source, marker, value, component) {
+function requireExactlyOneMarker(source, marker, component) {
   const first = source.indexOf(marker);
   if (first < 0 || source.indexOf(marker, first + marker.length) >= 0) {
     throw new Error(
       `${component} source must contain exactly one ${marker} marker`,
     );
   }
+}
+
+function injectMarker(source, marker, value, component) {
+  requireExactlyOneMarker(source, marker, component);
   return source.replace(marker, value);
 }
 
-export async function readComponentBuildIdentity(repositoryRoot) {
+export async function readComponentBuildIdentity(
+  repositoryRoot,
+  { includeSidebar = true } = {},
+) {
   const packageManifest = JSON.parse(
     await readFile(path.join(repositoryRoot, "package.json"), "utf8"),
   );
@@ -29,28 +36,18 @@ export async function readComponentBuildIdentity(repositoryRoot) {
     path.join(repositoryRoot, "synthv", "SynthVAgentBridge.lua"),
     "utf8",
   );
-  const sidebarSource = await readFile(
-    path.join(repositoryRoot, "synthv", "SynthVAgentSidebar.lua"),
-    "utf8",
+  requireExactlyOneMarker(
+    executorSource,
+    EXECUTOR_BUILD_ID_MARKER,
+    "Executor",
   );
-  if (!executorSource.includes(EXECUTOR_BUILD_ID_MARKER)) {
-    throw new Error("Executor source is missing its build-ID marker");
-  }
-  if (!sidebarSource.includes(SIDEBAR_BUILD_ID_MARKER)) {
-    throw new Error("Sidebar source is missing its build-ID marker");
-  }
   const executorSourceFingerprint = sha256(executorSource);
-  const sidebarSourceFingerprint = sha256(sidebarSource);
   const executorBuildId =
-    `sv3-lua-${packageManifest.version}-${executorSourceFingerprint.slice(0, 12)}`;
-  const sidebarBuildId =
-    `sv3-sidebar-${packageManifest.version}-${sidebarSourceFingerprint.slice(0, 12)}`;
+    `sv3-lua-${packageManifest.version}-${executorSourceFingerprint}`;
   return {
     version: packageManifest.version,
     executorBuildId,
     executorSourceFingerprint,
-    sidebarBuildId,
-    sidebarSourceFingerprint,
     prepareExecutorSource() {
       return injectMarker(
         executorSource,
@@ -59,6 +56,31 @@ export async function readComponentBuildIdentity(repositoryRoot) {
         "Executor",
       );
     },
+    ...(includeSidebar
+      ? await readSidebarBuildIdentity(
+          repositoryRoot,
+          packageManifest.version,
+        )
+      : {}),
+  };
+}
+
+async function readSidebarBuildIdentity(repositoryRoot, version) {
+  const sidebarSource = await readFile(
+    path.join(repositoryRoot, "synthv", "SynthVAgentSidebar.lua"),
+    "utf8",
+  );
+  requireExactlyOneMarker(
+    sidebarSource,
+    SIDEBAR_BUILD_ID_MARKER,
+    "Sidebar",
+  );
+  const sidebarSourceFingerprint = sha256(sidebarSource);
+  const sidebarBuildId =
+    `sv3-sidebar-${version}-${sidebarSourceFingerprint}`;
+  return {
+    sidebarBuildId,
+    sidebarSourceFingerprint,
     prepareSidebarSource() {
       return injectMarker(
         sidebarSource,
