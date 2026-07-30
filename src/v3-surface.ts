@@ -20,7 +20,7 @@ import {
 } from "./v3-command-kernel.js";
 import {
   shadowQueryProjection,
-  supportsShadowQueryProjection,
+  snapshotQueryProjectionSource,
 } from "./v3-query-projector.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -1818,9 +1818,10 @@ export function registerV3Surface(
           return result;
         }
         const root = asRecord(readJsonResult(result), "result");
-        const shadowSource = supportsShadowQueryProjection(input.action)
-          ? { ...root }
-          : undefined;
+        const shadowSource = snapshotQueryProjectionSource(
+          input.action,
+          root,
+        );
         if (sessionChange !== undefined) {
           root.sessionReset = sessionResetResult(sessionChange);
         }
@@ -1855,6 +1856,9 @@ export function registerV3Surface(
             action: input.action,
             projectionParity: shadow.state,
             comparedFieldCount: shadow.comparedFieldCount,
+            ...(shadow.comparedItemCount === undefined
+              ? {}
+              : { comparedItemCount: shadow.comparedItemCount }),
             differenceCount: shadow.differenceCount,
             privateFieldCount: shadow.privateFieldCount,
           });

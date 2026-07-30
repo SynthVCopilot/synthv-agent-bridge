@@ -189,6 +189,38 @@ Next slice record:
 - Rollback: remove `get_group_voice` from the shadow definition registry; the
   established public projection remains unchanged.
 
+Following collection slice:
+
+- Goal: extend shadow validation to `list_tracks`, including ordered collection
+  projection and one nested read-only Track `contextId` per item.
+- Non-goals: pagination, Snapshot cache activation, Track mutation, or changing
+  the existing Track summary fields.
+- Existing action/path: `sv_query` -> private `sv_read` adapter ->
+  `list_tracks`.
+- Target aggregate: ordered `TrackShell` summaries.
+- Public compatibility: `trackCount`, Track order, every established public
+  summary/mixer/color field, optional color variants, and nested `contextId`
+  values remain unchanged.
+- Safety invariants: every Track fingerprint remains private, the projector
+  snapshots nested source items before the legacy Context path mutates them,
+  Trace metadata contains counts only, and no second host read occurs.
+- Regression fixture: two Tracks with different optional fields, mixer state,
+  private fingerprint spellings, and nested Contexts.
+- Automated acceptance: ordered collection parity, nested Context parity,
+  private-field counting, mismatch counts without values, explicit top-level
+  field selection, and one IPC request per Query.
+- Real SynthV acceptance: completed on two current Tracks in SynthV Studio 2
+  Pro 2.2.1 standalone. The full collection completed in 42 ms with a 6 ms
+  shadow stage (`2` root fields, `2` items, `0` differences, `2` private);
+  the `trackCount`-only projection completed in 41 ms with a 4 ms shadow stage
+  (`1` root field, `0` projected items, `0` differences, `2` private). Each
+  Trace contained one IPC request/response pair and no project mutation or
+  Undo.
+- Performance budget: no additional IPC and pure Node collection projection
+  within 10 ms for the current small project.
+- Rollback: remove `list_tracks` from the shadow registry; the established
+  public projection remains unchanged.
+
 Exit criteria:
 
 - ordinary reads/writes meet size targets;

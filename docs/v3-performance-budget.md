@@ -109,6 +109,16 @@ They matched `5/5` and `7/7` public fields respectively, counted 2 private
 Group/Reference fields without exposing them, and each used one IPC host
 request. Component Build Identity remained `matched`.
 
+The first collection acceptance used Node build fingerprint
+`b65fd7a419ddaa084fbf48d88ccb525d16774bb14f009f724db2bbfd0299a333`
+at Git commit `7a588940b447087ed18517f1b9954c656757e4bb`. A two-item
+`list_tracks` Query completed in 42 ms with a 6 ms shadow projection; the
+`trackCount`-only projection completed in 41 ms with a 4 ms shadow projection.
+They reported 0 differences, retained two nested read-only Contexts in the
+full collection, counted two private Track fingerprints without exposing them,
+and each used one IPC host request. Component Build Identity remained
+`matched`.
+
 ## Cache targets
 
 - Cache memory is bounded by both entry count and estimated weight.

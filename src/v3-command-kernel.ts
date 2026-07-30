@@ -43,6 +43,7 @@ const TRACE_METADATA_KEYS = new Set([
   "outcome",
   "projectionParity",
   "comparedFieldCount",
+  "comparedItemCount",
   "differenceCount",
   "privateFieldCount",
 ]);

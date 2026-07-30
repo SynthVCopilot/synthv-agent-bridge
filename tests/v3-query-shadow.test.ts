@@ -85,6 +85,52 @@ async function serveMixerRead(config: BridgeConfig): Promise<number> {
   });
 }
 
+function trackListResult(): Record<string, unknown> {
+  return {
+    trackCount: 2,
+    tracks: [
+      {
+        trackIndex: 1,
+        fingerprint: "private-track-fingerprint-1",
+        mainGroupUuid: "main-group-1",
+        name: "Lead",
+        displayColor: "#D6BC43",
+        displayColorArgb: "#FFD6BC43",
+        displayColorRgb: "#D6BC43",
+        displayOrder: 2,
+        duration: 7_200,
+        groupCount: 2,
+        noteCount: 42,
+        bounced: false,
+        mixer: {
+          gainDecibel: 0,
+          pan: 0,
+          muted: false,
+          solo: false,
+        },
+      },
+      {
+        trackIndex: 2,
+        trackFingerprint: "private-track-fingerprint-2",
+        mainGroupUuid: "main-group-2",
+        name: "Harmony",
+        displayColor: "",
+        displayOrder: 1,
+        duration: 6_400,
+        groupCount: 1,
+        noteCount: 21,
+        bounced: true,
+        mixer: {
+          gainDecibel: -3,
+          pan: 0.25,
+          muted: true,
+          solo: false,
+        },
+      },
+    ],
+  };
+}
+
 function toolJson(result: unknown): Record<string, unknown> {
   const root = result as {
     readonly content?: readonly {
@@ -161,6 +207,100 @@ test("v3 Group Voice projector keeps explicit diagnostics but rejects private Gu
       differenceCount: 0,
       privateFieldCount: 2,
     },
+  );
+});
+
+test("v3 Track collection projector preserves order and nested Contexts", () => {
+  const report = shadowQueryProjection(
+    "list_tracks",
+    trackListResult(),
+    {
+      trackCount: 2,
+      tracks: [
+        {
+          trackIndex: 1,
+          mainGroupUuid: "main-group-1",
+          name: "Lead",
+          displayColor: "#D6BC43",
+          displayColorArgb: "#FFD6BC43",
+          displayColorRgb: "#D6BC43",
+          displayOrder: 2,
+          duration: 7_200,
+          groupCount: 2,
+          noteCount: 42,
+          bounced: false,
+          mixer: {
+            gainDecibel: 0,
+            pan: 0,
+            muted: false,
+            solo: false,
+          },
+          contextId: "ctx_track_1",
+        },
+        {
+          trackIndex: 2,
+          mainGroupUuid: "main-group-2",
+          name: "Harmony",
+          displayColor: "",
+          displayOrder: 1,
+          duration: 6_400,
+          groupCount: 1,
+          noteCount: 21,
+          bounced: true,
+          mixer: {
+            gainDecibel: -3,
+            pan: 0.25,
+            muted: true,
+            solo: false,
+          },
+          contextId: "ctx_track_2",
+        },
+      ],
+    },
+  );
+  assert.deepEqual(report, {
+    state: "matched",
+    comparedFieldCount: 2,
+    comparedItemCount: 2,
+    differenceCount: 0,
+    privateFieldCount: 2,
+  });
+});
+
+test("v3 Track collection mismatch reports counts without Track values", () => {
+  const report = shadowQueryProjection(
+    "list_tracks",
+    {
+      trackCount: 1,
+      tracks: [
+        {
+          trackIndex: 1,
+          fingerprint: "private-track-fingerprint",
+          name: "Source secret name",
+        },
+      ],
+    },
+    {
+      trackCount: 1,
+      tracks: [
+        {
+          trackIndex: 1,
+          name: "Different public name",
+          contextId: "ctx_track",
+        },
+      ],
+    },
+  );
+  assert.deepEqual(report, {
+    state: "mismatch",
+    comparedFieldCount: 2,
+    comparedItemCount: 1,
+    differenceCount: 1,
+    privateFieldCount: 1,
+  });
+  assert.doesNotMatch(
+    JSON.stringify(report),
+    /Source secret name|Different public name/u,
   );
 });
 
@@ -446,6 +586,150 @@ test("v3 Group Voice query shadow-compares its compact default with one host rea
     action: "get_group_voice",
     projectionParity: "matched",
     comparedFieldCount: 7,
+    differenceCount: 0,
+    privateFieldCount: 2,
+  });
+});
+
+test("v3 Track collection shadow-compares nested Contexts with one host read", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "synthv-v3-track-list-shadow-"),
+  );
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const config = loadConfig(
+    {
+      SYNTHV_AGENT_BRIDGE_DIR: directory,
+      SYNTHV_AGENT_BRIDGE_TIMEOUT_MS: "2000",
+      SYNTHV_AGENT_BRIDGE_POLL_MS: "5",
+      SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS: "3000",
+    },
+    directory,
+  );
+  await writeStatus(config);
+
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const server = createServer(config);
+  const client = new Client({
+    name: "v3-track-list-shadow-test",
+    version: "1.0.0",
+  });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  context.after(async () => {
+    await client.close();
+    await server.close();
+  });
+
+  const bridge = serveRead(config, "list_tracks", trackListResult());
+  const queryResult = await client.callTool({
+    name: "sv_query",
+    arguments: {
+      action: "list_tracks",
+      contextMode: "readOnly",
+      args: {},
+    },
+  });
+  assert.equal(await bridge, 1);
+  const query = toolJson(queryResult);
+  assert.equal(query.trackCount, 2);
+  const tracks = query.tracks as Record<string, unknown>[];
+  assert.deepEqual(
+    tracks.map((track) => track.name),
+    ["Lead", "Harmony"],
+  );
+  assert.equal(typeof tracks[0]?.contextId, "string");
+  assert.equal(typeof tracks[1]?.contextId, "string");
+  assert.equal(tracks[0]?.fingerprint, undefined);
+  assert.equal(tracks[1]?.trackFingerprint, undefined);
+  assert.deepEqual(tracks[0]?.mixer, {
+    gainDecibel: 0,
+    pan: 0,
+    muted: false,
+    solo: false,
+  });
+  assert.equal(tracks[0]?.displayColorArgb, "#FFD6BC43");
+  assert.equal(tracks[1]?.displayColorArgb, undefined);
+
+  const diagnostics = toolJson(
+    await client.callTool({
+      name: "sv_status",
+      arguments: {
+        operation: "diagnostics",
+        level: "debug",
+        traceId: query.traceId,
+        limit: 1,
+      },
+    }),
+  );
+  const observability = diagnostics.observability as {
+    readonly traces: readonly {
+      readonly stages: readonly {
+        readonly stage: string;
+        readonly metadata?: Readonly<Record<string, unknown>>;
+      }[];
+    }[];
+  };
+  const shadowStage = observability.traces[0]?.stages.find(
+    (stage) => stage.stage === "shadowProjected",
+  );
+  assert.deepEqual(shadowStage?.metadata, {
+    action: "list_tracks",
+    projectionParity: "matched",
+    comparedFieldCount: 2,
+    comparedItemCount: 2,
+    differenceCount: 0,
+    privateFieldCount: 2,
+  });
+
+  const countBridge = serveRead(config, "list_tracks", trackListResult());
+  const countResult = await client.callTool({
+    name: "sv_query",
+    arguments: {
+      action: "list_tracks",
+      contextMode: "readOnly",
+      args: {},
+      fields: ["trackCount"],
+    },
+  });
+  assert.equal(await countBridge, 1);
+  const countQuery = toolJson(countResult);
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(countQuery).filter(([key]) => key !== "traceId"),
+    ),
+    { trackCount: 2 },
+  );
+  const countDiagnostics = toolJson(
+    await client.callTool({
+      name: "sv_status",
+      arguments: {
+        operation: "diagnostics",
+        level: "debug",
+        traceId: countQuery.traceId,
+        limit: 1,
+      },
+    }),
+  );
+  const countObservability = countDiagnostics.observability as {
+    readonly traces: readonly {
+      readonly stages: readonly {
+        readonly stage: string;
+        readonly metadata?: Readonly<Record<string, unknown>>;
+      }[];
+    }[];
+  };
+  const countShadowStage =
+    countObservability.traces[0]?.stages.find(
+      (stage) => stage.stage === "shadowProjected",
+    );
+  assert.deepEqual(countShadowStage?.metadata, {
+    action: "list_tracks",
+    projectionParity: "matched",
+    comparedFieldCount: 1,
+    comparedItemCount: 0,
     differenceCount: 0,
     privateFieldCount: 2,
   });
