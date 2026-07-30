@@ -14,6 +14,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import {
+  EXECUTOR_BUILD_ID,
+  SIDEBAR_BUILD_ID,
+} from "../src/build-info.js";
+
 test("core-only installation omits the optional sidebar without deleting one", async (context) => {
   const fixture = await mkdtemp(path.join(os.tmpdir(), "synthv-install-test-"));
   context.after(async () => rm(fixture, { recursive: true, force: true }));
@@ -57,8 +62,9 @@ test("core-only installation omits the optional sidebar without deleting one", a
   assert.equal(installManifest.packageVersion, "0.2.0-alpha.1");
   assert.equal(
     installManifest.executorBuildId,
-    "sv3-lua-0.2.0-alpha.1-6",
+    EXECUTOR_BUILD_ID,
   );
+  assert.equal(installManifest.sidebarBuildId, null);
   assert.equal(typeof installManifest.installedFiles, "object");
   assert.deepEqual(
     (await readdir(installedDirectory)).filter((name) =>
@@ -110,6 +116,41 @@ test("offline installation never claims that hot reload succeeded", async (conte
   assert.match(result.stdout, /Bridge is not currently connected/u);
   assert.doesNotMatch(result.stdout, /Hot reload updated the current session/u);
   assert.match(result.stdout, /Choose Scripts → Rescan/u);
+  const installedDirectory = path.join(
+    fixture,
+    "scripts",
+    "SynthV Agent Bridge",
+  );
+  const installedBridge = await readFile(
+    path.join(installedDirectory, "SynthVAgentBridge.lua"),
+    "utf8",
+  );
+  const installedSidebar = await readFile(
+    path.join(installedDirectory, "SynthVAgentSidebar.lua"),
+    "utf8",
+  );
+  assert.match(
+    installedBridge,
+    new RegExp(
+      `EXECUTOR_BUILD_ID\\s*=\\s*"${EXECUTOR_BUILD_ID.replaceAll(".", "\\.")}"`,
+      "u",
+    ),
+  );
+  assert.match(
+    installedSidebar,
+    new RegExp(
+      `SIDEBAR_BUILD_ID\\s*=\\s*"${SIDEBAR_BUILD_ID.replaceAll(".", "\\.")}"`,
+      "u",
+    ),
+  );
+  assert.doesNotMatch(
+    installedBridge,
+    /__SYNTHV_AGENT_EXECUTOR_BUILD_ID__/u,
+  );
+  assert.doesNotMatch(
+    installedSidebar,
+    /__SYNTHV_AGENT_SIDEBAR_BUILD_ID__/u,
+  );
 });
 
 test("an interrupted component replacement restores the complete prior set", async (context) => {

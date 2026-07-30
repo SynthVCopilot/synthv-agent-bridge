@@ -799,7 +799,7 @@ do
     assert(status:find('"protocolVersion":3',1,true),"heartbeat did not advertise protocol v3")
     assert(status:find('"protocolVersions":[3]',1,true),"heartbeat advertised a non-v3 protocol")
     assert(status:find('"preferredProtocolVersion":3',1,true),"heartbeat did not prefer protocol v3")
-    assert(status:find('"executorBuildId":"sv3-lua-0.2.0-alpha.1-6"',1,true),"heartbeat did not identify the executor build")
+    assert(status:find('"executorBuildId":"__SYNTHV_AGENT_EXECUTOR_BUILD_ID__"',1,true),"heartbeat did not identify the executor build")
 end
 
 local seq=0
@@ -829,7 +829,7 @@ local function callRaw(action,payload)
     local id=string.format("00000000-0000-4000-8000-%012d",seq)
     local trace=string.format("trace-%012d",seq)
     local f=assert(io.open(requestFile,"wb"))
-    f:write('{"v":3,"id":"'..id..'","t":"'..trace..'","b":"sv3-lua-0.2.0-alpha.1-6","a":"'..action..'","p":'..payload..'}')
+    f:write('{"v":3,"id":"'..id..'","t":"'..trace..'","b":"__SYNTHV_AGENT_EXECUTOR_BUILD_ID__","a":"'..action..'","p":'..payload..'}')
     f:close()
     assert(scheduled,"bridge stopped unexpectedly")
     local callback=scheduled; scheduled=nil; callback()

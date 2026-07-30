@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,8 +16,10 @@ export const PUBLIC_MCP_TOOL_NAMES = [
   "sv_review",
 ] as const;
 
-export const EXECUTOR_BUILD_ID = "sv3-lua-0.2.0-alpha.1-6";
-export const SIDEBAR_BUILD_ID = "sv3-sidebar-0.2.0-alpha.1-3";
+export const EXECUTOR_BUILD_ID =
+  GENERATED_BUILD_METADATA.executorBuildId;
+export const SIDEBAR_BUILD_ID =
+  GENERATED_BUILD_METADATA.sidebarBuildId;
 
 export const SERVER_CAPABILITY_FINGERPRINT = createHash("sha256")
   .update(
@@ -60,17 +62,6 @@ for (const filePath of runtimeFiles) {
 
 export const SERVER_BUILD_FINGERPRINT = buildHash.digest("hex");
 
-function hashFile(filePath: string): string | undefined {
-  return existsSync(filePath)
-    ? createHash("sha256").update(readFileSync(filePath)).digest("hex")
-    : undefined;
-}
-
-const sourceRootCandidate =
-  path.basename(path.dirname(runtimeDirectory)) === "dist"
-    ? path.dirname(path.dirname(runtimeDirectory))
-    : path.dirname(runtimeDirectory);
-
 export const BUILD_IDENTITY = {
   version: SERVER_VERSION,
   protocolVersion: PROTOCOL_VERSION,
@@ -89,14 +80,12 @@ export const BUILD_IDENTITY = {
   },
   executor: {
     buildId: EXECUTOR_BUILD_ID,
-    sourceFingerprint: hashFile(
-      path.join(sourceRootCandidate, "synthv", "SynthVAgentBridge.lua"),
-    ),
+    sourceFingerprint:
+      GENERATED_BUILD_METADATA.executorSourceFingerprint,
   },
   sidebar: {
     buildId: SIDEBAR_BUILD_ID,
-    sourceFingerprint: hashFile(
-      path.join(sourceRootCandidate, "synthv", "SynthVAgentSidebar.lua"),
-    ),
+    sourceFingerprint:
+      GENERATED_BUILD_METADATA.sidebarSourceFingerprint,
   },
 } as const;

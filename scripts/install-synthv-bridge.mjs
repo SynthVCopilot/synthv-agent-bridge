@@ -2,7 +2,6 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import {
-  cp,
   mkdir,
   readFile,
   rename,
@@ -14,6 +13,8 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+
+import { readComponentBuildIdentity } from "./component-build-identity.mjs";
 
 function usage() {
   console.error(
@@ -53,6 +54,7 @@ async function installScriptsAtomically(
   sourceDirectory,
   destinationDirectory,
   installedFiles,
+  preparedFiles = {},
 ) {
   const transactionId = randomUUID();
   const stagingDirectory = path.join(
@@ -74,9 +76,10 @@ async function installScriptsAtomically(
     for (const fileName of installedFiles) {
       const sourceFile = path.join(sourceDirectory, fileName);
       const stagedFile = path.join(stagingDirectory, fileName);
-      const sourceText = await readFile(sourceFile, "utf8");
+      const sourceText =
+        preparedFiles[fileName] ?? await readFile(sourceFile, "utf8");
       expectedHashes[fileName] = sha256(sourceText);
-      await cp(sourceFile, stagedFile);
+      await writeFile(stagedFile, sourceText, "utf8");
       const stagedText = await readFile(stagedFile, "utf8");
       if (sha256(stagedText) !== expectedHashes[fileName]) {
         throw new Error(`Staged install verification failed for ${fileName}`);
@@ -242,35 +245,30 @@ if (!suppliedTarget) {
   const packageManifest = JSON.parse(
     await readFile(path.join(repositoryRoot, "package.json"), "utf8"),
   );
+  const componentIdentity =
+    await readComponentBuildIdentity(repositoryRoot);
   const sourceDirectory = path.join(repositoryRoot, "synthv");
-  const sourceBridgeFile = path.join(sourceDirectory, "SynthVAgentBridge.lua");
   const destinationDirectory = path.resolve(suppliedTarget, "SynthV Agent Bridge");
   const destinationBridgeFile = path.join(
     destinationDirectory,
     "SynthVAgentBridge.lua",
   );
-  const sourceSidebarFile = path.join(
-    sourceDirectory,
-    "SynthVAgentSidebar.lua",
-  );
   const destinationSidebarFile = path.join(
     destinationDirectory,
     "SynthVAgentSidebar.lua",
   );
-  const [sourceBridge, installedBridgeBefore] = await Promise.all([
-    readOptionalText(sourceBridgeFile),
-    readOptionalText(destinationBridgeFile),
-  ]);
+  const sourceBridge = componentIdentity.prepareExecutorSource();
+  const installedBridgeBefore =
+    await readOptionalText(destinationBridgeFile);
   const bridgeChanged =
-    sourceBridge === null || installedBridgeBefore !== sourceBridge;
+    installedBridgeBefore !== sourceBridge;
+  const sourceSidebar = componentIdentity.prepareSidebarSource();
   let sidebarChanged = false;
   if (installSidebar) {
-    const [sourceSidebar, installedSidebarBefore] = await Promise.all([
-      readOptionalText(sourceSidebarFile),
-      readOptionalText(destinationSidebarFile),
-    ]);
+    const installedSidebarBefore =
+      await readOptionalText(destinationSidebarFile);
     sidebarChanged =
-      sourceSidebar === null || installedSidebarBefore !== sourceSidebar;
+      installedSidebarBefore !== sourceSidebar;
   }
 
   const installedFiles = [
@@ -283,23 +281,27 @@ if (!suppliedTarget) {
     sourceDirectory,
     destinationDirectory,
     installedFiles,
+    {
+      "SynthVAgentBridge.lua": sourceBridge,
+      ...(installSidebar
+        ? { "SynthVAgentSidebar.lua": sourceSidebar }
+        : {}),
+    },
   );
-  const executorBuildId = sourceBridge?.match(
-    /EXECUTOR_BUILD_ID\s*=\s*"([^"]+)"/u,
-  )?.[1];
-  const sidebarSource = installSidebar
-    ? await readOptionalText(sourceSidebarFile)
-    : null;
-  const sidebarBuildId = sidebarSource?.match(
-    /SIDEBAR_BUILD_ID\s*=\s*"([^"]+)"/u,
-  )?.[1];
   await writeInstallManifest(
     path.join(destinationDirectory, "SynthVAgentBridge.lua"),
     {
       packageVersion: packageManifest.version,
       protocolVersion: 3,
-      executorBuildId: executorBuildId ?? null,
-      sidebarBuildId: sidebarBuildId ?? null,
+      executorBuildId: componentIdentity.executorBuildId,
+      sidebarBuildId: installSidebar
+        ? componentIdentity.sidebarBuildId
+        : null,
+      executorSourceFingerprint:
+        componentIdentity.executorSourceFingerprint,
+      sidebarSourceFingerprint: installSidebar
+        ? componentIdentity.sidebarSourceFingerprint
+        : null,
       installedFiles: installedHashes,
     },
   );

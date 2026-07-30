@@ -6,6 +6,8 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { readComponentBuildIdentity } from "./component-build-identity.mjs";
+
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -29,6 +31,7 @@ const localGitCommit = () => {
   return result.status === 0 ? bounded(result.stdout) : null;
 };
 
+const componentIdentity = await readComponentBuildIdentity(repositoryRoot);
 const metadata = {
   gitCommit:
     bounded(process.env.SYNTHV_AGENT_GIT_COMMIT) ||
@@ -38,6 +41,12 @@ const metadata = {
   githubRunId: bounded(process.env.GITHUB_RUN_ID),
   githubRunNumber: bounded(process.env.GITHUB_RUN_NUMBER),
   githubRunAttempt: bounded(process.env.GITHUB_RUN_ATTEMPT),
+  executorBuildId: componentIdentity.executorBuildId,
+  executorSourceFingerprint:
+    componentIdentity.executorSourceFingerprint,
+  sidebarBuildId: componentIdentity.sidebarBuildId,
+  sidebarSourceFingerprint:
+    componentIdentity.sidebarSourceFingerprint,
 };
 
 const literal = JSON.stringify(metadata, null, 2)

@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import test from "node:test";
 
-import { BUILD_IDENTITY } from "../src/build-info.js";
+import {
+  BUILD_IDENTITY,
+  EXECUTOR_BUILD_ID,
+  SIDEBAR_BUILD_ID,
+} from "../src/build-info.js";
 import { BridgeError } from "../src/errors.js";
 import {
   commandOutcome,
@@ -39,6 +43,17 @@ test("local builds capture the current Git commit in Build Identity", () => {
   ).trim();
 
   assert.equal(BUILD_IDENTITY.gitCommit, expectedCommit);
+});
+
+test("component Build IDs derive from the exact Lua source fingerprints", () => {
+  assert.equal(
+    EXECUTOR_BUILD_ID,
+    `sv3-lua-${BUILD_IDENTITY.version}-${BUILD_IDENTITY.executor.sourceFingerprint.slice(0, 12)}`,
+  );
+  assert.equal(
+    SIDEBAR_BUILD_ID,
+    `sv3-sidebar-${BUILD_IDENTITY.version}-${BUILD_IDENTITY.sidebar.sourceFingerprint.slice(0, 12)}`,
+  );
 });
 
 test("v3 read-only contexts cannot authorize a command", () => {

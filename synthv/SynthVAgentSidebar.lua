@@ -4,7 +4,7 @@
 
 local SCRIPT_NAME = "SynthV Agent"
 local SIDEBAR_VERSION = "0.2.0-alpha.1"
-local SIDEBAR_BUILD_ID = "sv3-sidebar-0.2.0-alpha.1-3"
+local SIDEBAR_BUILD_ID = "__SYNTHV_AGENT_SIDEBAR_BUILD_ID__"
 local MIN_EDITOR_VERSION = 131330 -- Synthesizer V Studio 2.1.2
 local POLL_INTERVAL_MS = 500
 local MAX_TEXT_BYTES = 64 * 1024
