@@ -26,6 +26,7 @@ import {
   registerV3Surface,
   type ActionToolDefinitions,
 } from "./v3-surface.js";
+import { commandPolicyFor } from "./v3-command-policy.js";
 
 type JsonRecord = Record<string, unknown>;
 type RegisterTool = McpServer["registerTool"];
@@ -50,21 +51,6 @@ interface SidebarBuildIdentity {
   readonly buildId?: string;
   readonly ageMs?: number;
 }
-
-const DELETE_ACTIONS = new Set([
-  "clear_automation",
-  "delete_group_reference",
-  "delete_note_group",
-  "delete_note_retake",
-  "delete_notes",
-  "delete_pitch_controls",
-  "delete_track",
-]);
-
-const TRANSACTION_ACTIONS = new Set([
-  "apply_transaction",
-  "rollback_transaction",
-]);
 
 function asRecord(value: unknown, path: string): JsonRecord {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -492,11 +478,13 @@ export function registerV3Facade(
         } catch (error) {
           return jsonResult(failedOutcome(error, "freshRead"), true);
         }
-        const internalName = TRANSACTION_ACTIONS.has(input.action)
-          ? "sv_transaction"
-          : DELETE_ACTIONS.has(input.action)
-            ? "sv_delete"
-            : "sv_edit";
+        const category = commandPolicyFor(input.action).category;
+        const internalName =
+          category === "transaction"
+            ? "sv_transaction"
+            : category === "delete"
+              ? "sv_delete"
+              : "sv_edit";
         try {
           const outcome = await dispatchV3Command({
             action: input.action,

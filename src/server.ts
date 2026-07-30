@@ -41,6 +41,7 @@ import {
   TRANSACTION_STEP_ACTIONS,
 } from "./sidebar-coordinator.js";
 import { registerV3Facade } from "./v3-facade.js";
+import { assertV3CommandPolicyCatalog } from "./v3-command-policy.js";
 
 const indexSchema = z.number().int().min(1);
 const blickSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
@@ -2815,6 +2816,8 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     async (input) => runTool(async () => client.send("playback", input)),
   );
+
+  assertV3CommandPolicyCatalog(actionTools);
 
   registerV3Facade(
     registerPublicTool,

@@ -15,6 +15,12 @@ import {
 } from "./v3-context-store.js";
 import { V3SnapshotCache } from "./v3-snapshot-cache.js";
 import {
+  contextExpansionForAction,
+  contextKindsForAction,
+  isV3InfrastructureAction,
+  optionalCommandPolicy,
+} from "./v3-command-policy.js";
+import {
   commandOutcome,
   traceStage,
 } from "./v3-command-kernel.js";
@@ -52,33 +58,6 @@ const DEFAULT_PHRASE_INCLUDE: readonly V3IncludeValue[] = [
 
 const V3_INCLUDE_VALUE_SET = new Set<string>(V3_INCLUDE_VALUES);
 
-const EXPLICIT_DELETE_ACTIONS = new Set([
-  "clear_automation",
-  "delete_group_reference",
-  "delete_note_group",
-  "delete_note_retake",
-  "delete_notes",
-  "delete_pitch_controls",
-  "delete_track",
-]);
-
-const TRANSACTION_ACTIONS = new Set([
-  "apply_transaction",
-  "rollback_transaction",
-]);
-
-const UI_ACTIONS = new Set([
-  "convert_editor_coordinates",
-  "get_editor_view",
-  "get_selection",
-  "host_clipboard",
-  "playback",
-  "set_editor_view",
-  "set_selection",
-  "show_dialog",
-  "snap_position",
-]);
-
 const STATUS_OPERATIONS = {
   bridge: "bridge_status",
   host: "get_host_info",
@@ -91,111 +70,6 @@ const SIDEBAR_OPERATIONS = {
   publish: "sidebar_publish_preview",
   status: "sidebar_status",
 } as const;
-
-const NOTE_ARRAY_FIELDS: Readonly<Record<string, string>> = {
-  apply_group_tuning: "noteEdits",
-  apply_expression_preset: "notes",
-  delete_notes: "notes",
-  edit_notes: "edits",
-  fit_lyrics: "notes",
-  humanize_notes: "notes",
-  set_note_phoneme_properties: "edits",
-  transform_notes: "notes",
-};
-
-const PITCH_ARRAY_FIELDS: Readonly<Record<string, string>> = {
-  delete_pitch_controls: "pitchControls",
-  edit_pitch_controls: "edits",
-};
-
-const TRACK_GUARD_ACTIONS = new Set([
-  "clone_track",
-  "clone_track_shell",
-  "delete_track",
-  "set_track_mixer",
-  "update_track",
-]);
-
-const TRACK_LOCATOR_ACTIONS = new Set([
-  "get_track_mixer",
-  "get_track_notes",
-]);
-
-const REFERENCE_GUARD_ACTIONS = new Set([
-  "apply_group_tuning",
-  "delete_group_reference",
-  "set_group_voice",
-  "update_group",
-]);
-
-const AUTOMATION_GUARD_ACTIONS = new Set([
-  "clear_automation",
-  "set_automation_points",
-  "simplify_automation",
-]);
-
-const RETAKE_GUARD_ACTIONS = new Set([
-  "activate_note_retake",
-  "delete_note_retake",
-  "generate_note_retake",
-]);
-
-const SHARED_GROUP_CONTENT_WRITE_ACTIONS = new Set([
-  "activate_note_retake",
-  "add_notes",
-  "add_pitch_controls",
-  "apply_expression_preset",
-  "apply_group_tuning",
-  "clear_automation",
-  "delete_note_retake",
-  "delete_notes",
-  "delete_pitch_controls",
-  "edit_notes",
-  "edit_pitch_controls",
-  "fit_lyrics",
-  "generate_note_retake",
-  "humanize_notes",
-  "import_monophonic_score",
-  "script_data",
-  "set_automation_points",
-  "set_note_phoneme_properties",
-  "simplify_automation",
-  "transform_notes",
-  "update_group",
-]);
-
-const GROUP_LOCATOR_ACTIONS = new Set([
-  "activate_note_retake",
-  "add_notes",
-  "add_pitch_controls",
-  "apply_group_tuning",
-  "apply_expression_preset",
-  "clear_automation",
-  "delete_group_reference",
-  "delete_note_retake",
-  "delete_notes",
-  "delete_pitch_controls",
-  "edit_notes",
-  "edit_pitch_controls",
-  "fit_lyrics",
-  "generate_note_retake",
-  "get_automation",
-  "get_computed_group_data",
-  "get_group_voice",
-  "get_note_phoneme_data",
-  "get_note_retakes",
-  "get_phrase_context",
-  "get_pitch_controls",
-  "humanize_notes",
-  "import_monophonic_score",
-  "sample_automation",
-  "set_automation_points",
-  "set_group_voice",
-  "set_note_phoneme_properties",
-  "simplify_automation",
-  "transform_notes",
-  "update_group",
-]);
 
 function asRecord(value: unknown, path: string): JsonRecord {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -293,7 +167,7 @@ function parseActionInput(
   } else if (typeof schema?.parse === "function") {
     parsed = schema.parse(args);
   }
-  if (!SHARED_GROUP_CONTENT_WRITE_ACTIONS.has(action)) {
+  if (contextExpansionForAction(action)?.sharedGroupContent !== true) {
     return parsed;
   }
   const result = asRecord(parsed, `${action} args`);
@@ -359,27 +233,11 @@ function assertActionCategory(
   if (tool === undefined) {
     throw new BridgeProtocolError(`Unknown SynthV action: ${action}`);
   }
+  const policy = optionalCommandPolicy(action);
   const accepted =
     category === "read"
-      ? isReadAction(tool) &&
-        !UI_ACTIONS.has(action) &&
-        !Object.values(STATUS_OPERATIONS).includes(
-          action as (typeof STATUS_OPERATIONS)[keyof typeof STATUS_OPERATIONS],
-        )
-      : category === "delete"
-        ? EXPLICIT_DELETE_ACTIONS.has(action)
-        : category === "ui"
-          ? UI_ACTIONS.has(action)
-          : category === "transaction"
-            ? TRANSACTION_ACTIONS.has(action)
-            : !isReadAction(tool) &&
-              !EXPLICIT_DELETE_ACTIONS.has(action) &&
-              !UI_ACTIONS.has(action) &&
-              !TRANSACTION_ACTIONS.has(action) &&
-              !Object.values(SIDEBAR_OPERATIONS).includes(
-                action as (typeof SIDEBAR_OPERATIONS)[keyof typeof SIDEBAR_OPERATIONS],
-              ) &&
-              action !== "reload_bridge";
+      ? policy === undefined && isReadAction(tool) && !isV3InfrastructureAction(action)
+      : policy?.category === category;
   if (!accepted) {
     throw new BridgeProtocolError(
       `${action} is not available through sv_${category}`,
@@ -821,24 +679,6 @@ function compatibleContextKinds(
   action: string,
   args: JsonRecord,
 ): readonly V3ContextTargetKind[] {
-  if (action === "set_time_axis") {
-    return ["timeAxis"];
-  }
-  if (action === "delete_note_group") {
-    return ["libraryGroup"];
-  }
-  if (action === "clone_note_group") {
-    return ["group", "automation", "libraryGroup"];
-  }
-  if (action === "add_group_reference") {
-    return ["track", "libraryGroup"];
-  }
-  if (action === "clone_group_reference") {
-    return ["track", "group", "automation"];
-  }
-  if (action === "create_harmony_track") {
-    return ["track"];
-  }
   if (action === "script_data") {
     const objectType = optionalString(args.objectType);
     if (objectType === "track" || objectType === "mixer") {
@@ -876,13 +716,7 @@ function compatibleContextKinds(
     }
     return [];
   }
-  if (GROUP_LOCATOR_ACTIONS.has(action)) {
-    return ["group", "automation"];
-  }
-  if (TRACK_GUARD_ACTIONS.has(action) || TRACK_LOCATOR_ACTIONS.has(action)) {
-    return ["track"];
-  }
-  return [];
+  return contextKindsForAction(action);
 }
 
 function assertContextCompatible(
@@ -946,6 +780,7 @@ function expandContext(
   }
   const context = contexts.resolve(contextId, requiredMode);
   assertContextCompatible(action, result, contextId, context);
+  const contextExpansion = contextExpansionForAction(action);
 
   if (action === "transform_notes" && result.target === "contextNotes") {
     if (result.notes !== undefined) {
@@ -971,7 +806,7 @@ function expandContext(
   }
 
   if (
-    GROUP_LOCATOR_ACTIONS.has(action) ||
+    contextExpansion?.groupLocator === true ||
     (action === "set_selection" &&
       compatibleContextKinds(action, result).length > 0)
   ) {
@@ -979,7 +814,7 @@ function expandContext(
     mergeContextField(result, "groupIndex", context.groupIndex, contextId);
     mergeContextField(result, "groupUuid", context.groupUuid, contextId);
   }
-  if (TRACK_GUARD_ACTIONS.has(action)) {
+  if (contextExpansion?.trackGuard === true) {
     mergeContextField(result, "trackIndex", context.trackIndex, contextId);
     mergeContextField(
       result,
@@ -988,10 +823,10 @@ function expandContext(
       contextId,
     );
   }
-  if (TRACK_LOCATOR_ACTIONS.has(action)) {
+  if (contextExpansion?.trackLocator === true) {
     mergeContextField(result, "trackIndex", context.trackIndex, contextId);
   }
-  if (REFERENCE_GUARD_ACTIONS.has(action)) {
+  if (contextExpansion?.referenceGuard === true) {
     mergeContextField(
       result,
       "referenceFingerprint",
@@ -1142,7 +977,7 @@ function expandContext(
     }
   }
 
-  const noteField = NOTE_ARRAY_FIELDS[action];
+  const noteField = contextExpansion?.noteArrayField;
   if (noteField !== undefined) {
     expandGuardedArray(
       result,
@@ -1151,7 +986,7 @@ function expandContext(
       context.noteFingerprints,
     );
   }
-  if (RETAKE_GUARD_ACTIONS.has(action)) {
+  if (contextExpansion?.retakeGuard === true) {
     const noteIndex = normalizeItemIndex(result, "noteIndex");
     mergeContextField(
       result,
@@ -1160,7 +995,7 @@ function expandContext(
       contextId,
     );
   }
-  const pitchField = PITCH_ARRAY_FIELDS[action];
+  const pitchField = contextExpansion?.pitchArrayField;
   if (pitchField !== undefined) {
     expandGuardedArray(
       result,
@@ -1169,7 +1004,7 @@ function expandContext(
       context.pitchControlFingerprints,
     );
   }
-  if (AUTOMATION_GUARD_ACTIONS.has(action)) {
+  if (contextExpansion?.automationGuard === true) {
     const parameter = optionalString(result.parameter);
     if (parameter !== undefined) {
       mergeContextField(
@@ -1301,7 +1136,7 @@ function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
     }
   }
   if (
-    SHARED_GROUP_CONTENT_WRITE_ACTIONS.has(name) &&
+    contextExpansionForAction(name)?.sharedGroupContent === true &&
     typeof inputSchema === "object" &&
     inputSchema !== null &&
     !Array.isArray(inputSchema)
@@ -1328,20 +1163,21 @@ function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
     };
     schemaRecord.properties = properties;
   }
+  const contextExpansion = contextExpansionForAction(name);
   const contextHint =
     name === "transform_notes"
       ? "With a fresh phrase/note contextId, set args.target to contextNotes and omit notes and the Group locator; every guarded note in that exact read scope becomes a target. Alternatively supply note indices and omit fingerprints."
-      : NOTE_ARRAY_FIELDS[name] !== undefined
+      : contextExpansion?.noteArrayField !== undefined
       ? "With sv_command contextId, use item index or noteIndex and omit item fingerprints and the Group locator."
-      : PITCH_ARRAY_FIELDS[name] !== undefined
+      : contextExpansion?.pitchArrayField !== undefined
         ? "With contextId from get_pitch_controls, use item index or pitchControlIndex and omit item fingerprints and the Group locator."
-        : AUTOMATION_GUARD_ACTIONS.has(name)
+        : contextExpansion?.automationGuard === true
           ? "With contextId from an automation read, omit expectedFingerprint and the Group locator."
-          : TRACK_GUARD_ACTIONS.has(name)
+          : contextExpansion?.trackGuard === true
             ? "With contextId from list_tracks, omit trackIndex and trackFingerprint."
-            : REFERENCE_GUARD_ACTIONS.has(name)
+            : contextExpansion?.referenceGuard === true
               ? "With contextId from a Group/voice read, omit the Group locator and referenceFingerprint."
-              : GROUP_LOCATOR_ACTIONS.has(name)
+              : contextExpansion?.groupLocator === true
                 ? "A compatible contextId may supply trackIndex, groupIndex, and groupUuid."
                 : undefined;
   return {
@@ -1350,15 +1186,9 @@ function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
     ...(tool.description === undefined ? {} : { description: tool.description }),
     inputSchema,
     ...(contextHint === undefined ? {} : { v3Context: contextHint }),
-    category: EXPLICIT_DELETE_ACTIONS.has(name)
-      ? "delete"
-      : TRANSACTION_ACTIONS.has(name)
-        ? "transaction"
-        : UI_ACTIONS.has(name)
-          ? "ui"
-          : isReadAction(tool)
-            ? "read"
-            : "edit",
+    category:
+      optionalCommandPolicy(name)?.category ??
+      (isReadAction(tool) ? "read" : "edit"),
   };
 }
 
@@ -1371,24 +1201,15 @@ function catalog(definitions: ActionToolDefinitions): JsonRecord {
     transaction: [],
   };
   for (const [name, tool] of definitions) {
-    if (
-      name.startsWith("sidebar_") ||
-      name === "bridge_status" ||
-      name === "reload_bridge" ||
-      name === "ping" ||
-      name === "get_host_info"
-    ) {
+    if (isV3InfrastructureAction(name)) {
       continue;
     }
-    const category = EXPLICIT_DELETE_ACTIONS.has(name)
-      ? "delete"
-      : TRANSACTION_ACTIONS.has(name)
-        ? "transaction"
-        : UI_ACTIONS.has(name)
-          ? "ui"
-          : isReadAction(tool)
-            ? "read"
-            : "edit";
+    const category =
+      optionalCommandPolicy(name)?.category ??
+      (isReadAction(tool) ? "read" : undefined);
+    if (category === undefined) {
+      throw new BridgeProtocolError(`No v3 command policy for ${name}`);
+    }
     categories[category]?.push(name);
   }
   return {
