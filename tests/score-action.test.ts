@@ -121,6 +121,33 @@ test("local score actions inspect in Node and import through one guarded add_not
   assert.equal(inspected.writesProject, false);
   assert.equal(inspected.sourceTempoAppliedToProject, false);
 
+  const rightsRejectedResult = await client.callTool({
+    name: "sv_edit",
+    arguments: {
+      action: "import_monophonic_score",
+      response: "full",
+      args: {
+        trackIndex: 2,
+        groupIndex: 1,
+        filePath: scorePath,
+        expectedFileFingerprint: inspected.fileFingerprint,
+        rightsConfirmed: false,
+      },
+    },
+  });
+  const rightsRejected = readToolJson(rightsRejectedResult);
+  const rightsError = rightsRejected.error as Record<string, unknown>;
+  const rightsDetails = rightsError.details as Record<string, unknown>;
+  const rightsIssues = rightsDetails.issues as Record<string, unknown>[];
+  assert.equal(rightsRejectedResult.isError, true);
+  assert.equal(rightsError.code, "INVALID_ARGUMENT");
+  assert.equal(rightsDetails.action, "import_monophonic_score");
+  assert.deepEqual(rightsIssues[0]?.path, ["rightsConfirmed"]);
+  await assert.rejects(fs.access(config.paths.requestFile), { code: "ENOENT" });
+  await assert.rejects(fs.access(config.paths.processingFile), {
+    code: "ENOENT",
+  });
+
   let observedAddNotes: ReturnType<typeof parseBridgeRequest> | undefined;
   const bridge = serveOneBridgeRequest(config, (request) => {
     observedAddNotes = request;

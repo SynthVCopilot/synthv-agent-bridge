@@ -271,9 +271,43 @@ function parseActionInput(
   args: JsonRecord,
 ): unknown {
   const schema = tool.inputSchema as
-    | { parse?: (value: unknown) => unknown }
+    | {
+        parse?: (value: unknown) => unknown;
+        safeParse?: (value: unknown) =>
+          | { readonly success: true; readonly data: unknown }
+          | {
+              readonly success: false;
+              readonly error: {
+                readonly issues: readonly {
+                  readonly code: string;
+                  readonly path: readonly PropertyKey[];
+                  readonly message: string;
+                }[];
+              };
+            };
+      }
     | undefined;
-  const parsed = typeof schema?.parse === "function" ? schema.parse(args) : args;
+  let parsed: unknown = args;
+  if (typeof schema?.safeParse === "function") {
+    const validation = schema.safeParse(args);
+    if (!validation.success) {
+      throw new BridgeError(
+        `Invalid arguments for ${action}`,
+        "INVALID_ARGUMENT",
+        {
+          action,
+          issues: validation.error.issues.map(({ code, path, message }) => ({
+            code,
+            path,
+            message,
+          })),
+        },
+      );
+    }
+    parsed = validation.data;
+  } else if (typeof schema?.parse === "function") {
+    parsed = schema.parse(args);
+  }
   if (!SHARED_GROUP_CONTENT_WRITE_ACTIONS.has(action)) {
     return parsed;
   }
