@@ -35,6 +35,7 @@ end
 
 local notePitchAutoWriteSupported = true
 local phonemeStrengthWriteSupported = true
+mixerThrowAfterGain = false
 
 -- SynthV may return distinct Lua proxy values for the same native object.
 -- Delegate every member while intentionally preserving distinct identity.
@@ -457,7 +458,10 @@ local function makeMixer()
         if not mixerIgnoreGain then self.gain=v end
     end
     function m:getPan() return self.pan end
-    function m:setPan(v) self.pan=v end
+    function m:setPan(v)
+        if mixerThrowAfterGain then error("injected mixer mutation failure") end
+        self.pan=v
+    end
     function m:isMuted() return self.muted end
     function m:setMuted(v) self.muted=v end
     function m:isSolo() return self.solo end
@@ -1372,10 +1376,17 @@ local mixerWrite=callWrite("set_track_mixer",'{"trackIndex":1,"trackFingerprint"
 assert(mixerWrite:find('"m":',1,true),"mixer response omitted Lua telemetry")
 assert(mixerWrite:find('"stage":"freshRead"',1,true),"mixer telemetry omitted freshRead")
 assert(mixerWrite:find('"stage":"preflighted"',1,true),"mixer telemetry omitted preflighted")
+assert(mixerWrite:find('"stage":"effectPlanned"',1,true),"mixer telemetry omitted effectPlanned")
 assert(mixerWrite:find('"stage":"undoOpened"',1,true),"mixer telemetry omitted undoOpened")
 assert(mixerWrite:find('"stage":"mutated"',1,true),"mixer telemetry omitted mutated")
 assert(mixerWrite:find('"stage":"verified"',1,true),"mixer telemetry omitted verified")
 assert(not mixerWrite:find('"lyrics":',1,true),"Lua telemetry leaked project content")
+assert(
+    assert(mixerWrite:find('"stage":"effectPlanned"',1,true)) <
+        assert(mixerWrite:find('"stage":"undoOpened"',1,true)),
+    "mixer effect plan was not complete before Undo"
+)
+print("CASE:mixer-effect-plan-before-undo")
 print("CASE:mixer-lua-stage-timings")
 local mixerNoopUndoBefore=project.undo
 local mixerNoop=call("set_track_mixer",'{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","gainDecibel":-3,"pan":0.25,"muted":false,"solo":true}')
@@ -1822,7 +1833,26 @@ assert(project.undo==mixerFailureUndoBefore+1,"mixer postcondition failure did n
 assert(project.tracks[1].mixer.gain==mixerBeforeFailure,"mixer fault injection unexpectedly changed gain")
 assert(mixerFailure:find('"undoRequired":true',1,true),"mixer postcondition failure did not require one Undo")
 print("CASE:write-postcondition-failure")
+
+do
+    local undoBefore=project.undo
+    local gainBefore=project.tracks[1].mixer.gain
+    local panBefore=project.tracks[1].mixer.pan
+    mixerThrowAfterGain=true
+    local failure=callExpectError(
+        "set_track_mixer",
+        '{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","gainDecibel":-1,"pan":-0.25}',
+        "INTERNAL_ERROR"
+    )
+    mixerThrowAfterGain=false
+    assert(project.undo==undoBefore+1,"mixer mutation failure did not retain one undo boundary")
+    assert(project.tracks[1].mixer.gain==-1,"mixer mutation failure did not expose the completed first mutation")
+    assert(project.tracks[1].mixer.pan==panBefore,"mixer mutation failure unexpectedly changed pan")
+    assert(failure:find('"undoRequired":true',1,true),"mixer mutation failure did not require one Undo")
+    project.tracks[1].mixer.gain=gainBefore
+    print("CASE:mixer-mutation-failure-undo")
+end
 end
 
-assert(project.undo==65,"expected 65 undo records, got "..project.undo)
+assert(project.undo==66,"expected 66 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

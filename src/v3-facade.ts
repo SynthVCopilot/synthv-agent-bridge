@@ -19,6 +19,10 @@ import {
   traceIdForCurrentOperation,
 } from "./v3-command-kernel.js";
 import {
+  dispatchV3Command,
+  type V3CommandDispatchResult,
+} from "./v3-command-dispatcher.js";
+import {
   registerV3Surface,
   type ActionToolDefinitions,
 } from "./v3-surface.js";
@@ -32,6 +36,13 @@ interface CollectedTool {
     input: unknown,
     extra?: unknown,
   ) => CallToolResult | Promise<CallToolResult>;
+}
+
+class CollectedCommandFailure extends Error {
+  public constructor(public readonly result: CallToolResult) {
+    super("The internal SynthV command failed");
+    this.name = "CollectedCommandFailure";
+  }
 }
 
 interface SidebarBuildIdentity {
@@ -486,48 +497,44 @@ export function registerV3Facade(
           : DELETE_ACTIONS.has(input.action)
             ? "sv_delete"
             : "sv_edit";
-        const result = await invokeCollected(
-          internals,
-          internalName,
-          internalName === "sv_transaction"
-            ? {
-                action: input.action,
-                args: input.args,
-                response: "minimal",
+        try {
+          const outcome = await dispatchV3Command({
+            action: input.action,
+            expectedEffect: input.expectedEffect,
+            invoke: async () => {
+              const result = await invokeCollected(
+                internals,
+                internalName,
+                internalName === "sv_transaction"
+                  ? {
+                      action: input.action,
+                      args: input.args,
+                      response: "minimal",
+                    }
+                  : {
+                      action: input.action,
+                      args: input.args,
+                      contextId: input.contextId,
+                      response: "minimal",
+                    },
+                "verified",
+              );
+              if (result.isError) {
+                throw new CollectedCommandFailure(result);
               }
-            : {
-                action: input.action,
-                args: input.args,
-                contextId: input.contextId,
-                response: "minimal",
-              },
-          "verified",
-        );
-        if (result.isError) {
-          return result;
+              return asRecord(
+                readJsonResult(result),
+                "result",
+              ) as V3CommandDispatchResult;
+            },
+          });
+          return jsonResult(outcome);
+        } catch (error) {
+          if (error instanceof CollectedCommandFailure) {
+            return error.result;
+          }
+          return jsonResult(failedOutcome(error, "verified"), true);
         }
-        const root = asRecord(readJsonResult(result), "result");
-        if (
-          input.expectedEffect === "mustChange" &&
-          root.outcome === "alreadySatisfied"
-        ) {
-          return jsonResult(
-            failedOutcome(
-              new BridgeError(
-                "The command was expected to change SynthV state but the target was already satisfied.",
-                "HOST_POSTCONDITION_FAILED",
-                {
-                  action: input.action,
-                  partialWritePossible: false,
-                  undoRequired: false,
-                },
-              ),
-              "verified",
-            ),
-            true,
-          );
-        }
-        return jsonResult(root);
       }),
   );
 

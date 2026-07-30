@@ -111,6 +111,10 @@ test("Fake Host: mixer emits bounded Lua command-stage timings", (context) => {
   assertMarker(context, "mixer-lua-stage-timings");
 });
 
+test("Fake Host: mixer completes its effect plan before Undo", (context) => {
+  assertMarker(context, "mixer-effect-plan-before-undo");
+});
+
 test("Fake Host: focused mixer reads carry the Track guard for writeIntent Contexts", (context) => {
   assertMarker(context, "focused-mixer-write-context");
 });
@@ -153,4 +157,8 @@ test("Fake Host: closed Automation range includes the host-exclusive end", (cont
 
 test("Fake Host: postcondition fault injection fails with Undo guidance", (context) => {
   assertMarker(context, "write-postcondition-failure");
+});
+
+test("Fake Host: mutation fault injection requires one Undo recovery", (context) => {
+  assertMarker(context, "mixer-mutation-failure-undo");
 });

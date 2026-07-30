@@ -950,6 +950,58 @@ local function createUndoRecord(project)
     recordLuaStage("undoOpened")
 end
 
+local function executeCommandPipeline(specification)
+    local state = specification.freshRead()
+    recordLuaStage("freshRead")
+
+    if specification.guard ~= nil then
+        specification.guard(state)
+    end
+    recordLuaStage("guarded")
+
+    local plan = specification.preflight(state)
+    if type(plan) ~= "table"
+        or type(plan.changedCount) ~= "number"
+        or plan.changedCount < 0
+        or plan.changedCount ~= math.floor(plan.changedCount) then
+        raiseBridgeError(
+            "INTERNAL_ERROR",
+            "The command adapter produced an invalid effect plan",
+            { action = specification.action }
+        )
+    end
+    recordLuaStage("preflighted")
+    recordLuaStage("effectPlanned")
+
+    if plan.changedCount == 0 then
+        local result = specification.alreadySatisfied(state, plan)
+        recordLuaStage("verified")
+        return result
+    end
+
+    createUndoRecord(state.project)
+    local mutationOk, mutationError = pcall(
+        specification.mutate,
+        state,
+        plan
+    )
+    if not mutationOk then
+        raiseUndoRequiredExecutionError(specification.action, mutationError)
+    end
+    recordLuaStage("mutated")
+
+    local verificationOk, resultOrError = pcall(
+        specification.verify,
+        state,
+        plan
+    )
+    if not verificationOk then
+        raiseUndoRequiredExecutionError(specification.action, resultOrError)
+    end
+    recordLuaStage("verified")
+    return resultOrError
+end
+
 local function resolveTrack(payload)
     local project = getProject()
     local trackIndex = requireInteger(payload.trackIndex, "trackIndex", 1, project:getNumTracks())
@@ -8356,96 +8408,121 @@ end
 
 function handlers.set_track_mixer(payload)
     payload = requireObject(payload, "payload")
-    local project, track, trackIndex = resolveTrack(payload)
-    recordLuaStage("freshRead")
-    validateTrackFingerprint(
-        track,
-        optionalString(payload.trackFingerprint, "trackFingerprint", false),
-        trackIndex
-    )
-    recordLuaStage("guarded")
-    local gain = optionalNumber(payload.gainDecibel, "gainDecibel", -24, 24)
-    local pan = optionalNumber(payload.pan, "pan", -1, 1)
-    local muted = optionalBoolean(payload.muted, "muted")
-    local solo = optionalBoolean(payload.solo, "solo")
-    if gain == nil and pan == nil and muted == nil and solo == nil then
-        raiseBridgeError("INVALID_ARGUMENT", "At least one mixer field must be supplied")
-    end
-
-    local before = serializeMixer(track)
-    local changedCount = 0
-    if gain ~= nil and not numbersMatch(before.gainDecibel, gain) then
-        changedCount = changedCount + 1
-    end
-    if pan ~= nil and not numbersMatch(before.pan, pan) then
-        changedCount = changedCount + 1
-    end
-    if muted ~= nil and before.muted ~= muted then
-        changedCount = changedCount + 1
-    end
-    if solo ~= nil and before.solo ~= solo then
-        changedCount = changedCount + 1
-    end
-    recordLuaStage("preflighted")
-    if changedCount == 0 then
-        before.trackIndex = trackIndex
-        before.trackName = track:getName()
-        before.changedCount = 0
-        before.alreadySatisfied = true
-        before.undoRecordCount = 0
-        before.verified = true
-        recordLuaStage("verified")
-        return before
-    end
-
-    createUndoRecord(project)
-    local mixer = track:getMixer()
-    if gain ~= nil then
-        mixer:setGainDecibel(gain)
-    end
-    if pan ~= nil then
-        mixer:setPan(pan)
-    end
-    if muted ~= nil then
-        mixer:setMuted(muted)
-    end
-    if solo ~= nil then
-        mixer:setSolo(solo)
-    end
-    recordLuaStage("mutated")
-
-    local result = serializeMixer(track)
-    local verificationError = nil
-    if gain ~= nil and not numbersMatch(result.gainDecibel, gain) then
-        verificationError = "gainDecibel"
-    elseif pan ~= nil and not numbersMatch(result.pan, pan) then
-        verificationError = "pan"
-    elseif muted ~= nil and result.muted ~= muted then
-        verificationError = "muted"
-    elseif solo ~= nil and result.solo ~= solo then
-        verificationError = "solo"
-    end
-    if verificationError ~= nil then
-        raiseBridgeError(
-            "HOST_POSTCONDITION_FAILED",
-            "SynthV did not retain the requested mixer state",
-            {
-                action = "set_track_mixer",
-                field = verificationError,
-                partialWritePossible = true,
-                undoRequired = true,
-                undoGuidance =
-                    "Use SynthV Edit > Undo once before any retry, then reread the target."
+    return executeCommandPipeline({
+        action = "set_track_mixer",
+        freshRead = function()
+            local project, track, trackIndex = resolveTrack(payload)
+            return {
+                project = project,
+                track = track,
+                trackIndex = trackIndex
             }
-        )
-    end
-    result.trackIndex = trackIndex
-    result.trackName = track:getName()
-    result.changedCount = changedCount
-    result.undoRecordCount = 1
-    result.verified = true
-    recordLuaStage("verified")
-    return result
+        end,
+        guard = function(state)
+            validateTrackFingerprint(
+                state.track,
+                optionalString(
+                    payload.trackFingerprint,
+                    "trackFingerprint",
+                    false
+                ),
+                state.trackIndex
+            )
+        end,
+        preflight = function(state)
+            local plan = {
+                gain = optionalNumber(
+                    payload.gainDecibel,
+                    "gainDecibel",
+                    -24,
+                    24
+                ),
+                pan = optionalNumber(payload.pan, "pan", -1, 1),
+                muted = optionalBoolean(payload.muted, "muted"),
+                solo = optionalBoolean(payload.solo, "solo"),
+                before = serializeMixer(state.track),
+                changedCount = 0
+            }
+            if plan.gain == nil and plan.pan == nil
+                and plan.muted == nil and plan.solo == nil then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "At least one mixer field must be supplied"
+                )
+            end
+            if plan.gain ~= nil
+                and not numbersMatch(
+                    plan.before.gainDecibel,
+                    plan.gain
+                ) then
+                plan.changedCount = plan.changedCount + 1
+            end
+            if plan.pan ~= nil
+                and not numbersMatch(plan.before.pan, plan.pan) then
+                plan.changedCount = plan.changedCount + 1
+            end
+            if plan.muted ~= nil and plan.before.muted ~= plan.muted then
+                plan.changedCount = plan.changedCount + 1
+            end
+            if plan.solo ~= nil and plan.before.solo ~= plan.solo then
+                plan.changedCount = plan.changedCount + 1
+            end
+            return plan
+        end,
+        alreadySatisfied = function(state, plan)
+            local result = plan.before
+            result.trackIndex = state.trackIndex
+            result.trackName = state.track:getName()
+            result.changedCount = 0
+            result.alreadySatisfied = true
+            result.undoRecordCount = 0
+            result.verified = true
+            return result
+        end,
+        mutate = function(state, plan)
+            local mixer = state.track:getMixer()
+            if plan.gain ~= nil then
+                mixer:setGainDecibel(plan.gain)
+            end
+            if plan.pan ~= nil then
+                mixer:setPan(plan.pan)
+            end
+            if plan.muted ~= nil then
+                mixer:setMuted(plan.muted)
+            end
+            if plan.solo ~= nil then
+                mixer:setSolo(plan.solo)
+            end
+        end,
+        verify = function(state, plan)
+            local result = serializeMixer(state.track)
+            local verificationError = nil
+            if plan.gain ~= nil
+                and not numbersMatch(result.gainDecibel, plan.gain) then
+                verificationError = "gainDecibel"
+            elseif plan.pan ~= nil
+                and not numbersMatch(result.pan, plan.pan) then
+                verificationError = "pan"
+            elseif plan.muted ~= nil and result.muted ~= plan.muted then
+                verificationError = "muted"
+            elseif plan.solo ~= nil and result.solo ~= plan.solo then
+                verificationError = "solo"
+            end
+            if verificationError ~= nil then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not retain the requested mixer state",
+                    { field = verificationError }
+                )
+            end
+            result.trackIndex = state.trackIndex
+            result.trackName = state.track:getName()
+            result.changedCount = plan.changedCount
+            result.undoRecordCount = 1
+            result.verified = true
+            return result
+        end
+    })
 end
 
 function handlers.playback(payload)
