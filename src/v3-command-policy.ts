@@ -1,6 +1,14 @@
 import type { V3ContextTargetKind } from "./v3-context-store.js";
+import { queryProjectionActionNames } from "./v3-query-projector.js";
+import type { BridgeAction } from "./protocol.js";
 
-export type V3CommandCategory = "edit" | "delete" | "transaction" | "ui";
+export type V3CommandCategory =
+  | "edit"
+  | "delete"
+  | "transaction"
+  | "ui"
+  | "runtime"
+  | "review";
 export type V3TargetAggregate =
   | "GroupContent"
   | "GroupReference"
@@ -8,7 +16,9 @@ export type V3TargetAggregate =
   | "ProjectTimeline"
   | "UIState"
   | "Metadata"
-  | "Transaction";
+  | "Transaction"
+  | "RuntimeState"
+  | "ReviewState";
 export type V3OwnershipPolicy =
   | "sharedGroupContent"
   | "referenceLocal"
@@ -16,14 +26,18 @@ export type V3OwnershipPolicy =
   | "projectTimeline"
   | "uiState"
   | "objectMetadata"
-  | "transactionBoundary";
+  | "transactionBoundary"
+  | "runtimeState"
+  | "reviewState";
 export type V3ExpectedEffectPolicy =
   | "allowAlreadySatisfied"
   | "notApplicable";
 export type V3PostconditionStrategy =
   | "hostReadback"
   | "observedUiState"
-  | "transactionSummary";
+  | "transactionSummary"
+  | "sessionTokenChange"
+  | "reviewStateSnapshot";
 export type V3TransactionEligibility =
   | "eligible"
   | "notEligible"
@@ -43,14 +57,16 @@ interface ContextExpansionPolicy {
 
 export interface V3CommandPolicy {
   readonly category: V3CommandCategory;
-  readonly targetAggregate: V3TargetAggregate;
+  readonly targetAggregates: readonly V3TargetAggregate[];
   readonly contextKinds: readonly V3ContextTargetKind[];
-  readonly ownershipPolicy: V3OwnershipPolicy;
+  readonly ownershipPolicies: readonly V3OwnershipPolicy[];
   readonly expectedEffectPolicy: V3ExpectedEffectPolicy;
   readonly postconditionStrategy: V3PostconditionStrategy;
   readonly transactionEligibility: V3TransactionEligibility;
   readonly contextExpansion?: ContextExpansionPolicy;
 }
+
+type OneOrMany<T> = T | readonly T[];
 
 type PolicyOverrides = Partial<
   Pick<
@@ -63,16 +79,18 @@ type PolicyOverrides = Partial<
 >;
 
 function projectCommand(
-  targetAggregate: V3TargetAggregate,
+  targetAggregate: OneOrMany<V3TargetAggregate>,
   contextKinds: readonly V3ContextTargetKind[],
-  ownershipPolicy: V3OwnershipPolicy,
+  ownershipPolicy: OneOrMany<V3OwnershipPolicy>,
   overrides: PolicyOverrides = {},
 ): V3CommandPolicy {
   return {
     category: "edit",
-    targetAggregate,
+    targetAggregates:
+      typeof targetAggregate === "string" ? [targetAggregate] : targetAggregate,
     contextKinds,
-    ownershipPolicy,
+    ownershipPolicies:
+      typeof ownershipPolicy === "string" ? [ownershipPolicy] : ownershipPolicy,
     expectedEffectPolicy: "allowAlreadySatisfied",
     postconditionStrategy: "hostReadback",
     transactionEligibility: "notEligible",
@@ -81,9 +99,9 @@ function projectCommand(
 }
 
 function deleteCommand(
-  targetAggregate: V3TargetAggregate,
+  targetAggregate: OneOrMany<V3TargetAggregate>,
   contextKinds: readonly V3ContextTargetKind[],
-  ownershipPolicy: V3OwnershipPolicy,
+  ownershipPolicy: OneOrMany<V3OwnershipPolicy>,
   overrides: PolicyOverrides = {},
 ): V3CommandPolicy {
   return { ...projectCommand(targetAggregate, contextKinds, ownershipPolicy, overrides), category: "delete" };
@@ -94,9 +112,9 @@ function uiCommand(
 ): V3CommandPolicy {
   return {
     category: "ui",
-    targetAggregate: "UIState",
+    targetAggregates: ["UIState"],
     contextKinds,
-    ownershipPolicy: "uiState",
+    ownershipPolicies: ["uiState"],
     expectedEffectPolicy: "notApplicable",
     postconditionStrategy: "observedUiState",
     transactionEligibility: "notEligible",
@@ -163,20 +181,34 @@ const COMMAND_POLICIES: Readonly<Record<string, V3CommandPolicy>> = {
   clone_track: projectCommand("TrackShell", TRACK_CONTEXT, "trackShell", TRACK_SHELL),
   clone_track_shell: projectCommand("TrackShell", TRACK_CONTEXT, "trackShell", TRACK_SHELL),
   delete_track: deleteCommand("TrackShell", TRACK_CONTEXT, "trackShell", TRACK_SHELL),
-  update_group: projectCommand("GroupReference", GROUP_CONTEXT, "referenceLocal", {
-    ...GROUP_REFERENCE,
-    contextExpansion: { groupLocator: true, referenceGuard: true, sharedGroupContent: true },
-  }),
-  set_group_voice: projectCommand("GroupReference", GROUP_CONTEXT, "referenceLocal", GROUP_REFERENCE),
-  apply_group_tuning: projectCommand("GroupContent", GROUP_CONTEXT, "sharedGroupContent", {
-    ...GROUP_CONTENT,
-    contextExpansion: {
-      groupLocator: true,
-      referenceGuard: true,
-      noteArrayField: "noteEdits",
-      sharedGroupContent: true,
+  update_group: projectCommand(
+    ["GroupContent", "GroupReference"],
+    GROUP_CONTEXT,
+    ["sharedGroupContent", "referenceLocal"],
+    {
+      ...GROUP_REFERENCE,
+      contextExpansion: {
+        groupLocator: true,
+        referenceGuard: true,
+        sharedGroupContent: true,
+      },
     },
-  }),
+  ),
+  set_group_voice: projectCommand("GroupReference", GROUP_CONTEXT, "referenceLocal", GROUP_REFERENCE),
+  apply_group_tuning: projectCommand(
+    ["GroupContent", "GroupReference"],
+    GROUP_CONTEXT,
+    ["sharedGroupContent", "referenceLocal"],
+    {
+      ...GROUP_CONTENT,
+      contextExpansion: {
+        groupLocator: true,
+        referenceGuard: true,
+        noteArrayField: "noteEdits",
+        sharedGroupContent: true,
+      },
+    },
+  ),
   delete_group_reference: deleteCommand("GroupReference", GROUP_CONTEXT, "referenceLocal", GROUP_REFERENCE),
   import_monophonic_score: projectCommand(
     "GroupContent",
@@ -258,21 +290,39 @@ const COMMAND_POLICIES: Readonly<Record<string, V3CommandPolicy>> = {
   }),
   apply_transaction: {
     category: "transaction",
-    targetAggregate: "Transaction",
+    targetAggregates: ["Transaction"],
     contextKinds: [],
-    ownershipPolicy: "transactionBoundary",
+    ownershipPolicies: ["transactionBoundary"],
     expectedEffectPolicy: "allowAlreadySatisfied",
     postconditionStrategy: "transactionSummary",
     transactionEligibility: "controller",
   },
   rollback_transaction: {
     category: "transaction",
-    targetAggregate: "Transaction",
+    targetAggregates: ["Transaction"],
     contextKinds: [],
-    ownershipPolicy: "transactionBoundary",
+    ownershipPolicies: ["transactionBoundary"],
     expectedEffectPolicy: "allowAlreadySatisfied",
     postconditionStrategy: "transactionSummary",
     transactionEligibility: "controller",
+  },
+  reload_bridge: {
+    category: "runtime",
+    targetAggregates: ["RuntimeState"],
+    contextKinds: [],
+    ownershipPolicies: ["runtimeState"],
+    expectedEffectPolicy: "notApplicable",
+    postconditionStrategy: "sessionTokenChange",
+    transactionEligibility: "notEligible",
+  },
+  sidebar_publish_preview: {
+    category: "review",
+    targetAggregates: ["ReviewState"],
+    contextKinds: [],
+    ownershipPolicies: ["reviewState"],
+    expectedEffectPolicy: "notApplicable",
+    postconditionStrategy: "reviewStateSnapshot",
+    transactionEligibility: "notEligible",
   },
   host_clipboard: uiCommand(),
   show_dialog: uiCommand(),
@@ -321,8 +371,23 @@ const INFRASTRUCTURE_ACTIONS = new Set([
   "sidebar_status",
 ]);
 
+const TRUSTED_READ_ACTIONS = new Set([
+  ...queryProjectionActionNames(),
+  "bridge_status",
+  "get_host_info",
+  "ping",
+  "sidebar_get_request",
+  "sidebar_status",
+]);
+
 export function commandPolicyActionNames(): readonly string[] {
   return Object.keys(COMMAND_POLICIES);
+}
+
+export function transactionEligibleActionNames(): readonly BridgeAction[] {
+  return Object.entries(COMMAND_POLICIES)
+    .filter(([, policy]) => policy.transactionEligibility === "eligible")
+    .map(([action]) => action as BridgeAction);
 }
 
 export function commandPolicyFor(action: string): V3CommandPolicy {
@@ -350,24 +415,14 @@ export function isV3InfrastructureAction(action: string): boolean {
 }
 
 export function assertV3CommandPolicyCatalog(
-  definitions: Iterable<
-    readonly [
-      string,
-      {
-        readonly annotations?: {
-          readonly readOnlyHint?: boolean | undefined;
-        } | undefined;
-      },
-    ]
-  >,
+  definitions: Iterable<readonly [string, unknown]>,
 ): void {
   const actionNames = new Set<string>();
-  for (const [action, tool] of definitions) {
+  for (const [action] of definitions) {
     actionNames.add(action);
     if (
-      !isV3InfrastructureAction(action) &&
       COMMAND_POLICIES[action] === undefined &&
-      tool.annotations?.readOnlyHint !== true
+      !TRUSTED_READ_ACTIONS.has(action)
     ) {
       throw new Error(`No v3 command policy for ${action}`);
     }
@@ -375,6 +430,11 @@ export function assertV3CommandPolicyCatalog(
   for (const action of commandPolicyActionNames()) {
     if (!actionNames.has(action)) {
       throw new Error(`V3 command policy has no live action: ${action}`);
+    }
+  }
+  for (const action of TRUSTED_READ_ACTIONS) {
+    if (!actionNames.has(action)) {
+      throw new Error(`Trusted v3 read classification has no live action: ${action}`);
     }
   }
 }

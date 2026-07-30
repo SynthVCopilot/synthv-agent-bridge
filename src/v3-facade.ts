@@ -478,14 +478,14 @@ export function registerV3Facade(
         } catch (error) {
           return jsonResult(failedOutcome(error, "freshRead"), true);
         }
-        const category = commandPolicyFor(input.action).category;
-        const internalName =
-          category === "transaction"
-            ? "sv_transaction"
-            : category === "delete"
-              ? "sv_delete"
-              : "sv_edit";
         try {
+          const category = commandPolicyFor(input.action).category;
+          const internalName =
+            category === "transaction"
+              ? "sv_transaction"
+              : category === "delete"
+                ? "sv_delete"
+                : "sv_edit";
           const outcome = await dispatchV3Command({
             action: input.action,
             expectedEffect: input.expectedEffect,

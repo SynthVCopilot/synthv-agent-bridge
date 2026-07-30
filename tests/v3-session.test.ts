@@ -90,6 +90,55 @@ function toolJson(result: unknown): Record<string, unknown> {
   return JSON.parse(text as string) as Record<string, unknown>;
 }
 
+test("v3 public command returns a bounded structured failure for an unknown action", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "synthv-v3-unknown-command-test-"),
+  );
+  const config = loadConfig(
+    {
+      SYNTHV_AGENT_BRIDGE_TIMEOUT_MS: "2000",
+      SYNTHV_AGENT_BRIDGE_POLL_MS: "5",
+      SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS: "3000",
+    },
+    directory,
+  );
+  await writeStatus(config, "session-unknown-command");
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const server = createServer(config);
+  const client = new Client({
+    name: "v3-unknown-command-test",
+    version: "1.0.0",
+  });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  context.after(async () => {
+    await client.close();
+    await server.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  const commandResult = await client.callTool({
+    name: "sv_command",
+    arguments: {
+      action: "unknown_write_action",
+      args: {},
+    },
+  });
+  assert.equal(commandResult.isError, true);
+  const failure = toolJson(commandResult);
+  assert.equal(failure.outcome, "failed");
+  assert.equal(failure.phase, "verified");
+  assert.equal(
+    (failure.error as Record<string, unknown>).code,
+    "INTERNAL_ERROR",
+  );
+  assert.ok(JSON.stringify(failure).length <= 4_096);
+  await assert.rejects(fs.access(config.paths.requestFile), { code: "ENOENT" });
+});
+
 test("v3 rejects an old write context through the public MCP path after session change", async (context) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "synthv-v3-session-test-"),

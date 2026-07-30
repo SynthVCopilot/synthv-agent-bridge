@@ -15,6 +15,7 @@ import {
 import { BridgeError, toPublicError } from "./errors.js";
 import type { FileIpcClient } from "./ipc/file-ipc-client.js";
 import type { BridgeAction } from "./protocol.js";
+import { transactionEligibleActionNames } from "./v3-command-policy.js";
 
 const SIDEBAR_REQUEST_MARKER = "synthv-agent-bridge-sidebar-request-v1";
 const SIDEBAR_PREVIEW_MARKER = "synthv-agent-bridge-sidebar-preview-v1";
@@ -26,42 +27,7 @@ const MAX_SIDEBAR_PLAN_BYTES = 1024 * 1024;
 const MAX_HISTORY_ENTRIES = 20;
 const STALE_INSTRUCTION_MS = 5 * 60 * 1000;
 
-export const TRANSACTION_STEP_ACTIONS = [
-  "set_time_axis",
-  "create_note_group",
-  "clone_note_group",
-  "delete_note_group",
-  "add_group_reference",
-  "clone_group_reference",
-  "add_track",
-  "update_track",
-  "clone_track",
-  "clone_track_shell",
-  "delete_track",
-  "update_group",
-  "set_group_voice",
-  "apply_group_tuning",
-  "delete_group_reference",
-  "add_notes",
-  "edit_notes",
-  "transform_notes",
-  "set_note_phoneme_properties",
-  "delete_notes",
-  "generate_note_retake",
-  "activate_note_retake",
-  "delete_note_retake",
-  "add_pitch_controls",
-  "edit_pitch_controls",
-  "delete_pitch_controls",
-  "simplify_automation",
-  "set_automation_points",
-  "clear_automation",
-  "set_track_mixer",
-  "create_harmony_track",
-  "humanize_notes",
-  "apply_expression_preset",
-  "fit_lyrics",
-] as const satisfies readonly BridgeAction[];
+export const TRANSACTION_STEP_ACTIONS = transactionEligibleActionNames();
 
 export const SIDEBAR_PREVIEW_ACTIONS = [
   ...TRANSACTION_STEP_ACTIONS,
