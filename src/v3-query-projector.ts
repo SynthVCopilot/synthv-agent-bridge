@@ -9,21 +9,61 @@ export interface QueryProjectionShadow {
   readonly privateFieldCount: number;
 }
 
-const TRACK_MIXER_FIELDS = [
-  "trackIndex",
-  "trackName",
-  "gainDecibel",
-  "pan",
-  "muted",
-  "solo",
-] as const;
+interface QueryProjectionDefinition {
+  readonly publicFields: ReadonlySet<string>;
+  readonly defaultFields: readonly string[];
+  readonly privateFields: ReadonlySet<string>;
+}
 
-const TRACK_MIXER_FIELD_SET = new Set<string>(TRACK_MIXER_FIELDS);
-const TRACK_MIXER_PRIVATE_FIELDS = new Set([
-  "trackFingerprint",
-  "fingerprint",
-  "referenceFingerprint",
-]);
+function projectionDefinition(
+  publicFields: readonly string[],
+  defaultFields: readonly string[],
+  privateFields: readonly string[],
+): QueryProjectionDefinition {
+  return {
+    publicFields: new Set(publicFields),
+    defaultFields,
+    privateFields: new Set(privateFields),
+  };
+}
+
+const QUERY_PROJECTION_DEFINITIONS: Readonly<
+  Record<string, QueryProjectionDefinition>
+> = {
+  get_track_mixer: projectionDefinition(
+    [
+      "trackIndex",
+      "trackName",
+      "gainDecibel",
+      "pan",
+      "muted",
+      "solo",
+    ],
+    [
+      "trackIndex",
+      "trackName",
+      "gainDecibel",
+      "pan",
+      "muted",
+      "solo",
+    ],
+    ["trackFingerprint", "fingerprint", "referenceFingerprint"],
+  ),
+  get_group_voice: projectionDefinition(
+    [
+      "trackIndex",
+      "groupIndex",
+      "parameters",
+      "vocalModes",
+      "rawVoice",
+      "experimentalUnison",
+      "phonemeCapabilities",
+      "selectionContext",
+    ],
+    ["trackIndex", "groupIndex", "parameters", "vocalModes"],
+    ["groupUuid", "referenceFingerprint", "fingerprint"],
+  ),
+};
 
 const ENVELOPE_FIELDS = [
   "contextId",
@@ -36,11 +76,12 @@ function copyPresentFields(
   source: JsonRecord,
   publicProjection: JsonRecord,
   fields: readonly string[],
+  definition: QueryProjectionDefinition,
 ): JsonRecord {
   const result: JsonRecord = {};
   for (const field of fields) {
     if (
-      TRACK_MIXER_FIELD_SET.has(field) &&
+      definition.publicFields.has(field) &&
       Object.prototype.hasOwnProperty.call(source, field)
     ) {
       result[field] = source[field];
@@ -65,22 +106,28 @@ function differenceCount(left: JsonRecord, right: JsonRecord): number {
   return count;
 }
 
+export function supportsShadowQueryProjection(action: string): boolean {
+  return QUERY_PROJECTION_DEFINITIONS[action] !== undefined;
+}
+
 export function shadowQueryProjection(
   action: string,
   source: JsonRecord,
   publicProjection: JsonRecord,
   requestedFields?: readonly string[],
 ): QueryProjectionShadow | undefined {
-  if (action !== "get_track_mixer") {
+  const definition = QUERY_PROJECTION_DEFINITIONS[action];
+  if (definition === undefined) {
     return undefined;
   }
   const candidate = copyPresentFields(
     source,
     publicProjection,
-    requestedFields ?? TRACK_MIXER_FIELDS,
+    requestedFields ?? definition.defaultFields,
+    definition,
   );
   const differences = differenceCount(publicProjection, candidate);
-  const privateFieldCount = [...TRACK_MIXER_PRIVATE_FIELDS].filter((field) =>
+  const privateFieldCount = [...definition.privateFields].filter((field) =>
     Object.prototype.hasOwnProperty.call(source, field),
   ).length;
   return {

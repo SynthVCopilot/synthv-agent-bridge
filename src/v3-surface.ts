@@ -18,7 +18,10 @@ import {
   commandOutcome,
   traceStage,
 } from "./v3-command-kernel.js";
-import { shadowQueryProjection } from "./v3-query-projector.js";
+import {
+  shadowQueryProjection,
+  supportsShadowQueryProjection,
+} from "./v3-query-projector.js";
 
 type JsonRecord = Record<string, unknown>;
 type RegisterTool = McpServer["registerTool"];
@@ -1815,8 +1818,9 @@ export function registerV3Surface(
           return result;
         }
         const root = asRecord(readJsonResult(result), "result");
-        const shadowSource =
-          input.action === "get_track_mixer" ? { ...root } : undefined;
+        const shadowSource = supportsShadowQueryProjection(input.action)
+          ? { ...root }
+          : undefined;
         if (sessionChange !== undefined) {
           root.sessionReset = sessionResetResult(sessionChange);
         }

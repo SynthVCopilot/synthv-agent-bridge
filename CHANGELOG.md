@@ -66,11 +66,12 @@ All notable changes will be documented in this file.
 
 ### Added
 
-- The first v3 Query Projector shadow slice for `get_track_mixer`. It compares
-  an independently built projection with the existing public projection from
-  the same host result, records only bounded parity counts, performs no second
-  SynthV read, and keeps returning the established projection during
-  validation.
+- The first v3 Query Projector shadow slices for `get_track_mixer` and
+  `get_group_voice`. They compare independently built projections with the
+  existing public projections from the same host result, record only bounded
+  parity counts, perform no second SynthV read, preserve explicitly requested
+  Group Voice diagnostics, and keep private Track/Group/Reference Guards
+  server-side.
 - Node-local `inspect_score_file` and `import_monophonic_score` actions for
   explicitly supplied local MusicXML (`.xml`, `.musicxml`, `.mxl`) and SMF MIDI
   (`.mid`, `.midi`) files. Inspection returns selectable lanes, overlap

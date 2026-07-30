@@ -100,6 +100,15 @@ reported 1 private source field without exposing its value. The Trace contained
 one `ipcPublished`/`ipcResponded` pair, so the shadow comparison introduced no
 second host read. Node, Lua, and Sidebar Build Identity were `matched`.
 
+The second Query Projector acceptance used Node build fingerprint
+`e342aa372d6e9eba31ecab9ab775934a75287b1c9e64a32c9a55db3bf31ee340`
+at Git commit `7fd21ab719525992653460993b2d8f152a6b98a1`. A compact
+`get_group_voice` Query completed in 52 ms with a 6 ms shadow projection; an
+explicit-diagnostics Query completed in 61 ms with a 4 ms shadow projection.
+They matched `5/5` and `7/7` public fields respectively, counted 2 private
+Group/Reference fields without exposing them, and each used one IPC host
+request. Component Build Identity remained `matched`.
+
 ## Cache targets
 
 - Cache memory is bounded by both entry count and estimated weight.

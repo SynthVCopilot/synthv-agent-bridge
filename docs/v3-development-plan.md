@@ -159,6 +159,36 @@ Current slice record:
 - Rollback: remove the shadow call and module; the established public
   projection is unchanged.
 
+Next slice record:
+
+- Goal: extend the same shadow seam to `get_group_voice` and prove both its
+  compact default and explicitly requested diagnostic fields.
+- Non-goals: changing the Group Voice DTO, enabling cache reuse, interpreting
+  singer identity, or exposing untouched default Vocal Mode names.
+- Existing action/path: `sv_query` -> private `sv_read` adapter ->
+  `get_group_voice`.
+- Target aggregate: `GroupReference` Voice state.
+- Public compatibility: default output remains Track/Group locators,
+  `parameters`, `vocalModes`, and `contextId`; explicitly requested documented
+  fields keep their established values.
+- Safety invariants: `groupUuid` and `referenceFingerprint` remain private even
+  if requested, raw Voice data appears only when explicitly requested,
+  telemetry contains counts only, and the candidate performs no host read.
+- Regression fixture: one file-IPC Group Voice result containing compact,
+  diagnostic, selection, and private Guard fields.
+- Automated acceptance: default and explicit-field parity, private-field
+  exclusion/counting, one host read, Context issuance, and bounded Trace
+  metadata.
+- Real SynthV acceptance: completed on the current piano-roll Group in
+  SynthV Studio 2 Pro 2.2.1 standalone. The compact Query completed in 52 ms
+  with a 6 ms shadow stage (`5` compared, `0` different, `2` private); the
+  explicit-diagnostics Query completed in 61 ms with a 4 ms shadow stage
+  (`7` compared, `0` different, `2` private). Each Trace contained one IPC
+  request/response pair and no project mutation or Undo.
+- Performance budget: no additional IPC and pure Node projection within 10 ms.
+- Rollback: remove `get_group_voice` from the shadow definition registry; the
+  established public projection remains unchanged.
+
 Exit criteria:
 
 - ordinary reads/writes meet size targets;
