@@ -1,6 +1,6 @@
 {
   "name": "synthv-agent-bridge",
-  "version": "0.1.5",
+  "version": "0.2.0-alpha.1",
   "description": "A reliable MCP bridge for controlling Synthesizer V Studio through its scripting API.",
   "private": true,
   "type": "module",
@@ -21,9 +21,9 @@
   },
   "scripts": {
     "clean": "node scripts/clean.mjs",
-    "build": "npm run clean && tsc -p tsconfig.json",
-    "dev": "tsx src/cli.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "npm run clean && node scripts/write-build-metadata.mjs && tsc -p tsconfig.json",
+    "dev": "node scripts/write-build-metadata.mjs && tsx src/cli.ts",
+    "typecheck": "node scripts/write-build-metadata.mjs && tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node scripts/run-tests.mjs",
     "check": "npm run typecheck && npm test",
     "start": "node dist/src/cli.js",

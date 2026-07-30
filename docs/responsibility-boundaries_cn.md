@@ -80,7 +80,7 @@ SynthV 是工程状态权威。用户选择目标 Group 和歌手，提供接口
 因为它只应用明确的起音、时值和半音数值；`make_emotional` 或
 `tune_whole_song` 不符合，因为它们隐藏了艺术判断，也难以审核失败原因。
 
-对于刚读取的乐句 Context，MCP v2 可以在不重复全部音符索引的情况下执行
+对于刚读取的 `writeIntent` 乐句 Context，MCP v3 可以在不重复全部音符索引的情况下执行
 统一变换：
 
 ```json

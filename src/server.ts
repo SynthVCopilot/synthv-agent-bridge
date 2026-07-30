@@ -40,7 +40,7 @@ import {
   SidebarCoordinator,
   TRANSACTION_STEP_ACTIONS,
 } from "./sidebar-coordinator.js";
-import { registerV2Surface } from "./v2-surface.js";
+import { registerV3Facade } from "./v3-facade.js";
 
 const indexSchema = z.number().int().min(1);
 const blickSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
@@ -695,7 +695,7 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     {
       instructions:
-        "Use sv_describe for unfamiliar actions. Read only the intended target before writes and batch changes with its contextId. Indices are 1-based. Writes stay fingerprint-guarded and create one SynthV undo record. Sidebar requests must be published as previews.",
+        "Use sv_describe for unfamiliar capabilities. Query only the intended target with contextMode=writeIntent before sv_command. Indices are 1-based. Guards remain private, shared Group content fails closed, and one logical command uses one SynthV Undo boundary. Use sv_review for optional Sidebar confirmation.",
     },
   );
   const actionTools = new Map<string, RegisteredTool>();
@@ -1433,7 +1433,7 @@ export function createServer(config: BridgeConfig): McpServer {
           .max(8)
           .optional()
           .describe(
-            "Optional v2 projection. Omit for the complete phrase response.",
+            "Optional v3 projection. Omit for the complete phrase response.",
           ),
       },
       annotations: {
@@ -1978,7 +1978,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Transform SynthV Notes",
       description:
-        "Apply one explicit numeric transform to a fingerprint-guarded note batch. The Bridge performs only deterministic onset, duration, and pitch mechanics; the Agent remains responsible for choosing targets and values. With MCP v2, args.target=contextNotes expands every note from a fresh contextId without repeating note indices.",
+        "Apply one explicit numeric transform to a fingerprint-guarded note batch. The Bridge performs only deterministic onset, duration, and pitch mechanics; the Agent remains responsible for choosing targets and values. With MCP v3, args.target=contextNotes expands every note from a fresh writeIntent contextId without repeating note indices.",
       inputSchema: {
         ...groupLocatorShape,
         notes: z.array(fingerprintedNoteSchema).min(1).max(512),
@@ -2751,11 +2751,12 @@ export function createServer(config: BridgeConfig): McpServer {
     async (input) => runTool(async () => client.send("playback", input)),
   );
 
-  registerV2Surface(
+  registerV3Facade(
     registerPublicTool,
     actionTools,
     guardTokens,
     async () => (await client.getStatus()).status?.sessionToken,
+    async () => sidebar.getRuntimeBuildIdentity(),
   );
 
   return server;

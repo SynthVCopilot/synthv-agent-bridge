@@ -1,10 +1,16 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 
-import { SERVER_VERSION, type BridgeConfig } from "./config.js";
 import {
+  PROTOCOL_VERSION,
+  SERVER_VERSION,
+  type BridgeConfig,
+} from "./config.js";
+import {
+  EXECUTOR_BUILD_ID,
   SERVER_BUILD_FINGERPRINT,
   SERVER_CAPABILITY_FINGERPRINT,
+  SIDEBAR_BUILD_ID,
 } from "./build-info.js";
 import { BridgeError, toPublicError } from "./errors.js";
 import type { FileIpcClient } from "./ipc/file-ipc-client.js";
@@ -583,11 +589,15 @@ export class SidebarCoordinator {
   }
 
   public async getDiagnostics(): Promise<Record<string, unknown>> {
-    const [bridgeStatusRaw, clientStatusRaw, taskStateRaw, history] =
+    const [bridgeStatusRaw, clientStatusRaw, runtimeStatusRaw, taskStateRaw, history] =
       await Promise.all([
         readLimitedText(this.config.paths.statusFile, MAX_SIDEBAR_TEXT_BYTES),
         readLimitedText(
           this.config.paths.sidebarClientStatusFile,
+          MAX_SIDEBAR_TEXT_BYTES,
+        ),
+        readLimitedText(
+          this.config.paths.sidebarRuntimeStatusFile,
           MAX_SIDEBAR_TEXT_BYTES,
         ),
         readLimitedText(this.config.paths.sidebarStateFile, MAX_SIDEBAR_TEXT_BYTES),
@@ -606,9 +616,41 @@ export class SidebarCoordinator {
       ipcDirectory: this.config.paths.directory,
       bridgeStatus,
       clientStatus: clientStatusRaw,
+      runtimeStatus: runtimeStatusRaw,
       taskState: taskStateRaw,
       history,
       lastError: this.lastError,
+    };
+  }
+
+  public async getRuntimeBuildIdentity(): Promise<{
+    readonly state: "absent" | "stale" | "matched" | "mismatch";
+    readonly buildId?: string;
+    readonly ageMs?: number;
+  }> {
+    const raw = await readLimitedText(
+      this.config.paths.sidebarRuntimeStatusFile,
+      MAX_SIDEBAR_TEXT_BYTES,
+    );
+    if (raw === null) {
+      return { state: "absent" };
+    }
+    const updatedAtEpochMs = Number(lineValue(raw, "updatedAtEpochMs"));
+    const ageMs = Number.isFinite(updatedAtEpochMs)
+      ? Math.max(0, Date.now() - updatedAtEpochMs)
+      : Number.POSITIVE_INFINITY;
+    const buildId = lineValue(raw, "buildId");
+    if (ageMs > Math.max(5_000, this.config.statusStaleMs * 2)) {
+      return {
+        state: "stale",
+        ...(buildId === undefined ? {} : { buildId }),
+        ageMs,
+      };
+    }
+    return {
+      state: buildId === SIDEBAR_BUILD_ID ? "matched" : "mismatch",
+      ...(buildId === undefined ? {} : { buildId }),
+      ageMs,
     };
   }
 
@@ -786,6 +828,18 @@ export class SidebarCoordinator {
     });
 
     try {
+      const sidebarBuild = await this.getRuntimeBuildIdentity();
+      if (sidebarBuild.state === "mismatch") {
+        throw new BridgeError(
+          "The active SynthV Sidebar build does not match the MCP server; the preview was not applied.",
+          "BUILD_MISMATCH",
+          {
+            expectedSidebarBuildId: SIDEBAR_BUILD_ID,
+            actualSidebarBuildId: sidebarBuild.buildId ?? null,
+            requiredAction: "reinstall_or_reload_sidebar",
+          },
+        );
+      }
       await this.client.send(plan.action, {
         ...plan.payload,
         _sidebarPlanId: plan.planId,
@@ -1017,6 +1071,8 @@ export class SidebarCoordinator {
       "synthv-agent-bridge-sidebar-client-status-v1",
       `state=${state}`,
       `version=${SERVER_VERSION}`,
+      `protocolVersion=${PROTOCOL_VERSION}`,
+      `expectedExecutorBuildId=${EXECUTOR_BUILD_ID}`,
       `buildFingerprint=${SERVER_BUILD_FINGERPRINT}`,
       `capabilityFingerprint=${SERVER_CAPABILITY_FINGERPRINT}`,
       `updatedAtEpochMs=${now}`,

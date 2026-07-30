@@ -35,9 +35,14 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 > 的完整唱法面板，或重新输入它的全部唱法名称，不能沿用上一个 Vocal 的
 > 列表。
 
-> 状态：**v0.1.5 预发布版**。协议、安全保护、广泛的官方脚本 API
-> 覆盖、可选的原生侧边栏工作流、受保护的事务，以及首批音乐语义工具
-> 均已实现。请在重要工程的副本上测试。
+> 状态：**v0.2.0-alpha.1／协议 v3**。六工具语义入口、类型化 Query
+> Context、紧凑 Command 结果、组件构建一致性检查和首个统一命令内核切片
+> 已实现；私有操作迁移与真机认证仍在进行。工程写入只能在已保存的工作
+> 副本上测试。
+
+参阅 [v3 架构](docs/architecture-v3.md)、
+[开发计划](docs/v3-development-plan.md)和
+[SV2 API 覆盖矩阵](docs/sv2-api-coverage-v3.md)。
 
 ## 功能
 
@@ -261,8 +266,8 @@ Apply 命令由 Node 协调器消费，并通过 MCP 工具使用的同一个串
 
 ### 5. 验证连接
 
-打开启用了 MCP 的对话，让它调用 `sv_status`，然后通过 `sv_read` 调用
-`action: "get_project_info"`。正常状态包含：
+打开启用了 MCP 的对话，让它调用 `sv_status`，然后通过 `sv_query` 调用
+`action: "get_project_info"`，并设置 `contextMode: "readOnly"`。正常状态包含：
 
 ```json
 {
@@ -271,46 +276,44 @@ Apply 命令由 Node 协调器消费，并通过 MCP 工具使用的同一个串
 }
 ```
 
-## MCP v2 工具
+## MCP v3 工具
 
-默认 MCP 表面提供八个稳定工具。各个 SynthV 操作及其完整 Schema 由
+公共 MCP 表面提供六个稳定工具。各个 SynthV 操作及其完整 Schema 由
 `sv_describe` 按需返回，而不是把所有操作 Schema 都放进模型上下文。
 
 | 工具 | 用途 |
 |---|---|
-| `sv_status` | 读取 Bridge/宿主状态、Ping，或热重载 Lua 执行器。 |
-| `sv_describe` | 列出操作，或返回最多 16 个指定操作的 Schema。 |
-| `sv_read` | 执行一个读取操作，可选投影、Dense 行和 `contextId` 复用。 |
-| `sv_edit` | 执行经过验证的工程写入，默认返回最小确认信息。 |
-| `sv_delete` | 执行明确具有破坏性的删除/清除操作。 |
-| `sv_transaction` | 应用或回滚事务；步骤负载可以携带 `contextId`。 |
+| `sv_status` | 读取连接、Session、能力、Trace 和组件构建状态。 |
+| `sv_describe` | 列出操作，或返回一个紧凑 Query／Command／UI／Review Schema。 |
+| `sv_query` | 执行读取投影，并创建 `readOnly` 或 `writeIntent` Context。 |
+| `sv_command` | 执行经过验证的编辑、删除、复制、导入或有界批处理。 |
 | `sv_ui` | 控制选区、视口、剪贴板、对话框、吸附、坐标或播放。 |
-| `sv_sidebar` | 读取可选面板任务/状态，或发布受保护预览。 |
+| `sv_review` | 发布或检查可选侧边栏预览；由用户在 SynthV 中应用或放弃。 |
 
 正常调音顺序：
 
 1. 对不熟悉的操作调用 `sv_describe`。
-2. 使用 `sv_read` 读取最新状态。
-3. 在 `sv_edit`、`sv_delete`、另一次作用域读取或事务步骤中复用返回的
-   `contextId`。
-4. 遇到 `UNKNOWN_CONTEXT` 或任何 `STALE_*` 结果后重新读取。
+2. 使用 `sv_query` 读取当前状态；工程写入前使用
+   `contextMode: "writeIntent"`。
+3. 在一次 `sv_command` 中复用返回的 `contextId`。
+4. 遇到未知 Context、Session 变化或任何 `STALE_*` 结果后重新读取。
 
 `contextId` 只在有界的 Node 内存中保存定位器和并发保护。每个句柄都绑定
 目标类型和来源作用域；把它用于不兼容操作，或同时提供互相冲突的显式定位器/
-Guard，会安全失败，而不会静默改换目标。只有定位器、没有保护信息的读取不会
-生成可用于写入的 Context。Context 不缓存可变的音符、Voice、选区或自动化
-内容；SynthV 在创建撤销记录前仍会检查每一个完整指纹。
+Guard，会安全失败，而不会静默改换目标。`readOnly` Context 不能授权写入；
+`writeIntent` Context 只能由新鲜宿主读取创建。SynthV 在创建撤销记录前仍会
+检查 Bridge 内部保存的完整指纹。
 
 乐句读取支持对 `notes`、`voice`、`automation`、`analysis`、
 `recommendations`、`pitchAnalysis`、`selection` 和 `diagnostics` 进行
-`include` 投影。v2 默认包含 `notes`、`voice` 和 `analysis`。当结果至少
+`include` 投影。v3 默认包含 `notes`、`voice` 和 `analysis`。当结果至少
 包含 24 个音符且 `dense: "auto"` 时，会使用列/行表示；普通对象可使用
-`dense: "never"`。V2 音符行会省略可推导的绝对结束位置；当绝对音高和
+`dense: "never"`。V3 音符行会省略可推导的绝对结束位置；当绝对音高和
 局部音高相同时，会通过 `noteDefaults.absolutePitch: "pitch"` 表示省略。
 
 ### SynthV 操作目录
 
-这些操作由八个 MCP v2 工具在内部路由，不会注册为独立 MCP 工具。仅在
+这些操作由六个 MCP v3 工具在内部路由，不会注册为独立 MCP 工具。仅在
 需要时通过 `sv_describe` 获取其当前 Schema。
 
 | 操作 | 权限 | 用途 |
@@ -431,7 +434,7 @@ Guard，会安全失败，而不会静默改换目标。只有定位器、没有
 - 紧凑写入响应返回数量和替换后的 Guard Token，而不是完整音符或自动化
   曲线。
 
-Guard Token 是不透明的，并且只存在于当前 MCP 服务器进程。MCP v2 会自动
+Guard Token 是不透明的，并且只存在于当前 MCP 服务器进程。MCP v3 会自动
 检测 SynthV/Bridge 会话 Token 变化，并清除全部缓存 Context 和 Guard
 Token。此后的写入会返回 `SYNTHV_SESSION_CHANGED`；请重新读取目标，并用
 新 Context 构建写入。无旧 Context 的新读取可以直接继续，并返回

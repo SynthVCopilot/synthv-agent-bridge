@@ -34,10 +34,15 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 > changing Vocals, capture the new Vocal's complete panel or type all of its
 > singing-style names again; do not reuse the previous Vocal's list.
 
-> Status: **v0.1.5 pre-release**. The protocol, safety guards, broad official
-> scripting-API coverage, an optional native side-panel workflow, guarded transactions,
-> and first musical semantic tools are implemented. Test on copies of important
-> projects.
+> Status: **v0.2.0-alpha.1 / protocol v3**. The six-tool semantic Facade,
+> typed Query Contexts, compact Command outcomes, component build-coherence
+> checks, and the first common Command Kernel slice are implemented. Private
+> action migration and real-host certification are still in progress. Test
+> writes only on saved working copies.
+
+See the [v3 architecture](docs/architecture-v3.md),
+[development plan](docs/v3-development-plan.md), and
+[SV2 API coverage matrix](docs/sv2-api-coverage-v3.md).
 
 ## What it can do
 
@@ -279,7 +284,8 @@ See [docs/sidebar.md](docs/sidebar.md).
 ### 5. Verify the connection
 
 Open an MCP-enabled conversation and ask it to call `sv_status`, followed by
-`sv_read` with `action: "get_project_info"`. A healthy status contains:
+`sv_query` with `action: "get_project_info"` and
+`contextMode: "readOnly"`. A healthy status contains:
 
 ```json
 {
@@ -288,50 +294,49 @@ Open an MCP-enabled conversation and ask it to call `sv_status`, followed by
 }
 ```
 
-## MCP v2 tools
+## MCP v3 tools
 
-The default MCP surface exposes eight stable tools. Individual SynthV actions
+The public MCP surface exposes six stable tools. Individual SynthV actions
 and their full schemas are returned just in time by `sv_describe`, rather than
 placing every action schema in the model context.
 
 | Tool | Purpose |
 |---|---|
-| `sv_status` | Read Bridge/host status, ping, or hot-reload the Lua executor. |
-| `sv_describe` | List actions or return schemas for up to 16 requested actions. |
-| `sv_read` | Run a read action with optional projection, Dense rows, and `contextId` reuse. |
-| `sv_edit` | Run a validated project write with a minimal acknowledgement by default. |
-| `sv_delete` | Run an explicitly destructive delete/clear action. |
-| `sv_transaction` | Apply or roll back a transaction; step payloads may carry `contextId`. |
+| `sv_status` | Read connection, Session, capability, trace, and component-build status. |
+| `sv_describe` | List actions or return one compact Query/Command/UI/Review schema. |
+| `sv_query` | Run a read projection and create a `readOnly` or `writeIntent` Context. |
+| `sv_command` | Run validated edit, delete, clone, import, or bounded batch commands. |
 | `sv_ui` | Control selection, viewport, clipboard, dialogs, snapping, coordinates, or playback. |
-| `sv_sidebar` | Read the optional panel task/status or publish a guarded preview. |
+| `sv_review` | Publish or inspect an optional Sidebar preview; the user applies or dismisses it inside SynthV. |
 
 The normal tuning sequence is:
 
 1. Call `sv_describe` for unfamiliar actions.
-2. Read fresh state with `sv_read`.
-3. Reuse the returned `contextId` in `sv_edit`, `sv_delete`, another scoped
-   read, or a transaction step.
-4. Read again after `UNKNOWN_CONTEXT` or any `STALE_*` result.
+2. Read current state with `sv_query`; use `contextMode: "writeIntent"` before
+   a project command.
+3. Reuse the returned `contextId` in one `sv_command`.
+4. Query again after an unknown Context, Session change, or any `STALE_*`
+   result.
 
 `contextId` stores only locators and concurrency guards in bounded Node memory.
 Each handle is bound to a target kind and source scope. Reusing it with an
 incompatible action, or combining it with a conflicting explicit locator or
 guard, fails closed instead of silently retargeting the call. Locator-only
-reads do not mint write-capable Contexts. A Context does not cache mutable note,
-voice, selection, or automation content; SynthV still checks every complete
-fingerprint before creating an undo record.
+`readOnly` Contexts do not authorize writes. A `writeIntent` Context is minted
+only from a fresh host read. SynthV still checks every complete private
+fingerprint before creating an Undo record.
 
 Phrase reads accept an `include` projection over `notes`, `voice`,
 `automation`, `analysis`, `recommendations`, `pitchAnalysis`, `selection`, and
-`diagnostics`. The v2 default is `notes`, `voice`, and `analysis`. Results with
+`diagnostics`. The v3 default is `notes`, `voice`, and `analysis`. Results with
 at least 24 notes use a column/row representation when `dense: "auto"`; use
-`dense: "never"` for ordinary objects. V2 note rows omit derivable absolute
+`dense: "never"` for ordinary objects. V3 note rows omit derivable absolute
 end positions and report `noteDefaults.absolutePitch: "pitch"` when equal
 absolute/local pitches were omitted.
 
 ### Action catalog
 
-These actions are routed internally through the eight MCP v2 tools. They are
+These actions are routed internally through the six MCP v3 tools. They are
 not registered as standalone MCP tools; request their current schemas through
 `sv_describe` only when needed.
 
@@ -458,7 +463,7 @@ All track, group, and note indices are **1-based**, matching the SynthV Lua API.
 - Compact write responses contain counts and replacement Guard Tokens instead
   of complete notes or automation curves.
 
-Guard Tokens are opaque and live only in the current MCP server process. MCP v2
+Guard Tokens are opaque and live only in the current MCP server process. MCP v3
 automatically detects a changed SynthV/Bridge session token and clears every
 cached context and Guard Token. A write then returns
 `SYNTHV_SESSION_CHANGED`; read the target again and build the write from its

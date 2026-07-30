@@ -63,7 +63,7 @@ test("MCP tool text results use compact JSON", async () => {
   );
 });
 
-test("P4 exposes eight v2 tools under a 6 KB metadata budget", async () => {
+test("v3 exposes six semantic tools under a 6 KB metadata budget", async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = createServer(loadConfig({}, "/tmp"));
   const client = new Client({ name: "p4-test", version: "1.0.0" });
@@ -78,22 +78,89 @@ test("P4 exposes eight v2 tools under a 6 KB metadata budget", async () => {
       [
         "sv_status",
         "sv_describe",
-        "sv_read",
-        "sv_edit",
-        "sv_delete",
-        "sv_transaction",
+        "sv_query",
+        "sv_command",
         "sv_ui",
-        "sv_sidebar",
+        "sv_review",
       ],
     );
     assert.ok(JSON.stringify(tools.tools).length < 6_000);
+    const describe = tools.tools.find((tool) => tool.name === "sv_describe");
+    const describeProperties = (
+      describe?.inputSchema as {
+        readonly properties?: Record<string, unknown>;
+      }
+    )?.properties;
+    assert.ok(describeProperties?.action !== undefined);
+    assert.equal(describeProperties?.actions, undefined);
+
+    const statusTool = tools.tools.find((tool) => tool.name === "sv_status");
+    const statusProperties = (
+      statusTool?.inputSchema as {
+        readonly properties?: Record<string, unknown>;
+      }
+    )?.properties;
+    assert.match(JSON.stringify(statusProperties?.operation), /diagnostics/u);
+    assert.ok(statusProperties?.level !== undefined);
+
+    const diagnosticsResult = await client.callTool({
+      name: "sv_status",
+      arguments: {
+        operation: "diagnostics",
+        level: "support",
+        limit: 2,
+      },
+    });
+    const diagnosticsContent = (
+      diagnosticsResult as {
+        readonly content: readonly {
+          readonly type: string;
+          readonly text?: string;
+        }[];
+      }
+    ).content;
+    const diagnosticsText = diagnosticsContent.find(
+      (entry) => entry.type === "text",
+    );
+    const diagnosticsRaw = diagnosticsText?.text;
+    assert.equal(typeof diagnosticsRaw, "string");
+    const diagnostics = JSON.parse(
+      diagnosticsRaw as string,
+    ) as Record<string, unknown>;
+    assert.equal(
+      (diagnostics.observability as Record<string, unknown>).level,
+      "support",
+    );
+    assert.ok(JSON.stringify(diagnostics).length <= 16_384);
+
+    const statusResult = await client.callTool({
+      name: "sv_status",
+      arguments: { operation: "bridge" },
+    });
+    const statusContent = (
+      statusResult as {
+        readonly content: readonly {
+          readonly type: string;
+          readonly text?: string;
+        }[];
+      }
+    ).content;
+    const statusText = statusContent.find(
+      (entry) => entry.type === "text",
+    );
+    const statusRaw = statusText?.text;
+    assert.equal(typeof statusRaw, "string");
+    const status = JSON.parse(
+      statusRaw as string,
+    ) as Record<string, unknown>;
+    assert.equal(status.observability, undefined);
   } finally {
     await client.close();
     await server.close();
   }
 });
 
-test("v2 add_notes can create an editable non-main note group", async () => {
+test("v3 add_notes can create an editable non-main note group", async () => {
   const [compiledServer, bridgeSource] = await Promise.all([
     readFile(new URL("../src/server.js", import.meta.url), "utf8"),
     readFile(

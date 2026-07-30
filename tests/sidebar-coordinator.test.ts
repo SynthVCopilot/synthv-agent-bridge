@@ -237,6 +237,44 @@ test("sidebar keeps a failed preview visible with a public error", async (contex
   });
 });
 
+test("sidebar build mismatch blocks an approved preview before project IPC", async (context) => {
+  const fixture = await createFixture(context);
+  await fs.writeFile(
+    fixture.config.paths.sidebarRuntimeStatusFile,
+    [
+      "synthv-agent-bridge-sidebar-runtime-v3",
+      "buildId=old-sidebar-build",
+      `updatedAtEpochMs=${Date.now()}`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const preview = await fixture.coordinator.publishPreview({
+    summary: "Set track gain.",
+    action: "set_track_mixer",
+    payload: {
+      trackIndex: 1,
+      trackFingerprint: "main-group:uuid",
+      gainDecibel: -3,
+    },
+  });
+  await writeCommand(
+    fixture.config.paths.sidebarCommandFile,
+    "apply",
+    preview.planId,
+  );
+
+  await fixture.coordinator.pollOnce();
+
+  assert.equal(fixture.calls.length, 0);
+  const panelText = await fs.readFile(
+    fixture.config.paths.sidebarPreviewTextFile,
+    "utf8",
+  );
+  assert.match(panelText, /status=error/u);
+  assert.match(panelText, /BUILD_MISMATCH/u);
+});
+
 test("sidebar can cancel a queued request and clear bounded history", async (context) => {
   const fixture = await createFixture(context);
   await fs.writeFile(

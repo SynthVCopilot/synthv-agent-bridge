@@ -22,10 +22,12 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
   `rightsConfirmed: true`; return source tempo for review but never apply it to
   the project implicitly.
 - Do not log project lyrics or note data to stderr unless explicitly requested for debugging.
-- Keep file IPC protocol v2 as the sole request/response envelope. Reject
-  protocol v1 with `PROTOCOL_MISMATCH`; add a new version for any future
+- Keep file IPC protocol v3 as the sole request/response envelope. Reject
+  protocol v1 and v2 with `PROTOCOL_MISMATCH`; add a new version for any future
   breaking envelope change.
-- Keep the public MCP surface limited to the eight compact v2 tools. Detailed
+- Keep the public MCP surface limited to the six compact v3 tools:
+  `sv_status`, `sv_describe`, `sv_query`, `sv_command`, `sv_ui`, and
+  `sv_review`. Detailed
   SynthV action handlers are internal definitions exposed just in time through
   `sv_describe`; do not expose them as standalone MCP tools.
 - Keep the responsibility boundary enforceable in code:
@@ -78,7 +80,7 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
   validates the complete batch and creates one SynthV undo record.
 - Prefer `transform_notes` when every note in one freshly read scope receives
   the same explicit mechanical onset, duration, or semitone transform. With
-  MCP v2, use `target: "contextNotes"` and the fresh `contextId` instead of
+  MCP v3, use `target: "contextNotes"` and the fresh `contextId` instead of
   repeating note indices. The Agent chooses the exact target scope and numeric
   transform; the Bridge only expands and verifies it. A seconds onset offset
   uses the fresh SynthV time axis and preserves note durations in blicks.
@@ -97,7 +99,7 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
   uncertain, treat the material as user-owned. A general request to tune a
   performance authorizes the requested tuning parameters, not silent
   normalization of the user's note geometry.
-- If an MCP v2 call returns `SYNTHV_SESSION_CHANGED`, do not retry its old
+- If an MCP v3 call returns `SYNTHV_SESSION_CHANGED`, do not retry its old
   `contextId` or Guard Tokens. The server has already cleared them; read the
   intended target again and build the write from the fresh context.
 - On the first successful MCP/Bridge connection notice in a conversation,
@@ -121,7 +123,7 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
   stop and ask the user to select the Demo Group, select or assign its Vocal,
   and provide the complete Vocal Mode panel or every exact singing-style name.
   Continue automatically only after that handoff. Use a fresh Demo-Group read,
-  passing the template's projection through the top-level `sv_read.include`
+  passing the template's projection through the top-level `sv_query.include`
   field so `automation` and `pitchAnalysis` Guards are retained; do not put
   that projection only inside the internal action args. Use the current
   Automation `definition.range` values, one

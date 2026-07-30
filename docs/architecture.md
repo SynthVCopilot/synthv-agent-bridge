@@ -1,4 +1,8 @@
-# Architecture
+# Legacy v0.1 architecture
+
+> Status: superseded by the implemented
+> [v3 Architecture Baseline](architecture-v3.md). This file is retained as
+> historical context for private action-handler migration only.
 
 ## Components
 
@@ -65,7 +69,7 @@ The Node side serializes calls and owns the lock. It writes requests using a tem
 
 ## Compact MCP boundary
 
-P4 makes the compact surface the default. The action catalog is kept behind
+Historical P4 made the compact surface the default. Its action catalog was kept behind
 eight MCP tools and a just-in-time schema catalog. This keeps detailed action
 schemas out of the default model context while preserving the validated Lua
 executor and Node-local actions.

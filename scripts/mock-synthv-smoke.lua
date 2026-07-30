@@ -9,7 +9,7 @@ local installFile = prefix .. ".install.json"
 do
     local scriptFile = assert(os.getenv("BRIDGE_SCRIPT")):gsub("\\","\\\\"):gsub('"','\\"')
     local file = assert(io.open(installFile, "wb"))
-    file:write('{"schemaVersion":1,"scriptFile":"'..scriptFile..'"}')
+    file:write('{"schemaVersion":2,"scriptFile":"'..scriptFile..'"}')
     file:close()
 end
 
@@ -206,6 +206,9 @@ local function makeNote()
 end
 
 local automationAddFailureParameter = nil
+local automationRangeEndExclusive = false
+local automationExactRemovalFailurePosition = nil
+local mixerIgnoreGain = false
 
 local function makeAutomation(name)
     local a = attachScriptData({ name=name, points={} })
@@ -255,8 +258,25 @@ local function makeAutomation(name)
     end
     function a:removeAll() self.points={} end
     function a:remove(beginPos,endPos)
+        if endPos == nil then
+            if automationExactRemovalFailurePosition == beginPos then
+                return false
+            end
+            local changed=self.points[beginPos]~=nil
+            self.points[beginPos]=nil
+            return changed
+        end
         local changed=false
-        for b,_ in pairs(self.points) do if b>=beginPos and b<=endPos then self.points[b]=nil; changed=true end end
+        for b,_ in pairs(self.points) do
+            if b>=beginPos
+                and (
+                    b<endPos
+                    or (not automationRangeEndExclusive and b==endPos)
+                ) then
+                self.points[b]=nil
+                changed=true
+            end
+        end
         return changed
     end
     function a:simplify(beginPos,endPos,_)
@@ -433,7 +453,9 @@ end
 local function makeMixer()
     local m=attachScriptData({gain=0,pan=0,muted=false,solo=false})
     function m:getGainDecibel() return self.gain end
-    function m:setGainDecibel(v) self.gain=v end
+    function m:setGainDecibel(v)
+        if not mixerIgnoreGain then self.gain=v end
+    end
     function m:getPan() return self.pan end
     function m:setPan(v) self.pan=v end
     function m:isMuted() return self.muted end
@@ -759,6 +781,7 @@ function SV:showOkCancelBox(_,_) return true end
 function SV:showYesNoCancelBox(_,_) return "yes" end
 function SV:showCustomDialog(form) return form end
 
+debug=nil
 dofile(assert(os.getenv("BRIDGE_SCRIPT")))
 main()
 
@@ -766,9 +789,10 @@ do
     local file=assert(io.open(statusFile,"rb"))
     local status=file:read("*a")
     file:close()
-    assert(status:find('"protocolVersion":2',1,true),"heartbeat did not advertise protocol v2")
-    assert(status:find('"protocolVersions":[2]',1,true),"heartbeat advertised a non-v2 protocol")
-    assert(status:find('"preferredProtocolVersion":2',1,true),"heartbeat did not prefer protocol v2")
+    assert(status:find('"protocolVersion":3',1,true),"heartbeat did not advertise protocol v3")
+    assert(status:find('"protocolVersions":[3]',1,true),"heartbeat advertised a non-v3 protocol")
+    assert(status:find('"preferredProtocolVersion":3',1,true),"heartbeat did not prefer protocol v3")
+    assert(status:find('"executorBuildId":"sv3-lua-0.2.0-alpha.1-6"',1,true),"heartbeat did not identify the executor build")
 end
 
 local seq=0
@@ -796,8 +820,9 @@ end
 local function callRaw(action,payload)
     seq=seq+1
     local id=string.format("00000000-0000-4000-8000-%012d",seq)
+    local trace=string.format("trace-%012d",seq)
     local f=assert(io.open(requestFile,"wb"))
-    f:write('{"v":2,"id":"'..id..'","a":"'..action..'","p":'..payload..'}')
+    f:write('{"v":3,"id":"'..id..'","t":"'..trace..'","b":"sv3-lua-0.2.0-alpha.1-6","a":"'..action..'","p":'..payload..'}')
     f:close()
     assert(scheduled,"bridge stopped unexpectedly")
     local callback=scheduled; scheduled=nil; callback()
@@ -832,13 +857,25 @@ do
     assert(scheduled,"bridge stopped unexpectedly")
     local callback=scheduled; scheduled=nil; callback()
     local rf=assert(io.open(responseFile,"rb")); local response=rf:read("*a"); rf:close(); os.remove(responseFile)
-    assert(response:find('"v":2',1,true),"v1 rejection did not use the v2 response envelope")
+    assert(response:find('"v":3',1,true),"v1 rejection did not use the v3 response envelope")
     assert(response:find('"id":"00000000-0000-4000-8000-000000000000"',1,true),"v1 rejection did not preserve request correlation")
     assert(response:find('"code":"PROTOCOL_MISMATCH"',1,true),"legacy v1 request was not rejected")
 end
 
+do
+    local f=assert(io.open(requestFile,"wb"))
+    f:write('{"v":3,"id":"build-mismatch-request","t":"build-mismatch-trace","b":"old-executor-build","a":"set_track_mixer","p":{"trackIndex":1,"trackFingerprint":"ignored","gainDecibel":-3}}')
+    f:close()
+    assert(scheduled,"bridge stopped unexpectedly")
+    local callback=scheduled; scheduled=nil; callback()
+    local rf=assert(io.open(responseFile,"rb")); local response=rf:read("*a"); rf:close(); os.remove(responseFile)
+    assert(response:find('"code":"BUILD_MISMATCH"',1,true),"executor build mismatch was not rejected")
+    assert(response:find('"requiredAction":"reinstall_or_reload_bridge"',1,true),"build mismatch lacked recovery guidance")
+    print("CASE:build-mismatch-blocks-command")
+end
+
 local pingResponse=call("ping","{}")
-assert(pingResponse:find('"bridgeVersion":"0.1.5"',1,true),"expected Bridge version 0.1.5")
+assert(pingResponse:find('"bridgeVersion":"0.2.0-alpha.1"',1,true),"expected Bridge version 0.2.0-alpha.1")
 local initialSessionToken=extractJsonString(pingResponse,"sessionToken")
 local reloadResponse=call("reload_bridge","{}")
 assert(reloadResponse:find('"reloading":true',1,true),"hot reload was not acknowledged")
@@ -1107,6 +1144,7 @@ callExpectError(
 )
 assert(project.undo==undoBeforeSharedWrite,"shared Group rejection must happen before an undo record")
 assert(sharedCloneSource:getNumNotes()==1,"rejected shared Group write changed source notes")
+print("CASE:shared-group-default-reject")
 callWrite(
     "add_notes",
     '{"trackIndex":2,"groupIndex":2,"groupUuid":"'..sharedCloneUuid..'","sharedGroupPolicy":"allowAllReferences","expectedReferenceCount":2,"notes":[{"onset":705600000,"duration":705600000,"pitch":67,"lyrics":"la"}]}'
@@ -1176,7 +1214,6 @@ assert(project.tracks[2]:getGroupReference(5):getTarget():getUUID()==shiftGroupC
 for groupIndex=project.tracks[2]:getNumGroups(),shiftGroupCountBefore-2,-1 do
     project.tracks[2]:removeGroupReference(groupIndex)
 end
-end
 
 project.tracks[2].refs[1].vocalDatabaseId="mock-source-vocal"
 local shellSourceMain=project.tracks[2].refs[1].group
@@ -1214,6 +1251,7 @@ assert(project.tracks[3].refs[1].voice.paramLoudness==-2,"clone_track must inher
 assert(project.tracks[3].refs[2].group.uuid~=sharedCloneUuid,"clone_track must detach non-main library Groups")
 assert(project.tracks[3].refs[2].group.notes[1].pitch==62,"clone_track must transpose the detached non-main Group")
 assert(sharedCloneSource.notes[1].pitch==65,"clone_track transposed the shared source Group")
+print("CASE:isolated-clone-uuid")
 local cloneWithClearedGroups=callWrite(
     "clone_track",
     '{"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'","name":"Voice Shell","clearNotes":true,"nonMainGroupPolicy":"detach"}'
@@ -1222,6 +1260,7 @@ assert(cloneWithClearedGroups:find('"independentGroupsVerified":true',1,true),"c
 assert(project.tracks[4].refs[1].group:getNumNotes()==0,"clearNotes did not clear the cloned main Group")
 assert(project.tracks[4].refs[2].group:getNumNotes()==0,"clearNotes did not clear the detached non-main Group")
 assert(sharedCloneSource:getNumNotes()==2,"clearNotes changed a shared source Group")
+print("CASE:clone-source-unchanged")
 local undoBeforeStaleTrack=project.undo
 callExpectError("update_track",'{"trackIndex":2,"trackFingerprint":"stale","name":"wrong"}',"STALE_TRACK")
 assert(project.undo==undoBeforeStaleTrack,"stale track edit must not create an undo record")
@@ -1232,6 +1271,7 @@ callWrite("delete_track",'{"trackIndex":3,"trackFingerprint":"'..track3Fingerpri
 assert(#project.tracks==2,"delete_track must remove the target track")
 callWrite("delete_note_group",'{"groupUuid":"'..sharedCloneUuid..'"}')
 assert(project.tracks[1]:getNumGroups()==1 and project.tracks[2]:getNumGroups()==1,"shared clone fixture was not cleaned up")
+end
 end
 
 local extraGroup=makeGroup()
@@ -1268,15 +1308,35 @@ assert(project.undo==undoBeforeInvalidBatch,"invalid batch must not create an un
 assert(project.tracks[1].refs[1].group.notes[1].pitch==pitchBeforeInvalidBatch,"invalid batch must not partially mutate notes")
 call("get_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness"}')
 local undoBeforeStaleAutomation=project.undo
-callExpectError("set_automation_points",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","expectedFingerprint":"stale","points":[{"position":0,"value":-3}]}',"STALE_AUTOMATION")
+local staleAutomationResponse=callExpectError("set_automation_points",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","expectedFingerprint":"stale","points":[{"position":0,"value":-3}]}',"STALE_AUTOMATION")
 assert(project.undo==undoBeforeStaleAutomation,"stale automation edit must not create an undo record")
+assert(not staleAutomationResponse:find('"expected":"stale"',1,true),"stale error leaked the raw expected fingerprint")
+assert(staleAutomationResponse:find('"expectedSummary":',1,true),"stale error omitted the bounded fingerprint summary")
+assert(#staleAutomationResponse<4096,"stale automation error exceeded the 4 KB public budget")
+print("CASE:stale-before-undo-and-redacted")
 local compactAutomationWrite=callWrite("set_automation_points",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","responseMode":"compact","clearMode":"all","points":[{"position":0,"value":-3},{"position":705600000,"value":0}]}')
 assert(compactAutomationWrite:find('"responseMode":"compact"',1,true),"compact automation write mode was not returned")
 assert(not compactAutomationWrite:find('"points":',1,true),"compact automation write returned the full curve")
 callWrite("clear_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","rangeBegin":0,"rangeEnd":100}')
 local track1Fingerprint="main-group:"..project.tracks[1].refs[1].group.uuid
-callWrite("set_track_mixer",'{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","gainDecibel":-3,"pan":0.25,"muted":false,"solo":true}')
-call("get_track_mixer",'{"trackIndex":1}')
+local mixerWrite=callWrite("set_track_mixer",'{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","gainDecibel":-3,"pan":0.25,"muted":false,"solo":true}')
+assert(mixerWrite:find('"m":',1,true),"mixer response omitted Lua telemetry")
+assert(mixerWrite:find('"stage":"freshRead"',1,true),"mixer telemetry omitted freshRead")
+assert(mixerWrite:find('"stage":"preflighted"',1,true),"mixer telemetry omitted preflighted")
+assert(mixerWrite:find('"stage":"undoOpened"',1,true),"mixer telemetry omitted undoOpened")
+assert(mixerWrite:find('"stage":"mutated"',1,true),"mixer telemetry omitted mutated")
+assert(mixerWrite:find('"stage":"verified"',1,true),"mixer telemetry omitted verified")
+assert(not mixerWrite:find('"lyrics":',1,true),"Lua telemetry leaked project content")
+print("CASE:mixer-lua-stage-timings")
+local mixerNoopUndoBefore=project.undo
+local mixerNoop=call("set_track_mixer",'{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","gainDecibel":-3,"pan":0.25,"muted":false,"solo":true}')
+assert(project.undo==mixerNoopUndoBefore,"already-satisfied mixer command created an undo record")
+assert(mixerNoop:find('"changedCount":0',1,true),"already-satisfied mixer command did not report zero changes")
+assert(mixerNoop:find('"undoRecordCount":0',1,true),"already-satisfied mixer command reported an undo")
+print("CASE:already-satisfied-no-undo")
+local focusedMixerRead=call("get_track_mixer",'{"trackIndex":1}')
+assert(focusedMixerRead:find('"trackFingerprint":',1,true),"focused mixer read omitted the Track guard required for a writeIntent Context")
+print("CASE:focused-mixer-write-context")
 call("playback",'{"operation":"seek","timeSeconds":1.5}')
 call("playback",'{"operation":"play"}')
 local paused=call("playback",'{"operation":"pause"}')
@@ -1452,6 +1512,7 @@ assert(#project.tracks==dependentFailureTrackCountBefore+1,"dependent failure fi
 assert(dependentFailureResponse:find('"failurePhase":"dependentPreflight"',1,true),"dependent failure phase was not reported")
 assert(dependentFailureResponse:find('"completedStepCount":1',1,true),"dependent failure completed-step count was not reported")
 assert(dependentFailureResponse:find('"undoRequired":true',1,true),"dependent failure did not require one Undo")
+print("CASE:dependent-partial-write-undo")
 project:removeTrack(#project.tracks)
 
 local transactionFailureUndoBefore=project.undo
@@ -1537,6 +1598,41 @@ callWrite(
         escape(loudnessFingerprint)..'","beginPosition":0,"endPosition":1411200000,"startValue":-4,"endValue":0}'
 )
 
+do
+local aggregateVoiceRead=call("get_group_voice",'{"trackIndex":1,"groupIndex":1}')
+local aggregateVoiceFingerprint=extractJsonString(aggregateVoiceRead,"referenceFingerprint")
+local aggregateLoudnessRead=call(
+    "get_automation",
+    '{"trackIndex":1,"groupIndex":1,"parameter":"loudness"}'
+)
+local aggregateLoudnessFingerprint=
+    extractJsonString(aggregateLoudnessRead,"fingerprint")
+local aggregateTensionRead=call(
+    "get_automation",
+    '{"trackIndex":1,"groupIndex":1,"parameter":"tension"}'
+)
+local aggregateTensionFingerprint=
+    extractJsonString(aggregateTensionRead,"fingerprint")
+local aggregateUndoBefore=project.undo
+local aggregateResult=call(
+    "apply_group_tuning",
+    '{"trackIndex":1,"groupIndex":1,"summary":"Aggregate success",'..
+        '"referenceFingerprint":"'..escape(aggregateVoiceFingerprint)..'",'..
+        '"requireCurrentEditorGroup":false,'..
+        '"voice":{"parameters":{"breathiness":0.1}},'..
+        '"automations":['..
+            '{"parameter":"loudness","expectedFingerprint":"'..
+                escape(aggregateLoudnessFingerprint)..'",'..
+                '"clearMode":"all","points":[{"position":0,"value":-1}]},'..
+            '{"parameter":"tension","expectedFingerprint":"'..
+                escape(aggregateTensionFingerprint)..'",'..
+                '"clearMode":"all","points":[{"position":0,"value":0.1}]}'..
+        ']}'
+)
+assert(project.undo==aggregateUndoBefore+1,"aggregate tuning must create exactly one undo record")
+assert(aggregateResult:find('"automationChangedCount":2',1,true),"aggregate tuning did not apply both curves")
+print("CASE:aggregate-tuning-single-undo")
+
 local failureReference=project.tracks[1].refs[1]
 local failureVoiceBefore=deepCopy(failureReference.voice)
 local failureAutomation=failureReference.group:getParameter("loudness")
@@ -1584,9 +1680,65 @@ assert(
 )
 failureReference.voice=failureVoiceBefore
 failureAutomation.points=failureAutomationBefore
+end
 
 local finalNotes=call("get_track_notes",'{"trackIndex":1,"offset":0,"limit":100}')
 local finalFingerprint=extractJsonString(finalNotes,"fingerprint")
 callWrite("delete_notes",'{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(finalFingerprint)..'"}]}')
-assert(project.undo==59,"expected 59 undo records, got "..project.undo)
+
+do
+local rangeAutomation=project.tracks[1].refs[1].group:getParameter("loudness")
+callWrite(
+    "set_automation_points",
+    '{"trackIndex":1,"groupIndex":1,"parameter":"loudness","clearMode":"all",'..
+        '"points":[{"position":0,"value":-2},{"position":100,"value":-1},'..
+        '{"position":101,"value":0}]}'
+)
+automationRangeEndExclusive=true
+callWrite(
+    "clear_automation",
+    '{"trackIndex":1,"groupIndex":1,"parameter":"loudness","rangeBegin":0,"rangeEnd":100}'
+)
+automationRangeEndExclusive=false
+assert(rangeAutomation.points[0]==nil,"closed-range clear retained the range start")
+assert(rangeAutomation.points[100]==nil,"closed-range clear retained the range end")
+assert(rangeAutomation.points[101]==0,"closed-range clear removed a point outside the range")
+print("CASE:automation-closed-range-host-semantics")
+
+callWrite(
+    "set_automation_points",
+    '{"trackIndex":1,"groupIndex":1,"parameter":"loudness","clearMode":"all",'..
+        '"points":[{"position":0,"value":-2},{"position":100,"value":-1}]}'
+)
+local endpointFailureUndoBefore=project.undo
+automationRangeEndExclusive=true
+automationExactRemovalFailurePosition=100
+local endpointFailure=callExpectError(
+    "clear_automation",
+    '{"trackIndex":1,"groupIndex":1,"parameter":"loudness","rangeBegin":0,"rangeEnd":100}',
+    "HOST_POSTCONDITION_FAILED"
+)
+automationRangeEndExclusive=false
+automationExactRemovalFailurePosition=nil
+assert(project.undo==endpointFailureUndoBefore+1,"endpoint postcondition failure did not use one undo boundary")
+assert(rangeAutomation.points[100]==-1,"endpoint fault injection did not retain the range end")
+assert(endpointFailure:find('"undoRequired":true',1,true),"endpoint residue did not require one Undo")
+print("CASE:automation-closed-range-postcondition")
+
+local mixerFailureUndoBefore=project.undo
+local mixerBeforeFailure=project.tracks[1].mixer.gain
+mixerIgnoreGain=true
+local mixerFailure=callExpectError(
+    "set_track_mixer",
+    '{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","gainDecibel":-2}',
+    "HOST_POSTCONDITION_FAILED"
+)
+mixerIgnoreGain=false
+assert(project.undo==mixerFailureUndoBefore+1,"mixer postcondition failure did not use one undo boundary")
+assert(project.tracks[1].mixer.gain==mixerBeforeFailure,"mixer fault injection unexpectedly changed gain")
+assert(mixerFailure:find('"undoRequired":true',1,true),"mixer postcondition failure did not require one Undo")
+print("CASE:write-postcondition-failure")
+end
+
+assert(project.undo==65,"expected 65 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

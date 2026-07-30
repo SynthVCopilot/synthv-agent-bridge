@@ -12,8 +12,9 @@ if debug and debug.getinfo then
 end
 
 local SCRIPT_NAME = "Start SynthV Agent Bridge"
-local BRIDGE_VERSION = "0.1.5"
-local PROTOCOL_VERSION = 2
+local BRIDGE_VERSION = "0.2.0-alpha.1"
+local PROTOCOL_VERSION = 3
+local EXECUTOR_BUILD_ID = "sv3-lua-0.2.0-alpha.1-6"
 local MIN_EDITOR_VERSION = 131330 -- Synthesizer V Studio 2.1.2
 local POLL_INTERVAL_MS = 25
 local HEARTBEAT_EVERY_POLLS = 40
@@ -43,6 +44,7 @@ runtimeState.transactionRevision = 0
 
 local TRANSACTION_VALIDATION_SENTINEL = {}
 local transactionMode = nil
+local currentRequestTelemetry = nil
 
 function json.array(values)
     return setmetatable(values or {}, JSON_ARRAY_MT)
@@ -737,6 +739,7 @@ local function writeStatus(state, message)
         state = state,
         updatedAtEpochMs = os.time() * 1000,
         bridgeVersion = BRIDGE_VERSION,
+        executorBuildId = EXECUTOR_BUILD_ID,
         host = copyHostInfo(),
         projectFile = currentProjectFile(),
         ipcDirectory = IPC_DIRECTORY,
@@ -756,7 +759,8 @@ local function writeSessionFile()
     return writeJsonAtomically(SESSION_FILE, {
         token = SESSION_TOKEN,
         startedAtEpochMs = os.time() * 1000,
-        bridgeVersion = BRIDGE_VERSION
+        bridgeVersion = BRIDGE_VERSION,
+        executorBuildId = EXECUTOR_BUILD_ID
     })
 end
 
@@ -841,11 +845,62 @@ local function raiseUndoRequiredExecutionError(action, errorValue)
     )
 end
 
-local function writeResponse(requestId, ok, value)
+local function telemetryNowMs()
+    return os.clock() * 1000
+end
+
+local function roundedMilliseconds(value)
+    return math.floor(math.max(0, value) * 100 + 0.5) / 100
+end
+
+local function beginRequestTelemetry()
+    local now = telemetryNowMs()
+    currentRequestTelemetry = {
+        startedAtMs = now,
+        previousAtMs = now,
+        stages = json.array(),
+        seen = {}
+    }
+end
+
+local function recordLuaStage(stage)
+    local telemetry = currentRequestTelemetry
+    if telemetry == nil or telemetry.seen[stage] or #telemetry.stages >= 24 then
+        return
+    end
+    local now = telemetryNowMs()
+    telemetry.stages[#telemetry.stages + 1] = {
+        stage = stage,
+        durationMs = roundedMilliseconds(now - telemetry.previousAtMs)
+    }
+    telemetry.previousAtMs = now
+    telemetry.seen[stage] = true
+end
+
+local function finishRequestTelemetry()
+    local telemetry = currentRequestTelemetry
+    if telemetry == nil then
+        return nil
+    end
+    recordLuaStage("projected")
+    return {
+        totalMs = roundedMilliseconds(
+            telemetryNowMs() - telemetry.startedAtMs
+        ),
+        stages = telemetry.stages
+    }
+end
+
+local function writeResponse(requestId, traceId, ok, value, telemetry)
     local response = {
         v = PROTOCOL_VERSION,
-        id = requestId
+        id = requestId,
+        t = traceId,
+        b = EXECUTOR_BUILD_ID
     }
+    if telemetry ~= nil then
+        response.m = telemetry
+    end
     if ok then
         response.r = value == nil and JSON_NULL or value
     else
@@ -879,7 +934,9 @@ local function createUndoRecord(project)
     if transactionMode == "execute" then
         return
     end
+    recordLuaStage("preflighted")
     project:newUndoRecord()
+    recordLuaStage("undoOpened")
 end
 
 local function resolveTrack(payload)
@@ -1140,17 +1197,44 @@ local function makeTrackFingerprint(track)
     }, "|")
 end
 
+local function summarizeFingerprint(value)
+    if type(value) ~= "string" then
+        return {
+            kind = type(value),
+            length = 0
+        }
+    end
+    local hash = 2166136261
+    for index = 1, #value do
+        hash = ((hash ~ value:byte(index)) * 16777619) & 0xffffffff
+    end
+    return {
+        digest = string.format("fnv1a32:%08x", hash),
+        length = #value
+    }
+end
+
+local function fingerprintMismatchDetails(expected, actual)
+    return {
+        changed = true,
+        expectedSummary = summarizeFingerprint(expected),
+        actualSummary = summarizeFingerprint(actual)
+    }
+end
+
 local function validateTrackFingerprint(track, expectedFingerprint, trackIndex)
     if not expectedFingerprint then
         return
     end
     local actual = makeTrackFingerprint(track)
     if actual ~= expectedFingerprint then
-        raiseBridgeError("STALE_TRACK", "trackFingerprint no longer matches trackIndex", {
-            trackIndex = trackIndex,
-            expected = expectedFingerprint,
-            actual = actual
-        })
+        local details = fingerprintMismatchDetails(expectedFingerprint, actual)
+        details.trackIndex = trackIndex
+        raiseBridgeError(
+            "STALE_TRACK",
+            "trackFingerprint no longer matches trackIndex",
+            details
+        )
     end
 end
 
@@ -1984,6 +2068,75 @@ local function serializeAutomation(group, parameterName)
     }
 end
 
+local function verifyPreparedAutomation(
+    automation,
+    clearMode,
+    rangeBegin,
+    rangeEnd,
+    preparedPoints
+)
+    local expected = {}
+    for index = 1, #preparedPoints do
+        local point = preparedPoints[index]
+        expected[point.position] = point.value
+    end
+    local actual = {}
+    local allPoints = automation:getAllPoints()
+    for index = 1, #allPoints do
+        actual[allPoints[index][1]] = allPoints[index][2]
+    end
+
+    for position, value in pairs(expected) do
+        if actual[position] == nil or not numbersMatch(actual[position], value) then
+            raiseBridgeError(
+                "HOST_POSTCONDITION_FAILED",
+                "SynthV did not retain an Automation control point",
+                {
+                    position = position,
+                    expectedPointPresent = true,
+                    actualPointPresent = actual[position] ~= nil
+                }
+            )
+        end
+    end
+
+    if clearMode == "all" then
+        for position, _value in pairs(actual) do
+            if expected[position] == nil then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV retained an unexpected Automation control point after clear-all",
+                    {
+                        position = position,
+                        clearMode = clearMode
+                    }
+                )
+            end
+        end
+    elseif clearMode == "range" then
+        for position, _value in pairs(actual) do
+            if position >= rangeBegin
+                and position <= rangeEnd
+                and expected[position] == nil then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV retained an Automation control point inside the cleared closed range",
+                    {
+                        position = position,
+                        rangeBegin = rangeBegin,
+                        rangeEnd = rangeEnd
+                    }
+                )
+            end
+        end
+    end
+end
+
+local function removeAutomationClosedRange(automation, rangeBegin, rangeEnd)
+    automation:remove(rangeBegin, rangeEnd)
+    automation:remove(rangeEnd)
+end
+
 local function requireAutomationDefinitionRange(definition, path, parameterName)
     if type(definition) ~= "table"
         or type(definition.range) ~= "table"
@@ -2062,10 +2215,11 @@ end
 
 local function validateExpectedFingerprint(actual, expected, staleCode, message)
     if expected and actual ~= expected then
-        raiseBridgeError(staleCode, message, {
-            expected = expected,
-            actual = actual
-        })
+        raiseBridgeError(
+            staleCode,
+            message,
+            fingerprintMismatchDetails(expected, actual)
+        )
     end
 end
 
@@ -2075,12 +2229,14 @@ local function validateReferenceFingerprint(reference, expected, trackIndex, gro
     end
     local actual = makeReferenceFingerprint(reference)
     if actual ~= expected then
-        raiseBridgeError("STALE_GROUP_REFERENCE", "The group reference changed after it was read", {
-            trackIndex = trackIndex,
-            groupIndex = groupIndex,
-            expected = expected,
-            actual = actual
-        })
+        local details = fingerprintMismatchDetails(expected, actual)
+        details.trackIndex = trackIndex
+        details.groupIndex = groupIndex
+        raiseBridgeError(
+            "STALE_GROUP_REFERENCE",
+            "The group reference changed after it was read",
+            details
+        )
     end
 end
 
@@ -2293,11 +2449,13 @@ local function validateFingerprint(group, noteIndex, expectedFingerprint)
     local note = group:getNote(noteIndex)
     local actual = makeNoteFingerprint(group:getUUID(), noteIndex, note)
     if actual ~= expectedFingerprint then
-        raiseBridgeError("STALE_NOTE", "The note changed after it was read; read the group again before writing", {
-            noteIndex = noteIndex,
-            expected = expectedFingerprint,
-            actual = actual
-        })
+        local details = fingerprintMismatchDetails(expectedFingerprint, actual)
+        details.noteIndex = noteIndex
+        raiseBridgeError(
+            "STALE_NOTE",
+            "The note changed after it was read; read the group again before writing",
+            details
+        )
     end
     return note
 end
@@ -3077,7 +3235,7 @@ local reloadRequested = nil
 local function resolveReloadScriptFile()
     local install = readJson(INSTALL_FILE)
     if isObject(install)
-        and install.schemaVersion == 1
+        and install.schemaVersion == 2
         and type(install.scriptFile) == "string" then
         local scriptFile = install.scriptFile
         if scriptFile:match("[/\\]SynthVAgentBridge%.lua$") and fileExists(scriptFile) then
@@ -3127,6 +3285,7 @@ end
 function handlers.ping(_payload)
     return {
         bridgeVersion = BRIDGE_VERSION,
+        executorBuildId = EXECUTOR_BUILD_ID,
         protocolVersion = PROTOCOL_VERSION,
         sessionToken = SESSION_TOKEN,
         projectFile = currentProjectFile(),
@@ -3145,6 +3304,7 @@ function handlers.reload_bridge(payload)
     return {
         reloading = true,
         bridgeVersion = BRIDGE_VERSION,
+        executorBuildId = EXECUTOR_BUILD_ID,
         sessionToken = SESSION_TOKEN,
         scriptFile = request.scriptFile
     }
@@ -3153,6 +3313,7 @@ end
 function handlers.get_host_info(_payload)
     return {
         bridgeVersion = BRIDGE_VERSION,
+        executorBuildId = EXECUTOR_BUILD_ID,
         protocolVersion = PROTOCOL_VERSION,
         host = copyHostInfo(),
         projectFile = currentProjectFile(),
@@ -7408,10 +7569,27 @@ function handlers.set_automation_points(payload)
     if clearMode == "all" then
         automation:removeAll()
     elseif clearMode == "range" then
-        automation:remove(rangeBegin, rangeEnd)
+        removeAutomationClosedRange(automation, rangeBegin, rangeEnd)
     end
     for index = 1, #prepared do
         automation:add(prepared[index].position, prepared[index].value)
+    end
+    local verified, verificationError = xpcall(function()
+        verifyPreparedAutomation(
+            automation,
+            clearMode,
+            rangeBegin,
+            rangeEnd,
+            prepared
+        )
+    end, function(errorValue)
+        return errorValue
+    end)
+    if not verified then
+        raiseUndoRequiredExecutionError(
+            "set_automation_points",
+            verificationError
+        )
     end
 
     local _sameAutomation, serialized = serializeAutomation(group, parameterName)
@@ -7463,9 +7641,23 @@ function handlers.clear_automation(payload)
 
     createUndoRecord(project)
     if rangeBegin then
-        automation:remove(rangeBegin, rangeEnd)
+        removeAutomationClosedRange(automation, rangeBegin, rangeEnd)
     else
         automation:removeAll()
+    end
+    local verified, verificationError = xpcall(function()
+        verifyPreparedAutomation(
+            automation,
+            rangeBegin and "range" or "all",
+            rangeBegin,
+            rangeEnd,
+            {}
+        )
+    end, function(errorValue)
+        return errorValue
+    end)
+    if not verified then
+        raiseUndoRequiredExecutionError("clear_automation", verificationError)
     end
 
     local _sameAutomation, serialized = serializeAutomation(group, parameterName)
@@ -7579,7 +7771,11 @@ function handlers.apply_group_tuning(payload)
         if update.clearMode == "all" then
             target:removeAll()
         elseif update.clearMode == "range" then
-            target:remove(update.rangeBegin, update.rangeEnd)
+            removeAutomationClosedRange(
+                target,
+                update.rangeBegin,
+                update.rangeEnd
+            )
         end
         for pointIndex = 1, #update.points do
             target:add(
@@ -7760,6 +7956,13 @@ function handlers.apply_group_tuning(payload)
         applyPreparedAutomation(
             preparedAutomations[index].automation,
             preparedAutomations[index]
+        )
+        verifyPreparedAutomation(
+            preparedAutomations[index].automation,
+            preparedAutomations[index].clearMode,
+            preparedAutomations[index].rangeBegin,
+            preparedAutomations[index].rangeEnd,
+            preparedAutomations[index].points
         )
     end
 
@@ -7968,6 +8171,7 @@ function handlers.get_track_mixer(payload)
     local _project, track, trackIndex = resolveTrack(payload)
     local result = serializeMixer(track)
     result.trackIndex = trackIndex
+    result.trackFingerprint = makeTrackFingerprint(track)
     result.trackName = track:getName()
     return result
 end
@@ -7975,17 +8179,45 @@ end
 function handlers.set_track_mixer(payload)
     payload = requireObject(payload, "payload")
     local project, track, trackIndex = resolveTrack(payload)
+    recordLuaStage("freshRead")
     validateTrackFingerprint(
         track,
         optionalString(payload.trackFingerprint, "trackFingerprint", false),
         trackIndex
     )
+    recordLuaStage("guarded")
     local gain = optionalNumber(payload.gainDecibel, "gainDecibel", -24, 24)
     local pan = optionalNumber(payload.pan, "pan", -1, 1)
     local muted = optionalBoolean(payload.muted, "muted")
     local solo = optionalBoolean(payload.solo, "solo")
     if gain == nil and pan == nil and muted == nil and solo == nil then
         raiseBridgeError("INVALID_ARGUMENT", "At least one mixer field must be supplied")
+    end
+
+    local before = serializeMixer(track)
+    local changedCount = 0
+    if gain ~= nil and not numbersMatch(before.gainDecibel, gain) then
+        changedCount = changedCount + 1
+    end
+    if pan ~= nil and not numbersMatch(before.pan, pan) then
+        changedCount = changedCount + 1
+    end
+    if muted ~= nil and before.muted ~= muted then
+        changedCount = changedCount + 1
+    end
+    if solo ~= nil and before.solo ~= solo then
+        changedCount = changedCount + 1
+    end
+    recordLuaStage("preflighted")
+    if changedCount == 0 then
+        before.trackIndex = trackIndex
+        before.trackName = track:getName()
+        before.changedCount = 0
+        before.alreadySatisfied = true
+        before.undoRecordCount = 0
+        before.verified = true
+        recordLuaStage("verified")
+        return before
     end
 
     createUndoRecord(project)
@@ -8002,10 +8234,39 @@ function handlers.set_track_mixer(payload)
     if solo ~= nil then
         mixer:setSolo(solo)
     end
+    recordLuaStage("mutated")
 
     local result = serializeMixer(track)
+    local verificationError = nil
+    if gain ~= nil and not numbersMatch(result.gainDecibel, gain) then
+        verificationError = "gainDecibel"
+    elseif pan ~= nil and not numbersMatch(result.pan, pan) then
+        verificationError = "pan"
+    elseif muted ~= nil and result.muted ~= muted then
+        verificationError = "muted"
+    elseif solo ~= nil and result.solo ~= solo then
+        verificationError = "solo"
+    end
+    if verificationError ~= nil then
+        raiseBridgeError(
+            "HOST_POSTCONDITION_FAILED",
+            "SynthV did not retain the requested mixer state",
+            {
+                action = "set_track_mixer",
+                field = verificationError,
+                partialWritePossible = true,
+                undoRequired = true,
+                undoGuidance =
+                    "Use SynthV Edit > Undo once before any retry, then reread the target."
+            }
+        )
+    end
     result.trackIndex = trackIndex
     result.trackName = track:getName()
+    result.changedCount = changedCount
+    result.undoRecordCount = 1
+    result.verified = true
+    recordLuaStage("verified")
     return result
 end
 
@@ -8589,13 +8850,37 @@ local function validateRequest(request)
             "id must be an 8-64 character base64url identifier"
         )
     end
+    local traceId = requireString(request.t, "t", false)
+    if not traceId:match("^[A-Za-z0-9_-]+$")
+        or #traceId < 8
+        or #traceId > 64 then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "t must be an 8-64 character base64url trace identifier"
+        )
+    end
     local action = requireString(request.a, "a", false)
     local payload = requireObject(request.p, "p")
     local handler = handlers[action]
     if not handler then
         raiseBridgeError("UNKNOWN_ACTION", "Unsupported bridge action", { action = action })
     end
-    return requestId, handler, payload, action
+    local expectedExecutorBuildId = requireString(request.b, "b", false)
+    local scriptDataWrite = action == "script_data"
+        and (payload.operation == "set" or payload.operation == "remove")
+    if expectedExecutorBuildId ~= EXECUTOR_BUILD_ID
+        and (PROJECT_WRITE_ACTIONS[action] or scriptDataWrite) then
+        raiseBridgeError(
+            "BUILD_MISMATCH",
+            "Node and SynthV executor builds do not match",
+            {
+                expectedExecutorBuildId = expectedExecutorBuildId,
+                actualExecutorBuildId = EXECUTOR_BUILD_ID,
+                requiredAction = "reinstall_or_reload_bridge"
+            }
+        )
+    end
+    return requestId, traceId, handler, payload, action
 end
 
 PROJECT_WRITE_ACTIONS = {
@@ -8654,8 +8939,10 @@ local function processRequestFile()
     end
 
     local requestId = "invalid-request"
+    local traceId = "invalid-trace"
     local processedAction = nil
     local processedPayload = nil
+    beginRequestTelemetry()
     local ok, resultOrError = xpcall(function()
         local raw, readError = readFile(PROCESSING_FILE)
         if raw == nil then
@@ -8672,16 +8959,37 @@ local function processRequestFile()
                 and type(requestOrError.requestId) == "string" then
                 requestId = requestOrError.requestId
             end
+            if type(requestOrError.t) == "string" then
+                traceId = requestOrError.t
+            end
         end
-        local validatedRequestId, handler, payload, action =
+        local validatedRequestId, validatedTraceId, handler, payload, action =
             validateRequest(requestOrError)
+        recordLuaStage("schema")
         requestId = validatedRequestId
+        traceId = validatedTraceId
         processedAction = action
         processedPayload = payload
         validateSharedGroupWriteSafety(action, payload)
-        return handler(payload)
+        local result = handler(payload)
+        local isScriptDataWrite = action == "script_data"
+            and (payload.operation == "set" or payload.operation == "remove")
+        if PROJECT_WRITE_ACTIONS[action] or isScriptDataWrite then
+            if currentRequestTelemetry ~= nil
+                and currentRequestTelemetry.seen.undoOpened then
+                recordLuaStage("mutated")
+            end
+            recordLuaStage("verified")
+        else
+            recordLuaStage("freshRead")
+        end
+        return result
     end, normalizeError)
 
+    if not ok then
+        recordLuaStage("failed")
+    end
+    local telemetry = finishRequestTelemetry()
     if ok then
         if not (processedPayload and processedPayload._sidebarPlanId)
             and (PROJECT_WRITE_ACTIONS[processedAction]
@@ -8691,10 +8999,11 @@ local function processRequestFile()
         then
             writeSidebarActivity(processedAction)
         end
-        writeResponse(requestId, true, resultOrError)
+        writeResponse(requestId, traceId, true, resultOrError, telemetry)
     else
-        writeResponse(requestId, false, resultOrError)
+        writeResponse(requestId, traceId, false, resultOrError, telemetry)
     end
+    currentRequestTelemetry = nil
     removeFile(PROCESSING_FILE)
     return true
 end
@@ -8791,7 +9100,7 @@ function getClientInfo()
         name = SCRIPT_NAME,
         author = "Pengjie Zhou",
         category = "SynthV Agent Bridge",
-        versionNumber = 5,
+        versionNumber = 6,
         minEditorVersion = MIN_EDITOR_VERSION
     }
 end

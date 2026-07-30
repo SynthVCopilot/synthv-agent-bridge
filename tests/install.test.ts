@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,8 +52,20 @@ test("core-only installation omits the optional sidebar without deleting one", a
       "utf8",
     ),
   ) as Record<string, unknown>;
-  assert.equal(installManifest.schemaVersion, 1);
-  assert.equal("protocolVersion" in installManifest, false);
+  assert.equal(installManifest.schemaVersion, 2);
+  assert.equal(installManifest.protocolVersion, 3);
+  assert.equal(installManifest.packageVersion, "0.2.0-alpha.1");
+  assert.equal(
+    installManifest.executorBuildId,
+    "sv3-lua-0.2.0-alpha.1-6",
+  );
+  assert.equal(typeof installManifest.installedFiles, "object");
+  assert.deepEqual(
+    (await readdir(installedDirectory)).filter((name) =>
+      name.startsWith(".v3-install-"),
+    ),
+    [],
+  );
   await assert.rejects(
     access(path.join(installedDirectory, "SynthVAgentSidebar.lua")),
     { code: "ENOENT" },
@@ -90,4 +110,52 @@ test("offline installation never claims that hot reload succeeded", async (conte
   assert.match(result.stdout, /Bridge is not currently connected/u);
   assert.doesNotMatch(result.stdout, /Hot reload updated the current session/u);
   assert.match(result.stdout, /Choose Scripts → Rescan/u);
+});
+
+test("an interrupted component replacement restores the complete prior set", async (context) => {
+  const fixture = await mkdtemp(path.join(os.tmpdir(), "synthv-install-test-"));
+  context.after(async () => rm(fixture, { recursive: true, force: true }));
+  const target = path.join(fixture, "scripts");
+  const installedDirectory = path.join(target, "SynthV Agent Bridge");
+  await mkdir(installedDirectory, { recursive: true });
+  const priorFiles = {
+    "SynthVAgentBridge.lua": "prior bridge\n",
+    "StopSynthVAgentBridge.lua": "prior stop\n",
+    "SynthVAgentSidebar.lua": "prior sidebar\n",
+  } as const;
+  await Promise.all(
+    Object.entries(priorFiles).map(([name, content]) =>
+      writeFile(path.join(installedDirectory, name), content, "utf8"),
+    ),
+  );
+  const installer = fileURLToPath(
+    new URL("../../scripts/install-synthv-bridge.mjs", import.meta.url),
+  );
+  const result = spawnSync(
+    process.execPath,
+    [installer, "--target", target, "--no-reload"],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        NODE_ENV: "test",
+        SYNTHV_AGENT_BRIDGE_DIR: path.join(fixture, "ipc"),
+        SYNTHV_AGENT_INSTALL_TEST_FAIL_AFTER_ACTIVATION: "1",
+      },
+    },
+  );
+
+  assert.notEqual(result.status, 0);
+  for (const [name, content] of Object.entries(priorFiles)) {
+    assert.equal(
+      await readFile(path.join(installedDirectory, name), "utf8"),
+      content,
+    );
+  }
+  assert.deepEqual(
+    (await readdir(installedDirectory)).filter((name) =>
+      name.startsWith(".v3-install-"),
+    ),
+    [],
+  );
 });

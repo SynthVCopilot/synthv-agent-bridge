@@ -2,6 +2,59 @@
 
 All notable changes will be documented in this file.
 
+## 0.2.0-alpha.1 - 2026-07-30
+
+### Breaking
+
+- Replaced the eight-tool MCP v2 surface with the six-tool v3 semantic Facade:
+  `sv_status`, `sv_describe`, `sv_query`, `sv_command`, `sv_ui`, and
+  `sv_review`.
+- Replaced file IPC protocol v2 with v3. There is no runtime compatibility
+  mode; Node, Lua, and the optional Sidebar must be upgraded as one build set.
+
+### Added
+
+- Typed `readOnly` and `writeIntent` Query Contexts.
+- Public Command outcomes `changed`, `alreadySatisfied`, and `failed`.
+- Redacted cross-layer traces, byte/timing measurements, and component Build
+  Identity with project-write coherence gating.
+- Strict numeric Lua command-stage telemetry and explicit bounded
+  `sv_status(operation="diagnostics")` support/debug projections; ordinary
+  status and command results do not include Trace history.
+- A bounded read Snapshot cache foundation that is not used for write
+  authorization and remains measurement-gated.
+- Fault-injectable Lua behavior tests for clone isolation, shared ownership,
+  stale Guards, no-op Undo behavior, Automation endpoints, aggregate Undo,
+  session invalidation, postcondition failures, and partial-write recovery.
+- Closed-range Automation postcondition verification and compact stale
+  fingerprint summaries.
+
+### Changed
+
+- `set_track_mixer` is the first write migrated through v3 no-op planning,
+  one-Undo mutation, and host readback verification.
+- A focused `get_track_mixer` write-intent read now carries a private Track
+  guard into a directly reusable `contextId`, avoiding a detour through
+  `list_tracks`.
+- The installer stages and verifies one component set and restores the prior
+  set if replacement fails.
+- Local source builds record the current Git commit at build time when no CI
+  build metadata is supplied; the running Bridge remains Git- and network-free.
+- Build metadata is generated explicitly by build, development, and typecheck
+  commands, so clean checkouts do not depend on npm lifecycle hooks or commit a
+  self-referential generated Git revision.
+- Hot reload now accepts the installer’s current schema-v2 manifest, including
+  hosts that cannot recover the running script path from Lua debug metadata.
+- Sidebar refresh failures now report the failing stage, keep the polling loop
+  alive, and retry WidgetValue updates instead of poisoning the displayed-value
+  cache after a transient host error.
+
+### Known alpha limits
+
+- Most detailed actions still run through private migration adapters behind the
+  v3 Facade.
+- Real SynthV working-copy acceptance remains required before stable `0.2.0`.
+
 ## Unreleased
 
 ### Added
@@ -24,7 +77,7 @@ All notable changes will be documented in this file.
 - A bundled, machine-readable Mandarin Twinkle Star guided Demo. The Agent
   offers it once after the first healthy connection, prints five concise stage
   headings, creates only an isolated 42-note non-main Group, pauses for the
-  required Vocal/Vocal Mode handoff, then uses the existing v2 actions to tune,
+  required Vocal/Vocal Mode handoff, then uses the internal actions to tune,
   verify, and loop the song without changing user-owned project material.
 - A one-time MCP first-use notice that tells the Agent to ask for the current
   singer's exact Vocal Mode names or a panel screenshot before Vocal Mode work,

@@ -69,7 +69,7 @@ test("GuardTokenStore reuses bindings and rejects a different scope", () => {
   );
 });
 
-test("GuardTokenStore can transfer a guard into a v2 context exactly once", () => {
+test("GuardTokenStore can transfer a guard into a v3 context exactly once", () => {
   const store = new GuardTokenStore();
   const binding = {
     kind: "note" as const,

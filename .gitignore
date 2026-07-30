@@ -11,3 +11,8 @@ Thumbs.db
 .idea/
 .mock-ipc/
 .mock-ipc-local/
+.claude/
+output/
+tmp/
+synthv-agent-bridge.sidebar.client-status.txt
+src/generated-build-metadata.ts

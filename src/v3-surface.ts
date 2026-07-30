@@ -8,17 +8,22 @@ import { z } from "zod";
 import { BridgeError, BridgeProtocolError, toPublicError } from "./errors.js";
 import type { GuardTokenStore } from "./guard-token-store.js";
 import {
-  V2ContextStore,
-  type V2ContextEntry,
-  type V2ContextTargetKind,
-} from "./v2-context-store.js";
+  V3ContextStore,
+  type V3ContextEntry,
+  type V3ContextMode,
+  type V3ContextTargetKind,
+} from "./v3-context-store.js";
+import { V3SnapshotCache } from "./v3-snapshot-cache.js";
+import {
+  commandOutcome,
+} from "./v3-command-kernel.js";
 
 type JsonRecord = Record<string, unknown>;
 type RegisterTool = McpServer["registerTool"];
 
 export type ActionToolDefinitions = ReadonlyMap<string, RegisteredTool>;
 
-const V2_INCLUDE_VALUES = [
+const V3_INCLUDE_VALUES = [
   "notes",
   "voice",
   "automation",
@@ -29,15 +34,15 @@ const V2_INCLUDE_VALUES = [
   "diagnostics",
 ] as const;
 
-type V2IncludeValue = (typeof V2_INCLUDE_VALUES)[number];
+type V3IncludeValue = (typeof V3_INCLUDE_VALUES)[number];
 
-const DEFAULT_PHRASE_INCLUDE: readonly V2IncludeValue[] = [
+const DEFAULT_PHRASE_INCLUDE: readonly V3IncludeValue[] = [
   "notes",
   "voice",
   "analysis",
 ];
 
-const V2_INCLUDE_VALUE_SET = new Set<string>(V2_INCLUDE_VALUES);
+const V3_INCLUDE_VALUE_SET = new Set<string>(V3_INCLUDE_VALUES);
 
 const EXPLICIT_DELETE_ACTIONS = new Set([
   "clear_automation",
@@ -405,10 +410,12 @@ function assertActionCategory(
 function contextEntry(
   sourceAction: string,
   root: JsonRecord,
+  mode: V3ContextMode,
+  sessionToken: string | undefined,
   noteFingerprints: ReadonlyMap<number, string> = new Map(),
   pitchControlFingerprints: ReadonlyMap<number, string> = new Map(),
   automationFingerprints: ReadonlyMap<string, string> = new Map(),
-): V2ContextEntry {
+): V3ContextEntry {
   const voice = optionalRecord(root.voice, "result.voice");
   const trackIndex = optionalInteger(root.trackIndex);
   const groupIndex = optionalInteger(root.groupIndex);
@@ -424,7 +431,7 @@ function contextEntry(
   const expectedFingerprint = optionalString(
     root.expectedFingerprint ?? root.fingerprint,
   );
-  const targetKind: V2ContextTargetKind =
+  const targetKind: V3ContextTargetKind =
     sourceAction === "get_time_axis" || sourceAction === "set_time_axis"
       ? "timeAxis"
       : sourceAction === "list_note_groups" ||
@@ -440,6 +447,8 @@ function contextEntry(
               ? "track"
               : "unknown";
   return {
+    mode,
+    ...(sessionToken === undefined ? {} : { sessionToken }),
     sourceAction,
     targetKind,
     ...(trackIndex === undefined ? {} : { trackIndex }),
@@ -559,7 +568,7 @@ function consumeAutomationGuards(
   return fingerprints;
 }
 
-function hasContextGuards(entry: V2ContextEntry): boolean {
+function hasContextGuards(entry: V3ContextEntry): boolean {
   return (
     entry.trackFingerprint !== undefined ||
     entry.referenceFingerprint !== undefined ||
@@ -573,8 +582,10 @@ function hasContextGuards(entry: V2ContextEntry): boolean {
 function addRootContext(
   sourceAction: string,
   root: JsonRecord,
-  contexts: V2ContextStore,
+  contexts: V3ContextStore,
   guardTokens: GuardTokenStore,
+  mode: V3ContextMode,
+  sessionToken: string | undefined,
 ): string | undefined {
   const noteFingerprints = consumeNoteGuards(root, root.notes, guardTokens);
   const pitchFingerprints = consumePitchGuards(root.pitchControls);
@@ -586,6 +597,8 @@ function addRootContext(
   const entry = contextEntry(
     sourceAction,
     root,
+    mode,
+    sessionToken,
     noteFingerprints,
     pitchFingerprints,
     automationFingerprints,
@@ -609,8 +622,10 @@ function addRootContext(
 function addNestedContexts(
   action: string,
   root: JsonRecord,
-  contexts: V2ContextStore,
+  contexts: V3ContextStore,
   guardTokens: GuardTokenStore,
+  mode: V3ContextMode = "writeIntent",
+  sessionToken?: string,
 ): void {
   if (action === "list_tracks" && Array.isArray(root.tracks)) {
     for (const value of root.tracks) {
@@ -619,6 +634,8 @@ function addNestedContexts(
         asRecord(value, "result.tracks[]"),
         contexts,
         guardTokens,
+        mode,
+        sessionToken,
       );
     }
     return;
@@ -630,6 +647,8 @@ function addNestedContexts(
         asRecord(value, "result.groups[]"),
         contexts,
         guardTokens,
+        mode,
+        sessionToken,
       );
     }
     return;
@@ -642,7 +661,14 @@ function addNestedContexts(
       if (trackIndex !== undefined) {
         group.trackIndex = trackIndex;
       }
-      addRootContext(action, group, contexts, guardTokens);
+      addRootContext(
+        action,
+        group,
+        contexts,
+        guardTokens,
+        mode,
+        sessionToken,
+      );
     }
     delete root.trackFingerprint;
     return;
@@ -659,6 +685,8 @@ function addNestedContexts(
         current,
         contexts,
         guardTokens,
+        mode,
+        sessionToken,
       );
       if (contextId !== undefined) {
         root.contextId = contextId;
@@ -670,7 +698,14 @@ function addNestedContexts(
     }
     return;
   }
-  addRootContext(action, root, contexts, guardTokens);
+  addRootContext(
+    action,
+    root,
+    contexts,
+    guardTokens,
+    mode,
+    sessionToken,
+  );
 }
 
 function stripDiagnostics(root: JsonRecord): void {
@@ -681,7 +716,7 @@ function stripDiagnostics(root: JsonRecord): void {
 
 function shouldStripDiagnostics(
   action: string,
-  include: readonly V2IncludeValue[] | undefined,
+  include: readonly V3IncludeValue[] | undefined,
   debug: boolean,
 ): boolean {
   return (
@@ -694,8 +729,8 @@ function shouldStripDiagnostics(
 }
 
 function sameIncludeSelection(
-  left: readonly V2IncludeValue[],
-  right: readonly V2IncludeValue[],
+  left: readonly V3IncludeValue[],
+  right: readonly V3IncludeValue[],
 ): boolean {
   const leftSet = new Set(left);
   const rightSet = new Set(right);
@@ -706,25 +741,25 @@ function sameIncludeSelection(
 }
 
 function normalizePhraseReadInclude(
-  topLevelInclude: readonly V2IncludeValue[] | undefined,
+  topLevelInclude: readonly V3IncludeValue[] | undefined,
   args: JsonRecord,
-): readonly V2IncludeValue[] {
+): readonly V3IncludeValue[] {
   const nestedValue = args.include;
   if (nestedValue === undefined) {
     return topLevelInclude ?? DEFAULT_PHRASE_INCLUDE;
   }
   if (!Array.isArray(nestedValue) || nestedValue.length > 8) {
     throw new BridgeProtocolError(
-      "get_phrase_context args.include must be an array of at most 8 projection names; prefer the top-level sv_read.include field",
+      "get_phrase_context args.include must be an array of at most 8 projection names; prefer the top-level sv_query.include field",
     );
   }
   const nestedInclude = nestedValue.map((value, index) => {
-    if (typeof value !== "string" || !V2_INCLUDE_VALUE_SET.has(value)) {
+    if (typeof value !== "string" || !V3_INCLUDE_VALUE_SET.has(value)) {
       throw new BridgeProtocolError(
-        `get_phrase_context args.include[${index}] is not a supported sv_read projection`,
+        `get_phrase_context args.include[${index}] is not a supported sv_query projection`,
       );
     }
-    return value as V2IncludeValue;
+    return value as V3IncludeValue;
   });
   delete args.include;
   if (
@@ -732,7 +767,7 @@ function normalizePhraseReadInclude(
     !sameIncludeSelection(topLevelInclude, nestedInclude)
   ) {
     throw new BridgeProtocolError(
-      "get_phrase_context include was supplied in both sv_read.include and args.include with different values; use the top-level sv_read.include field",
+      "get_phrase_context include was supplied in both sv_query.include and args.include with different values; use the top-level sv_query.include field",
     );
   }
   return topLevelInclude ?? nestedInclude;
@@ -740,14 +775,14 @@ function normalizePhraseReadInclude(
 
 function projectIncludes(
   root: JsonRecord,
-  include: readonly V2IncludeValue[] | undefined,
+  include: readonly V3IncludeValue[] | undefined,
 ): void {
   if (include === undefined) {
     return;
   }
   const selected = new Set(include);
   const fields: ReadonlyArray<
-    readonly [(typeof V2_INCLUDE_VALUES)[number], string]
+    readonly [(typeof V3_INCLUDE_VALUES)[number], string]
   > = [
     ["notes", "notes"],
     ["voice", "voice"],
@@ -922,7 +957,7 @@ function mergeContextField(
 function compatibleContextKinds(
   action: string,
   args: JsonRecord,
-): readonly V2ContextTargetKind[] {
+): readonly V3ContextTargetKind[] {
   if (action === "set_time_axis") {
     return ["timeAxis"];
   }
@@ -991,7 +1026,7 @@ function assertContextCompatible(
   action: string,
   args: JsonRecord,
   contextId: string,
-  context: V2ContextEntry,
+  context: V3ContextEntry,
 ): void {
   const accepted = compatibleContextKinds(action, args);
   if (
@@ -1018,7 +1053,8 @@ function expandContext(
   action: string,
   args: JsonRecord,
   contextId: string | undefined,
-  contexts: V2ContextStore,
+  contexts: V3ContextStore,
+  requiredMode?: V3ContextMode,
 ): JsonRecord {
   const result = { ...args };
   if (action === "add_notes" || action === "import_monophonic_score") {
@@ -1045,7 +1081,7 @@ function expandContext(
   if (contextId === undefined) {
     return result;
   }
-  const context = contexts.resolve(contextId);
+  const context = contexts.resolve(contextId, requiredMode);
   assertContextCompatible(action, result, contextId, context);
 
   if (action === "transform_notes" && result.target === "contextNotes") {
@@ -1319,7 +1355,7 @@ function expandContext(
   return result;
 }
 
-export const v2Testing = {
+export const v3Testing = {
   addNestedContexts,
   compactPhraseNotes,
   defaultReadFields,
@@ -1335,7 +1371,7 @@ export const v2Testing = {
 
 function expandTransactionContexts(
   args: JsonRecord,
-  contexts: V2ContextStore,
+  contexts: V3ContextStore,
 ): JsonRecord {
   if (!Array.isArray(args.steps)) {
     return args;
@@ -1356,7 +1392,13 @@ function expandTransactionContexts(
       delete cleanPayload.contextId;
       return {
         ...step,
-        payload: expandContext(action, cleanPayload, contextId, contexts),
+        payload: expandContext(
+          action,
+          cleanPayload,
+          contextId,
+          contexts,
+          "writeIntent",
+        ),
         contextId: undefined,
       };
     });
@@ -1373,43 +1415,20 @@ function expandTransactionContexts(
 function minimalWriteResult(
   action: string,
   value: unknown,
-  contexts: V2ContextStore,
+  contexts: V3ContextStore,
   guardTokens: GuardTokenStore,
+  sessionToken: string | undefined,
 ): JsonRecord {
   const root = asRecord(value, "result");
-  addNestedContexts(action, root, contexts, guardTokens);
-  const result: JsonRecord = { action };
-  let changed: number | undefined;
-  for (const [key, child] of Object.entries(root)) {
-    if (
-      changed === undefined &&
-      typeof child === "number" &&
-      /(?:added|changed|cleared|created|deleted|edited|removed|updated)Count$/u.test(
-        key,
-      )
-    ) {
-      changed = child;
-    }
-    if (
-      typeof child === "string" &&
-      /(?:Id|Uuid)$/u.test(key) &&
-      !/fingerprint/iu.test(key)
-    ) {
-      result[key] = child;
-    } else if (
-      typeof child === "number" &&
-      /(?:Index|TakeId)$/u.test(key)
-    ) {
-      result[key] = child;
-    } else if (key === "verified" && typeof child === "boolean") {
-      result.verified = child;
-    }
-  }
-  result.changed = changed ?? 1;
-  if (root.contextId !== undefined) {
-    result.contextId = root.contextId;
-  }
-  return result;
+  addNestedContexts(
+    action,
+    root,
+    contexts,
+    guardTokens,
+    "writeIntent",
+    sessionToken,
+  );
+  return commandOutcome(action, root);
 }
 
 function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
@@ -1456,7 +1475,7 @@ function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
     name === "transform_notes"
       ? "With a fresh phrase/note contextId, set args.target to contextNotes and omit notes and the Group locator; every guarded note in that exact read scope becomes a target. Alternatively supply note indices and omit fingerprints."
       : NOTE_ARRAY_FIELDS[name] !== undefined
-      ? "With sv_edit/sv_delete contextId, use item index or noteIndex and omit item fingerprints and the Group locator."
+      ? "With sv_command contextId, use item index or noteIndex and omit item fingerprints and the Group locator."
       : PITCH_ARRAY_FIELDS[name] !== undefined
         ? "With contextId from get_pitch_controls, use item index or pitchControlIndex and omit item fingerprints and the Group locator."
         : AUTOMATION_GUARD_ACTIONS.has(name)
@@ -1473,7 +1492,7 @@ function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
     ...(tool.title === undefined ? {} : { title: tool.title }),
     ...(tool.description === undefined ? {} : { description: tool.description }),
     inputSchema,
-    ...(contextHint === undefined ? {} : { v2Context: contextHint }),
+    ...(contextHint === undefined ? {} : { v3Context: contextHint }),
     category: EXPLICIT_DELETE_ACTIONS.has(name)
       ? "delete"
       : TRANSACTION_ACTIONS.has(name)
@@ -1516,7 +1535,7 @@ function catalog(definitions: ActionToolDefinitions): JsonRecord {
     categories[category]?.push(name);
   }
   return {
-    protocol: "mcp-v2",
+    protocol: "mcp-v3",
     indices: "1-based",
     categories,
     workflow:
@@ -1524,7 +1543,7 @@ function catalog(definitions: ActionToolDefinitions): JsonRecord {
   };
 }
 
-async function invokeV2(
+async function invokeV3(
   definitions: ActionToolDefinitions,
   action: string,
   args: JsonRecord,
@@ -1536,15 +1555,15 @@ async function invokeV2(
   }
 }
 
-export interface V2SessionChange {
+export interface V3SessionChange {
   readonly previousSessionToken: string;
   readonly currentSessionToken: string;
 }
 
-export class V2SessionTracker {
+export class V3SessionTracker {
   private sessionToken: string | undefined;
 
-  public observe(sessionToken: string | undefined): V2SessionChange | undefined {
+  public observe(sessionToken: string | undefined): V3SessionChange | undefined {
     if (sessionToken === undefined || sessionToken.length === 0) {
       return undefined;
     }
@@ -1589,27 +1608,29 @@ async function waitForSessionTokenChange(
   }
 }
 
-export function registerV2Surface(
+export function registerV3Surface(
   registerTool: RegisterTool,
   definitions: ActionToolDefinitions,
   guardTokens: GuardTokenStore,
   getSessionToken?: () => Promise<string | undefined>,
 ): void {
-  const contexts = new V2ContextStore();
-  const sessionTracker = new V2SessionTracker();
+  const contexts = new V3ContextStore();
+  const snapshots = new V3SnapshotCache();
+  const sessionTracker = new V3SessionTracker();
   const observeSessionToken = (
     sessionToken: string | undefined,
-  ): V2SessionChange | undefined => {
+  ): V3SessionChange | undefined => {
     const change = sessionTracker.observe(sessionToken);
     if (change !== undefined) {
       contexts.clear();
       guardTokens.clear();
+      snapshots.clear();
     }
     return change;
   };
-  const observeSession = async (): Promise<V2SessionChange | undefined> =>
+  const observeSession = async (): Promise<V3SessionChange | undefined> =>
     observeSessionToken(await getSessionToken?.());
-  const sessionChangedError = (change: V2SessionChange): BridgeError =>
+  const sessionChangedError = (change: V3SessionChange): BridgeError =>
     new BridgeError(
       "SynthV was restarted or the Bridge was reloaded. Cached contexts and Guard Tokens were cleared; read the target again before writing.",
       "SYNTHV_SESSION_CHANGED",
@@ -1619,7 +1640,7 @@ export function registerV2Surface(
         requiredAction: "read_target_again",
       },
     );
-  const sessionResetResult = (change: V2SessionChange): JsonRecord => ({
+  const sessionResetResult = (change: V3SessionChange): JsonRecord => ({
     code: "SYNTHV_SESSION_CHANGED",
     message:
       "SynthV restart or Bridge reload detected. Cached contexts and Guard Tokens were cleared; this read is fresh.",
@@ -1637,7 +1658,7 @@ export function registerV2Surface(
     .min(20)
     .max(128)
     .optional()
-    .describe("Fresh contextId returned by a v2 read.");
+    .describe("Fresh contextId returned by sv_query.");
 
   registerTool(
     "sv_status",
@@ -1661,7 +1682,7 @@ export function registerV2Surface(
       if (reloadPreviousSessionToken !== undefined) {
         observeSessionToken(reloadPreviousSessionToken);
       }
-      const result = await invokeV2(
+      const result = await invokeV3(
         definitions,
         STATUS_OPERATIONS[input.operation],
         {},
@@ -1735,7 +1756,10 @@ export function registerV2Surface(
         action: actionSchema,
         args: argsSchema,
         contextId: contextIdSchema,
-        include: z.array(z.enum(V2_INCLUDE_VALUES)).max(8).optional(),
+        contextMode: z
+          .enum(["readOnly", "writeIntent"])
+          .default("readOnly"),
+        include: z.array(z.enum(V3_INCLUDE_VALUES)).max(8).optional(),
         fields: z.array(z.string().min(1).max(100)).max(64).optional(),
         dense: z.enum(["auto", "never", "always"]).default("auto"),
         debug: z.boolean().default(false),
@@ -1792,7 +1816,14 @@ export function registerV2Surface(
         if (sessionChange !== undefined) {
           root.sessionReset = sessionResetResult(sessionChange);
         }
-        addNestedContexts(input.action, root, contexts, guardTokens);
+        addNestedContexts(
+          input.action,
+          root,
+          contexts,
+          guardTokens,
+          input.contextMode,
+          await getSessionToken?.(),
+        );
         if (input.action === "get_phrase_context") {
           projectIncludes(root, include);
           compactPhraseNotes(root);
@@ -1849,6 +1880,7 @@ export function registerV2Surface(
             { ...input.args },
             input.contextId,
             contexts,
+            "writeIntent",
           );
           if (
             input.action === "set_note_phoneme_properties" ||
@@ -1866,6 +1898,7 @@ export function registerV2Surface(
               readJsonResult(result),
               contexts,
               guardTokens,
+              await getSessionToken?.(),
             ),
           );
         } catch (error) {
@@ -1916,6 +1949,7 @@ export function registerV2Surface(
             readJsonResult(result),
             contexts,
             guardTokens,
+            await getSessionToken?.(),
           ),
         );
       } catch (error) {
@@ -1966,7 +2000,14 @@ export function registerV2Surface(
         if (sessionChange !== undefined) {
           root.sessionReset = sessionResetResult(sessionChange);
         }
-        addNestedContexts(input.action, root, contexts, guardTokens);
+        addNestedContexts(
+          input.action,
+          root,
+          contexts,
+          guardTokens,
+          "readOnly",
+          await getSessionToken?.(),
+        );
         stripDiagnostics(root);
         return jsonResult(root);
       } catch (error) {
@@ -2013,6 +2054,7 @@ export function registerV2Surface(
                     { ...payload },
                     input.contextId,
                     contexts,
+                    "writeIntent",
                   );
             args = {
               ...args,

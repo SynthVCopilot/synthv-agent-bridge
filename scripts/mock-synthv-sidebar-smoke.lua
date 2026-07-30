@@ -22,7 +22,7 @@ local now = os.time() * 1000
 writeFile(
     prefix .. ".status.json",
     string.format(
-        '{"state":"running","updatedAtEpochMs":%d,"bridgeVersion":"0.1.5"}\n',
+        '{"state":"running","updatedAtEpochMs":%d,"bridgeVersion":"0.2.0-alpha.1","executorBuildId":"sv3-lua-0.2.0-alpha.1-6"}\n',
         now
     )
 )
@@ -31,7 +31,7 @@ writeFile(
     table.concat({
         "synthv-agent-bridge-sidebar-client-status-v1",
         "state=running",
-        "version=0.1.5",
+        "version=0.2.0-alpha.1",
         "updatedAtEpochMs=" .. tostring(now),
         ""
     }, "\n")
@@ -46,13 +46,29 @@ writeFile(
     }, "\n")
 )
 
+local widgetCount = 0
+local failTaskStateOnce =
+    os.getenv("SIDEBAR_TEST_FAIL_TASK_STATE_ONCE") == "1"
+local failBridgeStatusOnce =
+    os.getenv("SIDEBAR_TEST_FAIL_BRIDGE_STATUS_ONCE") == "1"
+
 local function makeWidgetValue()
+    widgetCount = widgetCount + 1
+    local widgetIndex = widgetCount
     local widget = {
         value = "",
         enabled = true,
         callback = nil
     }
     function widget:setValue(value)
+        if failBridgeStatusOnce and widgetIndex == 1 then
+            failBridgeStatusOnce = false
+            error("simulated Bridge-status WidgetValue failure")
+        end
+        if failTaskStateOnce and widgetIndex == 3 then
+            failTaskStateOnce = false
+            error("simulated task-state WidgetValue failure")
+        end
         self.value = value
     end
     function widget:getValue()
@@ -145,20 +161,64 @@ function SV:refreshSidePanel() sidePanelRefreshCount = sidePanelRefreshCount + 1
 
 assert(loadfile(sidebarScript))()
 
+if os.getenv("SIDEBAR_TEST_FAIL_TASK_STATE_ONCE") == "1" then
+    local failedRuntime = readFile(prefix .. ".sidebar.runtime-status.txt")
+    assert(
+        failedRuntime:find("state=error", 1, true),
+        "refresh failure was not reported in runtime status"
+    )
+    assert(
+        failedRuntime:find("failureStage=taskState", 1, true),
+        "runtime status did not identify the failed refresh stage"
+    )
+    assert(scheduledCallback, "refresh failure stopped the sidebar poll")
+    local retry = scheduledCallback
+    scheduledCallback = nil
+    retry()
+    local recoveredRuntime = readFile(prefix .. ".sidebar.runtime-status.txt")
+    assert(
+        recoveredRuntime:find("state=running", 1, true),
+        "a successful retry did not restore running runtime status"
+    )
+    print("CASE:sidebar-refresh-failure-contained")
+end
+
+if os.getenv("SIDEBAR_TEST_FAIL_BRIDGE_STATUS_ONCE") == "1" then
+    local failedRuntime = readFile(prefix .. ".sidebar.runtime-status.txt")
+    assert(
+        failedRuntime:find("state=error", 1, true),
+        "Bridge-status failure was not reported in runtime status"
+    )
+    assert(
+        failedRuntime:find("failureStage=status", 1, true),
+        "runtime status did not identify the failed status stage"
+    )
+    assert(scheduledCallback, "Bridge-status failure stopped the sidebar poll")
+    local retry = scheduledCallback
+    scheduledCallback = nil
+    retry()
+    local recoveredRuntime = readFile(prefix .. ".sidebar.runtime-status.txt")
+    assert(
+        recoveredRuntime:find("state=running", 1, true),
+        "Bridge-status retry did not restore running runtime status"
+    )
+    print("CASE:sidebar-bridge-status-retried")
+end
+
 local clientInfo = getClientInfo()
 assert(clientInfo.type == "SidePanelSection", "side panel client type was not registered")
-assert(clientInfo.versionNumber == 5, "side panel version number was not updated")
+assert(clientInfo.versionNumber == 7, "side panel version number was not updated")
 
 local state = getSidePanelSectionState()
-assert(state.title:find("0.1.5", 1, true), "side panel title has no version")
+assert(state.title:find("0.2.0-alpha.1", 1, true), "side panel title has no version")
 assert(#state.rows == 4, "side panel did not start in compact mode")
 
 local bridgeStatusWidget = state.rows[2].columns[1].value
 local clientStatusWidget = state.rows[2].columns[2].value
 local taskStateWidget = state.rows[3].columns[1].value
 local diagnosticsWidget = state.rows[3].columns[2].value
-assert(bridgeStatusWidget.value:find("B 0.1.5", 1, true), "Bridge heartbeat was not displayed")
-assert(clientStatusWidget.value:find("M 0.1.5", 1, true), "MCP heartbeat was not displayed")
+assert(bridgeStatusWidget.value:find("B 0.2.0-alpha.1", 1, true), "Bridge heartbeat was not displayed")
+assert(clientStatusWidget.value:find("M 0.2.0-alpha.1", 1, true), "MCP heartbeat was not displayed")
 assert(taskStateWidget.value:find("Idle", 1, true), "task state was not displayed")
 diagnosticsWidget.callback()
 assert(lastMessage and lastMessage:find("IPC:", 1, true), "diagnostics did not show the IPC path")

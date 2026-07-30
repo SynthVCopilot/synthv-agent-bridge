@@ -59,7 +59,7 @@ test("doctor accepts a fresh MCP capability fingerprint", async () => {
       [
         "synthv-agent-bridge-sidebar-client-status-v1",
         "state=running",
-        "version=0.1.5",
+        "version=0.2.0-alpha.1",
         `buildFingerprint=${SERVER_BUILD_FINGERPRINT}`,
         `capabilityFingerprint=${SERVER_CAPABILITY_FINGERPRINT}`,
         `updatedAtEpochMs=${Date.now()}`,
@@ -91,7 +91,7 @@ test("doctor rejects a fresh MCP process from a different build", async () => {
       [
         "synthv-agent-bridge-sidebar-client-status-v1",
         "state=running",
-        "version=0.1.5",
+        "version=0.2.0-alpha.1",
         "buildFingerprint=stale-build",
         "capabilityFingerprint=stale-build",
         `updatedAtEpochMs=${Date.now()}`,

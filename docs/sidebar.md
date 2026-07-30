@@ -53,7 +53,7 @@ SynthV selection + typed instruction
         sidebar.command.txt
                  │ Node coordinator
                  ▼
- serialized FileIpcClient → protocol v2 → Lua Bridge
+ serialized FileIpcClient → protocol v3 → Lua Bridge
 ```
 
 `sidebar.preview.json` contains the complete Bridge action and payload. The

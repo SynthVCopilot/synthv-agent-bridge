@@ -49,7 +49,7 @@
   recommendation-only review targets.
 - Explicit complete-overlap or binary onset-only range scans, guarded phrase
   page cursors, and one-sweep multi-range phrase analysis with shared notes.
-- P4 default MCP v2 surface with eight domain tools, just-in-time action
+- Legacy P4 MCP v2 surface with eight domain tools, just-in-time action
   schemas, range-scoped `contextId` guards, phrase field projection, minimal
   write acknowledgements, and Dense rows for large note sets.
 - V2 note insertion automatically creates a reusable non-main group when the
@@ -85,14 +85,27 @@ The native side panel remains an optional compact review console. Future work
 is limited to stability, compatibility, and interaction fixes; it is not a
 performance roadmap or a second SynthV editing interface.
 
-## Next — durable recovery and advanced music analysis
+## Current — v3 alpha stabilization
+
+- Complete action migration behind the six-tool v3 Facade.
+- Finish real SynthV acceptance for the Mixer slice and high-risk clone,
+  note, Automation, Smart Pitch, and aggregate-tuning commands.
+- Complete the official API coverage matrix with one recorded disposition per
+  method family.
+- Keep Snapshot LRU disabled until traces prove repeated read projection is a
+  significant cost.
+- Remove private v2 migration adapters before stable `0.2.0`.
+
+See [v3 development plan](v3-development-plan.md).
+
+## Later — durable recovery and advanced music analysis
 
 - Durable rollback metadata with explicit project-revision checks.
 - Shared-value/override compression and richer cross-object batch operations.
 - Harmony voicing beyond fixed intervals, pronunciation diagnostics, and
   configurable humanization/expression profiles.
 
-## Later
+## Longer term
 
 - Render-and-analyze feedback loops.
 - Optional remote transport with authentication.

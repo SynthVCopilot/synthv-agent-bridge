@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 
 import { BridgeError, BridgeProtocolError } from "./errors.js";
 
-export type V2ContextTargetKind =
+export type V3ContextTargetKind =
   | "automation"
   | "group"
   | "libraryGroup"
@@ -10,9 +10,13 @@ export type V2ContextTargetKind =
   | "track"
   | "unknown";
 
-export interface V2ContextEntry {
+export type V3ContextMode = "readOnly" | "writeIntent";
+
+export interface V3ContextEntry {
+  readonly mode?: V3ContextMode;
+  readonly sessionToken?: string;
   readonly sourceAction?: string;
-  readonly targetKind?: V2ContextTargetKind;
+  readonly targetKind?: V3ContextTargetKind;
   readonly trackIndex?: number;
   readonly groupIndex?: number;
   readonly groupUuid?: string;
@@ -25,20 +29,21 @@ export interface V2ContextEntry {
   readonly automationFingerprints: ReadonlyMap<string, string>;
 }
 
-interface StoredV2Context extends V2ContextEntry {
+interface StoredV3Context extends V3ContextEntry {
+  readonly mode: V3ContextMode;
   readonly token: string;
   readonly weight: number;
 }
 
 function requireToken(value: string): string {
   if (!/^ctx_[A-Za-z0-9_-]{16,}$/u.test(value)) {
-    throw new BridgeProtocolError("contextId must be a valid v2 context handle");
+    throw new BridgeProtocolError("contextId must be a valid v3 context handle");
   }
   return value;
 }
 
-export class V2ContextStore {
-  private readonly entries = new Map<string, StoredV2Context>();
+export class V3ContextStore {
+  private readonly entries = new Map<string, StoredV3Context>();
   private totalWeight = 0;
 
   public constructor(
@@ -55,7 +60,7 @@ export class V2ContextStore {
     }
   }
 
-  public issue(entry: V2ContextEntry): string {
+  public issue(entry: V3ContextEntry): string {
     let token: string;
     do {
       token = `ctx_${randomBytes(16).toString("base64url")}`;
@@ -66,7 +71,12 @@ export class V2ContextStore {
       entry.noteFingerprints.size +
       entry.pitchControlFingerprints.size +
       entry.automationFingerprints.size;
-    this.entries.set(token, { ...entry, token, weight });
+    this.entries.set(token, {
+      ...entry,
+      mode: entry.mode ?? "writeIntent",
+      token,
+      weight,
+    });
     this.totalWeight += weight;
     while (
       this.entries.size > this.maximumEntries ||
@@ -83,13 +93,23 @@ export class V2ContextStore {
     return token;
   }
 
-  public resolve(token: string): V2ContextEntry {
+  public resolve(
+    token: string,
+    requiredMode?: V3ContextMode,
+  ): V3ContextEntry {
     const normalized = requireToken(token);
     const entry = this.entries.get(normalized);
     if (entry === undefined) {
       throw new BridgeError(
-        "The v2 context is unknown or expired; read the target again.",
+        "The v3 context is unknown or expired; query the target again.",
         "UNKNOWN_CONTEXT",
+        { contextId: normalized },
+      );
+    }
+    if (requiredMode === "writeIntent" && entry.mode !== "writeIntent") {
+      throw new BridgeError(
+        "This context is read-only; query the target again with contextMode=writeIntent.",
+        "CONTEXT_NOT_WRITE_CAPABLE",
         { contextId: normalized },
       );
     }

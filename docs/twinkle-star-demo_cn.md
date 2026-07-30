@@ -46,7 +46,7 @@ Codex 在每个阶段开始前打印一个简短小标题：
 5. Codex 重新读取 Demo Group，只把用户提供的准确唱法名称映射到模板中的
    温柔、明亮、童真风格；同时读取当前 Automation `definition.range`，
    再通过一个 `apply_group_tuning` 批次完成调音。模板会把 `automation`
-   和 `pitchAnalysis` 放进顶层 `sv_read.include` 投影，确保新鲜 Guard
+   和 `pitchAnalysis` 放进顶层 `sv_query.include` 投影，确保新鲜 Guard
    保留在 Context 中。
 6. Codex 回读整个 Demo Group，确认 42 个音符、5 处明确乐句间隙、
    0 个重叠、唱法和音素保持、5 条自动化曲线存在，然后开始循环播放。
@@ -76,5 +76,5 @@ Codex 在每个阶段开始前打印一个简短小标题：
 - 受保护的最新读取、一个撤销记录内的一次完整预检调音批次、写后验证和
   循环播放
 
-Demo 使用的就是日常调音所用的八个 MCP 工具和内部动作，因此成功运行
+Demo 使用的就是日常调音所用的六个 MCP v3 工具和内部动作，因此成功运行
 可以真实验证完整工作流。

@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { GuardTokenStore } from "../src/guard-token-store.js";
-import { V2ContextStore } from "../src/v2-context-store.js";
-import { V2SessionTracker, v2Testing } from "../src/v2-surface.js";
+import { V3ContextStore as V2ContextStore } from "../src/v3-context-store.js";
+import {
+  V3SessionTracker as V2SessionTracker,
+  v3Testing as v2Testing,
+} from "../src/v3-surface.js";
 
 const GROUP_UUID = "8ab8ba75-f776-402b-a8bb-ee1f64bcf95e";
 
-test("v2 context expands one scope guard across a batch note edit", () => {
+test("v3 context expands one scope guard across a batch note edit", () => {
   const contexts = new V2ContextStore();
   const contextId = contexts.issue({
     sourceAction: "get_track_notes",
@@ -45,7 +48,7 @@ test("v2 context expands one scope guard across a batch note edit", () => {
   ]);
 });
 
-test("v2 context refuses a note missing from the original read", () => {
+test("v3 context refuses a note missing from the original read", () => {
   const contexts = new V2ContextStore();
   const contextId = contexts.issue({
     sourceAction: "get_track_notes",
@@ -69,7 +72,7 @@ test("v2 context refuses a note missing from the original read", () => {
   );
 });
 
-test("v2 context expands one same-Group tuning batch", () => {
+test("v3 context expands one same-Group tuning batch", () => {
   const contexts = new V2ContextStore();
   const contextId = contexts.issue({
     sourceAction: "get_phrase_context",
@@ -137,7 +140,7 @@ test("v2 context expands one same-Group tuning batch", () => {
   ]);
 });
 
-test("v2 expands every guarded context note for one deterministic transform", () => {
+test("v3 expands every guarded context note for one deterministic transform", () => {
   const contexts = new V2ContextStore();
   const contextId = contexts.issue({
     sourceAction: "get_track_notes",
@@ -174,7 +177,7 @@ test("v2 expands every guarded context note for one deterministic transform", ()
   ]);
 });
 
-test("v2 context-note transforms reject ambiguous or missing context targets", () => {
+test("v3 context-note transforms reject ambiguous or missing context targets", () => {
   const contexts = new V2ContextStore();
   const contextId = contexts.issue({
     sourceAction: "get_track_notes",
@@ -215,7 +218,7 @@ test("v2 context-note transforms reject ambiguous or missing context targets", (
   );
 });
 
-test("v2 note insertion ensures an editable non-main group by default", () => {
+test("v3 note insertion ensures an editable non-main group by default", () => {
   const contexts = new V2ContextStore();
   const automatic = v2Testing.expandContext(
     "add_notes",
@@ -252,7 +255,7 @@ test("v2 note insertion ensures an editable non-main group by default", () => {
   assert.equal(scoreImport.grouping, "ensureNonMain");
 });
 
-test("v2 score import inherits only the target Group locator from context", () => {
+test("v3 score import inherits only the target Group locator from context", () => {
   const contexts = new V2ContextStore();
   const contextId = contexts.issue({
     sourceAction: "get_track_notes",
@@ -337,6 +340,33 @@ test("locator-only reads do not mint write-capable contexts", () => {
   );
 
   assert.equal(result.contextId, undefined);
+});
+
+test("focused mixer guards mint a scoped writeIntent Context without exposing the guard", () => {
+  const contexts = new V2ContextStore();
+  const result: Record<string, unknown> = {
+    trackIndex: 2,
+    trackName: "Lead",
+    trackFingerprint: "main-group:private-track-uuid",
+    gainDecibel: 0,
+  };
+
+  v2Testing.addNestedContexts(
+    "get_track_mixer",
+    result,
+    contexts,
+    new GuardTokenStore(),
+    "writeIntent",
+    "session-a",
+  );
+
+  assert.equal(typeof result.contextId, "string");
+  assert.equal(result.trackFingerprint, undefined);
+  const context = contexts.resolve(result.contextId as string, "writeIntent");
+  assert.equal(context.targetKind, "track");
+  assert.equal(context.trackIndex, 2);
+  assert.equal(context.trackFingerprint, "main-group:private-track-uuid");
+  assert.equal(context.sessionToken, "session-a");
 });
 
 test("contextId rejects explicit scope conflicts and incompatible targets", () => {
@@ -532,7 +562,7 @@ test("track contexts locate track reads without becoming Group contexts", () => 
   );
 });
 
-test("v2 Group Voice refresh defaults to a compact write-ready projection", () => {
+test("v3 Group Voice refresh defaults to a compact write-ready projection", () => {
   assert.deepEqual(v2Testing.defaultReadFields("get_group_voice"), [
     "trackIndex",
     "groupIndex",
@@ -565,7 +595,7 @@ test("v2 Group Voice refresh defaults to a compact write-ready projection", () =
   assert.ok(JSON.stringify(projected).length < 220);
 });
 
-test("v2 context store evicts by total guard weight", () => {
+test("v3 context store evicts by total guard weight", () => {
   const contexts = new V2ContextStore(10, 3);
   const first = contexts.issue({
     noteFingerprints: new Map([
@@ -643,7 +673,7 @@ test("reload waiting observes a delayed SynthV session token", async () => {
   assert.equal(unchanged, undefined);
 });
 
-test("v2 phrase reads promote nested include projections before Guard capture", () => {
+test("v3 phrase reads promote nested include projections before Guard capture", () => {
   const args: Record<string, unknown> = {
     include: [
       "notes",
@@ -682,14 +712,14 @@ test("v2 phrase reads promote nested include projections before Guard capture", 
   assert.equal(args.pitchAnalysisFrames, 168);
 });
 
-test("v2 phrase reads reject conflicting include locations", () => {
+test("v3 phrase reads reject conflicting include locations", () => {
   assert.throws(
     () =>
       v2Testing.normalizePhraseReadInclude(
         ["notes", "voice", "automation"],
         { include: ["notes", "voice", "pitchAnalysis"] },
       ),
-    /supplied in both sv_read\.include and args\.include with different values/u,
+    /supplied in both sv_query\.include and args\.include with different values/u,
   );
 
   const duplicateArgs: Record<string, unknown> = {
@@ -728,7 +758,7 @@ test("explicit phrase diagnostics survive the default non-debug projection", () 
   );
 });
 
-test("v2 phrase projection removes unused sections and redundant note fields", () => {
+test("v3 phrase projection removes unused sections and redundant note fields", () => {
   const result = {
     notes: [
       {
@@ -764,7 +794,7 @@ test("v2 phrase projection removes unused sections and redundant note fields", (
   assert.equal(note.onset, 10);
 });
 
-test("v2 dense rows preserve every note field", () => {
+test("v3 dense rows preserve every note field", () => {
   const notes = Array.from({ length: 24 }, (_, index) => ({
     noteIndex: index + 1,
     lyrics: `词${index + 1}`,
