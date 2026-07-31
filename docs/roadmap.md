@@ -94,8 +94,8 @@ performance roadmap or a second SynthV editing interface.
 - Keep the seven native-risk clone/transaction/harmony paths explicitly
   experimental and disabled until a future repetition matrix proves them safe.
 - Preserve the completed Stage 3 read/reload/concurrency, reduced-capability,
-  and tracing A/B evidence; finish the write/Undo and four-hour stability
-  matrix.
+  tracing A/B, write/Undo, and listening evidence; pass the user-approved
+  one-hour synchronized soak and settled-resource gates.
 - Keep Snapshot LRU disabled until traces prove repeated read projection is a
   significant cost.
 - Make the evidence-based full stable, reduced stable, or remain-Alpha decision.

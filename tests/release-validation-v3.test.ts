@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import test from "node:test";
 
 import {
@@ -10,6 +11,8 @@ import {
   createStage3WritePlan,
   runStage3ReadValidation,
 } from "../src/release-validation-v3.js";
+
+const absoluteTestProject = path.resolve("test.svp");
 
 test("Stage 3 read plan schedules exactly 1,000 calls across all 17 Query actions", () => {
   const plan = createStage3ReadPlan(1_000);
@@ -85,10 +88,10 @@ test("Stage 3 write/Undo driver has one reversible fixture for every verified wr
   assert.match(visibleUndoSource, /verified as the foreground window before visible Undo/u);
 });
 
-test("Stage 3 four-hour soak keeps writes, reads, reloads, and idle time in one run", () => {
+test("Stage 3 one-hour soak synchronizes writes, resources, reloads, and idle time", () => {
   const source = readFileSync("scripts/stage3-four-hour-soak.ps1", "utf8");
 
-  assert.match(source, /\[double\]\$DurationHours = 4/u);
+  assert.match(source, /\[double\]\$DurationHours = 1/u);
   assert.match(source, /\[int\]\$WriteCount = 200/u);
   assert.match(source, /"--iterations", "17"/u);
   assert.match(source, /"--mode", "reload"/u);
@@ -101,6 +104,11 @@ test("Stage 3 four-hour soak keeps writes, reads, reloads, and idle time in one 
   assert.match(source, /\$reloadCount -ne \$expectedReloadCount/u);
   assert.match(source, /\[switch\]\$Resume/u);
   assert.match(source, /recoveredAfterInterruption/u);
+  assert.match(source, /\[switch\]\$RequireResourceCheckpoints/u);
+  assert.match(source, /Wait-ResourceMonitorStart/u);
+  assert.match(source, /Wait-ResourceCheckpoint \$index/u);
+  assert.match(source, /event = "resourceCheckpoint"/u);
+  assert.match(source, /\$deadline\.AddSeconds\(-\$ResourceBatchSettleSeconds\)/u);
 });
 
 test("Stage 3 resource monitor samples settled and post-batch host state", () => {
@@ -123,6 +131,20 @@ test("Stage 3 resource monitor samples settled and post-batch host state", () =>
   assert.match(source, /workingSetMonotonicGrowth/u);
   assert.match(source, /privateMonotonicGrowth/u);
   assert.match(source, /\[switch\]\$Resume/u);
+  assert.match(source, /advanced beyond resource checkpoint/u);
+  assert.match(source, /refusing to fabricate a historical settled sample/u);
+});
+
+test("Stage 3 resource quiescence regression rejects samples crossed by later writes", () => {
+  const source = readFileSync(
+    "scripts/stage3-resource-quiescence-regression.ps1",
+    "utf8",
+  );
+
+  assert.match(source, /laterDestructiveCycle/u);
+  assert.match(source, /batchSampleCount/u);
+  assert.match(source, /quiescenceViolationCount/u);
+  assert.match(source, /ExpectedBatchCount = 10/u);
 });
 
 test("release validation CLI dry-run emits a redacted plan without connecting to SynthV", () => {
@@ -158,7 +180,7 @@ test("release validation CLI refuses the full read matrix before Stage 2 acknowl
       "scripts/release-validation-v3.mjs",
       "--live",
       "--project-file",
-      "D:\\Projects\\sv\\test.svp",
+      absoluteTestProject,
       "--track-index",
       "1",
       "--group-index",
@@ -218,7 +240,7 @@ test("Stage 3 stability CLI refuses formal live counts before Stage 2 acknowledg
       "--mode",
       "concurrency",
       "--project-file",
-      "D:\\Projects\\sv\\test.svp",
+      absoluteTestProject,
       "--track-index",
       "1",
       "--group-index",

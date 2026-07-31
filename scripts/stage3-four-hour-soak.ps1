@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$ProjectFile,
-    [double]$DurationHours = 4,
+    [double]$DurationHours = 1,
     [int]$TrackIndex = 1,
     [int]$GroupIndex = 2,
     [int]$NoteIndex = 1,
@@ -19,6 +19,17 @@ param(
         [IO.Path]::GetTempPath(),
         "synthv-agent-stage3-four-hour-soak-result.json"
     ),
+    [string]$ResourceLogFile = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        "synthv-agent-stage3-resource-monitor.jsonl"
+    ),
+    [string]$ResourceResultFile = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        "synthv-agent-stage3-resource-monitor-result.json"
+    ),
+    [int]$ResourceBatchSettleSeconds = 60,
+    [int]$ResourceCheckpointTimeoutSeconds = 180,
+    [switch]$RequireResourceCheckpoints,
     [switch]$Resume,
     [switch]$OverrideDurationOnResume
 )
@@ -68,6 +79,72 @@ function Invoke-JsonCommand {
     }
 }
 
+function Get-ResourceEvents {
+    if (-not (Test-Path -LiteralPath $ResourceLogFile)) {
+        return @()
+    }
+    $events = @()
+    foreach ($line in @(Get-Content -LiteralPath $ResourceLogFile -Encoding UTF8)) {
+        try {
+            $events += ($line | ConvertFrom-Json)
+        } catch {
+            # The independent monitor may still be appending its current line.
+        }
+    }
+    return @($events)
+}
+
+function Assert-ResourceMonitorHealthy {
+    if (Test-Path -LiteralPath $ResourceResultFile) {
+        $resourceResult = Get-Content -LiteralPath $ResourceResultFile -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+        if ([string]$resourceResult.outcome -ne "passed") {
+            throw "The independent Stage 3 resource monitor has failed."
+        }
+    }
+}
+
+function Wait-ResourceMonitorStart {
+    $timeoutAt = [DateTimeOffset]::UtcNow.AddSeconds($ResourceCheckpointTimeoutSeconds)
+    while ([DateTimeOffset]::UtcNow -lt $timeoutAt) {
+        $start = Get-ResourceEvents | Where-Object {
+            $_.event -eq "start" -and
+            [int]$_.soakProcessId -eq $PID -and
+            [int]$_.batchSettleSeconds -eq $ResourceBatchSettleSeconds
+        } | Select-Object -Last 1
+        if ($null -ne $start) {
+            return
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "The Stage 3 resource monitor did not attach with matching settle settings."
+}
+
+function Wait-ResourceCheckpoint {
+    param([int]$CycleIndex)
+    $timeoutAt = [DateTimeOffset]::UtcNow.AddSeconds($ResourceCheckpointTimeoutSeconds)
+    while ([DateTimeOffset]::UtcNow -lt $timeoutAt) {
+        Assert-ResourceMonitorHealthy
+        $sample = Get-ResourceEvents | Where-Object {
+            $_.event -eq "sample" -and
+            $_.kind -eq "batch" -and
+            [int]$_.cycleIndex -eq $CycleIndex -and
+            [DateTimeOffset]::Parse([string]$_.timestamp) -ge $startedAt
+        } | Select-Object -Last 1
+        if ($null -ne $sample) {
+            Write-JsonLine ([pscustomobject]@{
+                event = "resourceCheckpoint"
+                timestamp = [DateTimeOffset]::UtcNow.ToString("o")
+                index = $CycleIndex
+                sampleTimestamp = $sample.timestamp
+            })
+            return
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "Resource checkpoint $CycleIndex was not captured before the timeout."
+}
+
 if (-not [IO.Path]::IsPathRooted($ProjectFile)) {
     throw "ProjectFile must be an absolute path."
 }
@@ -77,12 +154,21 @@ if ($DurationHours -le 0 -or $WriteCount -lt 1 -or $WriteCount -gt 200) {
 if ($ReloadEvery -lt 1) {
     throw "ReloadEvery must be positive."
 }
+if ($ResourceBatchSettleSeconds -lt 10 -or $ResourceBatchSettleSeconds -ge 180) {
+    throw "ResourceBatchSettleSeconds must be between 10 and 179."
+}
+if ($ResourceCheckpointTimeoutSeconds -le $ResourceBatchSettleSeconds) {
+    throw "ResourceCheckpointTimeoutSeconds must exceed ResourceBatchSettleSeconds."
+}
+if ($RequireResourceCheckpoints -and $WriteCount -ne 200) {
+    throw "The release resource gate requires exactly 200 writes and 10 checkpoints."
+}
 
 Set-Location $repoRoot
 $priorLastCycle = $null
 if ($Resume) {
     if (-not (Test-Path -LiteralPath $LogFile)) {
-        throw "Resume requires the existing four-hour soak log."
+        throw "Resume requires the existing Stage 3 soak log."
     }
     $priorEvents = @(Get-Content -LiteralPath $LogFile | ForEach-Object {
         $_ | ConvertFrom-Json
@@ -134,13 +220,16 @@ if ($Resume) {
 [void][Stage3SoakPower]::SetThreadExecutionState([uint32]2147483651)
 
 try {
+    if ($RequireResourceCheckpoints) {
+        Wait-ResourceMonitorStart
+    }
     $initial = Invoke-JsonCommand "node" @(
         $writeDriver,
         "--mode", "status",
         "--state-file", $StateFile
     )
     if ($null -ne $initial.pending -or [int]$initial.linkedCloneCount -ne 0) {
-        throw "Four-hour soak requires a clean runtime state with no linked-clone cycles."
+        throw "Stage 3 soak requires a clean runtime state with no linked-clone cycles."
     }
 
     if ($Resume) {
@@ -209,10 +298,13 @@ try {
                 reloaded = $reloaded
                 recoveredAfterInterruption = $true
             })
+            if ($RequireResourceCheckpoints -and ($completedWrites % 20) -eq 0) {
+                Wait-ResourceCheckpoint $completedWrites
+            }
         }
     } else {
         if ([int]$initial.ordinaryCompletedCount -ne 0) {
-            throw "Four-hour soak requires a freshly prepared runtime state."
+            throw "Stage 3 soak requires a freshly prepared runtime state."
         }
         Write-JsonLine ([pscustomobject]@{
             event = "start"
@@ -278,9 +370,19 @@ try {
             reloaded = $reloaded
         })
 
-        $scheduledNext = $startedAt.AddTicks(
-            [long](($deadline - $startedAt).Ticks * $index / $WriteCount)
-        )
+        if ($RequireResourceCheckpoints -and ($index % 20) -eq 0) {
+            Wait-ResourceCheckpoint $index
+        }
+
+        $scheduledDeadline = if ($RequireResourceCheckpoints) {
+            $deadline.AddSeconds(-$ResourceBatchSettleSeconds)
+        } else { $deadline }
+        if ($scheduledDeadline -le $startedAt) {
+            throw "The soak duration is too short for the final resource checkpoint."
+        }
+        $scheduledNext = $startedAt.AddTicks([long](
+            ($scheduledDeadline - $startedAt).Ticks * $index / $WriteCount
+        ))
         while ([DateTimeOffset]::UtcNow -lt $scheduledNext) {
             $remaining = ($scheduledNext - [DateTimeOffset]::UtcNow).TotalSeconds
             Start-Sleep -Seconds ([Math]::Max(1, [Math]::Min(30, [Math]::Floor($remaining))))

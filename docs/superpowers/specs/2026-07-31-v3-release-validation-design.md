@@ -263,14 +263,16 @@ requiring visible SynthV Undo; the official scripting API cannot execute Undo.
 - 30 Bridge reloads and 30 Session-invalidation checks.
 - 200 concurrent Node requests, verifying serialized single-writer IPC and no
   request loss or overlap.
-- At least four continuous hours of mixed read, write, Undo, reload, and idle
+- At least one continuous hour of mixed read, write, Undo, reload, and idle
   heartbeat operation.
 
-Run `validate:v3-resources` as a read-only companion to the four-hour soak,
+Run `validate:v3-resources` as a read-only companion to the one-hour soak,
 passing the independent soak PowerShell process ID. It samples the visible
 SynthV process and Bridge status every minute, records an additional settled
-sample 60 seconds after every 20-write/reload batch, and fails unless all ten batches and
-at least five settled-baseline samples are present. Each post-batch and final
+sample 60 seconds after every 20-write/reload batch while the soak holds that
+checkpoint and performs no later destructive cycle. The soak may proceed only
+after the matching sample is recorded. The gate fails unless all ten batches
+and at least five settled-baseline samples are present. Each post-batch and final
 working-set/private-byte sample must be within 120% of the settled median;
 neither ten-sample batch series may grow monotonically;
 heartbeat age must remain within 5 seconds and no processing/control marker may
@@ -281,9 +283,9 @@ The monitor records cold-start samples for diagnosis, but by default only
 regular samples taken after at least 10 completed writes are eligible for the
 five-sample settled baseline. This enforces the Stage 3 "after warm-up"
 criterion instead of comparing a loaded Voice/render working set against an
-unloaded process. Batch discovery uses the greatest completed multiple of 20,
-so restarting only the read-only monitor after an interruption cannot silently
-miss a batch that completed between polling intervals.
+unloaded process. Batch checkpoints are consumed in exact increments of 20;
+advancing past a pending checkpoint or resuming after an unobserved checkpoint
+fails closed instead of fabricating a historical settled sample.
 
 For a reduced-stable candidate, an action disabled at the public boundary must
 not be re-enabled merely to satisfy the historical native-host repetition

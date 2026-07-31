@@ -235,12 +235,25 @@ while (
     $now = [DateTimeOffset]::UtcNow
     $progress = Get-SoakProgress
     $completedBatchIndex = Get-CompletedBatchIndex $progress.index
+    if ($pendingBatchIndex -gt 0 -and $progress.index -gt $pendingBatchIndex) {
+        throw (
+            "The soak advanced beyond resource checkpoint $pendingBatchIndex " +
+            "before its settled sample was captured."
+        )
+    }
     if (
         $completedBatchIndex -gt 0 -and
         $completedBatchIndex -gt $lastBatchIndex -and
         $completedBatchIndex -gt $pendingBatchIndex
     ) {
-        $pendingBatchIndex = $completedBatchIndex
+        $nextBatchIndex = $lastBatchIndex + 20
+        if ($completedBatchIndex -ne $nextBatchIndex) {
+            throw (
+                "Resource monitoring missed checkpoint $nextBatchIndex; " +
+                "refusing to fabricate a historical settled sample."
+            )
+        }
+        $pendingBatchIndex = $nextBatchIndex
         $pendingBatchReloads = $progress.reloads
         $pendingBatchDue = $now.AddSeconds($BatchSettleSeconds)
     }
@@ -274,6 +287,16 @@ if (
     $completedBatchIndex -gt 0 -and
     $completedBatchIndex -gt $lastBatchIndex
 ) {
+    $nextBatchIndex = $lastBatchIndex + 20
+    if (
+        $completedBatchIndex -ne $nextBatchIndex -or
+        $progress.index -ne $nextBatchIndex
+    ) {
+        throw (
+            "The soak ended without a quiescent resource checkpoint at " +
+            "$nextBatchIndex."
+        )
+    }
     Start-Sleep -Seconds $BatchSettleSeconds
     $batchSample = Get-ResourceSample "batch" $completedBatchIndex $progress.reloads
     $samples.Add($batchSample)

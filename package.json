@@ -35,6 +35,7 @@
     "validate:v3-write-undo-loop": "npm run build && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stage3-visible-undo-loop.ps1",
     "validate:v3-soak": "npm run build && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stage3-four-hour-soak.ps1",
     "validate:v3-resources": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stage3-resource-monitor.ps1",
+    "validate:v3-resource-quiescence": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stage3-resource-quiescence-regression.ps1",
     "start": "node dist/src/cli.js",
     "inspector": "npm run build && npx @modelcontextprotocol/inspector node dist/src/cli.js",
     "install:synthv": "node scripts/install-synthv-bridge.mjs",

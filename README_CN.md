@@ -40,7 +40,8 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 > 私有操作迁移已经完成。当前正在执行 Alpha 发布验证：17/17 Query、9/9 UI
 > 和 31/38 写 Action 已有当前构建真机证据；7 条发生原生宿主风险的
 > clone/transaction/harmony 路径已标记 experimental 并在工程 IPC 前禁用，
-> 已无 pending 写 Action，人工听感已通过；Stage 3 写入/Undo 与四小时长稳门禁仍未完成。
+> 已无 pending 写 Action，人工听感和 Stage 3 功能写入/Undo 矩阵已通过；
+> stable `0.2.0` 前仍须通过用户批准的一小时同步长稳与 settled-resource 门禁。
 > 工程写入只能在已保存的工作副本上测试。
 
 参阅 [v3 架构](docs/architecture-v3.md)、

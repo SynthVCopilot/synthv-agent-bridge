@@ -41,9 +41,10 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 > implemented. Alpha validation currently has fresh evidence for 17/17 Query,
 > 9/9 UI, and 31/38 write Actions. Seven clone/transaction/harmony paths with
 > native-host risk are marked experimental and disabled before project IPC;
-> no write Action remains pending. Human listening has passed; the remaining
-> Stage 3 write/Undo and four-hour stability gates are still required. The stable
-> `0.2.0` release gate remains open. Test writes only on saved working copies.
+> no write Action remains pending. Human listening and the Stage 3 functional
+> write/Undo matrix have passed. The user-approved one-hour synchronized soak
+> must still pass its settled-resource gate before stable `0.2.0`. Test writes
+> only on saved working copies.
 
 See the [v3 architecture](docs/architecture-v3.md),
 [development plan](docs/v3-development-plan.md), and
