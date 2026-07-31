@@ -6,7 +6,10 @@ import test from "node:test";
 
 import { loadConfig } from "../src/config.js";
 import type { FileIpcClient } from "../src/ipc/file-ipc-client.js";
-import { SidebarCoordinator } from "../src/sidebar-coordinator.js";
+import {
+  SidebarCoordinator,
+  sidebarCoordinatorTesting,
+} from "../src/sidebar-coordinator.js";
 import { recentTraceSummaries } from "../src/v3-command-kernel.js";
 
 const sleep = (milliseconds: number) =>
@@ -115,9 +118,60 @@ test("sidebar stop drains in-flight polling once and remains stopped", async (co
     "utf8",
   );
   assert.match(status, /state=stopped/u);
+  assert.match(status, new RegExp(`processId=${process.pid}`, "u"));
   await sleep(150);
   assert.equal(pollCount, 1);
 });
+
+test(
+  "sidebar atomic status writes survive transient Windows file contention",
+  async (context) => {
+    const directory = await fs.mkdtemp(
+      path.join(os.tmpdir(), "synthv-sidebar-status-contention-"),
+    );
+    context.after(async () => {
+      await fs.rm(directory, { recursive: true, force: true });
+    });
+    const statusFile = path.join(directory, "client-status.txt");
+    await fs.writeFile(statusFile, "old", "utf8");
+    let targetUnlinkAttempts = 0;
+    let renameAttempts = 0;
+    const operations = {
+      writeFile: fs.writeFile,
+      async unlink(filePath: string) {
+        if (filePath === statusFile && targetUnlinkAttempts++ === 0) {
+          const error = new Error(
+            "simulated Windows file contention",
+          ) as NodeJS.ErrnoException;
+          error.code = "EBUSY";
+          throw error;
+        }
+        return fs.unlink(filePath);
+      },
+      async rename(source: string, destination: string) {
+        if (renameAttempts++ === 0) {
+          await fs.writeFile(destination, "competing writer", "utf8");
+          const error = new Error(
+            "simulated Windows rename contention",
+          ) as NodeJS.ErrnoException;
+          error.code = "EPERM";
+          throw error;
+        }
+        return fs.rename(source, destination);
+      },
+    };
+
+    await sidebarCoordinatorTesting.writeTextAtomically(
+      statusFile,
+      "new",
+      operations,
+    );
+
+    assert.equal(targetUnlinkAttempts, 2);
+    assert.equal(renameAttempts, 2);
+    assert.equal(await fs.readFile(statusFile, "utf8"), "new");
+  },
+);
 
 test("sidebar request can be read and acknowledged by publishing a preview", async (context) => {
   const fixture = await createFixture(context);

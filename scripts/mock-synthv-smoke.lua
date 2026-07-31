@@ -42,6 +42,8 @@ trackClonePitchGetterFailure = false
 trackCloneAutomationGetterFailure = false
 trackShellPostconditionPitchGetterFailure = false
 trackShellPostconditionAutomationGetterFailure = false
+trackRemoveNoop = false
+groupReferenceRemoveNoop = false
 local crashProbeMode = os.getenv("SYNTHV_AGENT_CRASH_PROBE")
 local crashProbeArmed = false
 local crashProbeCloneCommand = false
@@ -261,6 +263,7 @@ end
 local automationAddFailureParameter = nil
 local automationRangeEndExclusive = false
 local automationExactRemovalFailurePosition = nil
+automationQuantizeFloat32 = false
 local mixerIgnoreGain = false
 
 local function makeAutomation(name)
@@ -319,6 +322,9 @@ local function makeAutomation(name)
         if automationAddFailureParameter == self.name then
             automationAddFailureParameter = nil
             error("forced automation add failure")
+        end
+        if automationQuantizeFloat32 then
+            v = string.unpack("f", string.pack("f", v))
         end
         local fresh=self.points[b]==nil
         self.points[b]=v
@@ -679,7 +685,10 @@ local function makeTrack()
         end
         return #self.refs
     end
-    function t:removeGroupReference(i) table.remove(self.refs,i) end
+    function t:removeGroupReference(i)
+        if groupReferenceRemoveNoop then return end
+        table.remove(self.refs,i)
+    end
     function t:getMixer() return self.mixer end
     function t:isBounced() return self.bounced end
     function t:setBounced(v) self.bounced=v end
@@ -852,7 +861,10 @@ function project:addTrack(t)
     end
     return #self.tracks
 end
-function project:removeTrack(i) table.remove(self.tracks,i) end
+function project:removeTrack(i)
+    if trackRemoveNoop then return end
+    table.remove(self.tracks,i)
+end
 function project:getNumNoteGroupsInLibrary() return #self.groups end
 function project:getNoteGroup(id)
     if type(id)=="number" then return self.groups[id] end
@@ -1155,6 +1167,12 @@ assert(roundedTime:find('"roundedBlicks":1411200000',1,true),"official blick rou
 local undoBeforeStaleTimeAxis=project.undo
 callExpectError("set_time_axis",'{"expectedFingerprint":"stale","tempoMarks":[{"position":0,"bpm":100}]}',"STALE_TIME_AXIS")
 assert(project.undo==undoBeforeStaleTimeAxis,"stale time-axis edit must not create an undo record")
+timeAxisNoopUndoBefore=project.undo
+timeAxisNoop=call("set_time_axis",'{"tempoMarks":[{"position":0,"bpm":120}]}')
+assert(project.undo==timeAxisNoopUndoBefore,"already-satisfied time-axis update created an undo record")
+assert(timeAxisNoop:find('"changedCount":0',1,true),"already-satisfied time-axis update did not report zero changes")
+assert(timeAxisNoop:find('"undoRecordCount":0',1,true),"already-satisfied time-axis update reported an undo")
+print("CASE:time-axis-already-satisfied")
 local updatedTimeAxis=callWrite("set_time_axis",'{"tempoMarks":[{"position":0,"bpm":96},{"position":2822400000,"bpm":90}],"measureMarks":[{"measure":0,"numerator":4,"denominator":4},{"measure":2,"numerator":3,"denominator":4}]}')
 assert(updatedTimeAxis:find('"bpm":96',1,true),"position-zero tempo replacement was not retained")
 assert(updatedTimeAxis:find('"verified":true',1,true),"time-axis response was not postcondition-verified")
@@ -1467,6 +1485,15 @@ callWrite(
     '{"trackIndex":2,"groupIndex":2,"groupUuid":"'..sharedCloneUuid..'","muted":true}'
 )
 assert(sharedCloneReferenceA.muted==true,"reference-local edit was incorrectly blocked on a shared Group")
+groupUpdateNoopUndoBefore=project.undo
+groupUpdateNoop=call(
+    "update_group",
+    '{"trackIndex":2,"groupIndex":2,"groupUuid":"'..sharedCloneUuid..'","muted":true}'
+)
+assert(project.undo==groupUpdateNoopUndoBefore,"already-satisfied Group update created an undo record")
+assert(groupUpdateNoop:find('"changedCount":0',1,true),"already-satisfied Group update did not report zero changes")
+assert(groupUpdateNoop:find('"undoRecordCount":0',1,true),"already-satisfied Group update reported an undo")
+print("CASE:group-update-already-satisfied")
 
 local crossTrackSharedScopeUndoBefore=project.undo
 local crossTrackSharedScopeNameBefore=sharedCloneSource.name
@@ -1669,6 +1696,25 @@ callWrite("delete_track",'{"trackIndex":4,"trackFingerprint":"'..track4Fingerpri
 local track3Fingerprint="main-group:"..project.tracks[3].refs[1].group.uuid
 callWrite("delete_track",'{"trackIndex":3,"trackFingerprint":"'..track3Fingerprint..'"}')
 assert(#project.tracks==2,"delete_track must remove the target track")
+do
+local ignoredTrack=makeTrack()
+project:addTrack(ignoredTrack)
+local ignoredTrackIndex=#project.tracks
+local ignoredTrackFingerprint="main-group:"..ignoredTrack.refs[1].group.uuid
+local deleteTrackFailureUndoBefore=project.undo
+trackRemoveNoop=true
+local deleteTrackFailure=callExpectError(
+    "delete_track",
+    '{"trackIndex":'..ignoredTrackIndex..',"trackFingerprint":"'..ignoredTrackFingerprint..'"}',
+    "HOST_POSTCONDITION_FAILED"
+)
+trackRemoveNoop=false
+assert(project.undo==deleteTrackFailureUndoBefore+1,"ignored Track deletion did not retain one Undo")
+assert(#project.tracks==ignoredTrackIndex,"ignored Track deletion changed the Track collection")
+assert(deleteTrackFailure:find('"undoRequired":true',1,true),"ignored Track deletion did not require Undo")
+project:removeTrack(ignoredTrackIndex)
+print("CASE:track-delete-postcondition-failure")
+end
 project.tracks[2]:removeGroupReference(3)
 callWrite("delete_note_group",'{"groupUuid":"'..sharedCloneUuid..'"}')
 assert(project.tracks[1]:getNumGroups()==1 and project.tracks[2]:getNumGroups()==1,"shared clone fixture was not cleaned up")
@@ -1680,6 +1726,24 @@ local extraReference=makeReference(extraGroup,false)
 project.tracks[1]:addGroupReference(extraReference)
 callWrite("delete_group_reference",'{"trackIndex":1,"groupIndex":2,"groupUuid":"'..extraGroup.uuid..'"}')
 assert(project.tracks[1]:getNumGroups()==1,"delete_group_reference must remove the non-main reference")
+do
+local ignoredGroup=makeGroup()
+local ignoredReference=makeReference(ignoredGroup,false)
+project.tracks[1]:addGroupReference(ignoredReference)
+local deleteReferenceFailureUndoBefore=project.undo
+groupReferenceRemoveNoop=true
+local deleteReferenceFailure=callExpectError(
+    "delete_group_reference",
+    '{"trackIndex":1,"groupIndex":2,"groupUuid":"'..ignoredGroup.uuid..'"}',
+    "HOST_POSTCONDITION_FAILED"
+)
+groupReferenceRemoveNoop=false
+assert(project.undo==deleteReferenceFailureUndoBefore+1,"ignored Group Reference deletion did not retain one Undo")
+assert(project.tracks[1]:getNumGroups()==2,"ignored Group Reference deletion changed the Track")
+assert(deleteReferenceFailure:find('"undoRequired":true',1,true),"ignored Group Reference deletion did not require Undo")
+project.tracks[1]:removeGroupReference(2)
+print("CASE:group-reference-delete-postcondition-failure")
+end
 local instrumentalReference=makeReference(makeGroup(),false)
 instrumentalReference.instrumental=true
 project.tracks[1]:addGroupReference(instrumentalReference)
@@ -1775,6 +1839,23 @@ print("CASE:stale-before-undo-and-redacted")
 local compactAutomationWrite=callWrite("set_automation_points",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","responseMode":"compact","clearMode":"all","points":[{"position":0,"value":-3},{"position":705600000,"value":0}]}')
 assert(compactAutomationWrite:find('"responseMode":"compact"',1,true),"compact automation write mode was not returned")
 assert(not compactAutomationWrite:find('"points":',1,true),"compact automation write returned the full curve")
+automationQuantizeFloat32=true
+callWrite(
+    "set_automation_points",
+    '{"trackIndex":1,"groupIndex":1,"parameter":"loudness","clearMode":"all",'..
+        '"points":[{"position":0,"value":0.1}]}'
+)
+automationQuantizeFloat32=false
+assert(
+    project.tracks[1].refs[1].group:getParameter("loudness").points[0]
+        ~= 0.1,
+    "float32 Automation fixture did not normalize its value"
+)
+print("CASE:automation-float32-postcondition")
+project.tracks[1].refs[1].group:getParameter("loudness").points = {
+    [0] = -3,
+    [705600000] = 0
+}
 local automationSetNoopUndoBefore=project.undo
 local automationSetNoop=call(
     "set_automation_points",
@@ -1820,6 +1901,16 @@ assert(project.undo==mixerNoopUndoBefore,"already-satisfied mixer command create
 assert(mixerNoop:find('"changedCount":0',1,true),"already-satisfied mixer command did not report zero changes")
 assert(mixerNoop:find('"undoRecordCount":0',1,true),"already-satisfied mixer command reported an undo")
 print("CASE:already-satisfied-no-undo")
+trackUpdateNoopUndoBefore=project.undo
+trackUpdateNoop=call(
+    "update_track",
+    '{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","name":"'..
+        escape(project.tracks[1]:getName())..'"}'
+)
+assert(project.undo==trackUpdateNoopUndoBefore,"already-satisfied Track update created an undo record")
+assert(trackUpdateNoop:find('"changedCount":0',1,true),"already-satisfied Track update did not report zero changes")
+assert(trackUpdateNoop:find('"undoRecordCount":0',1,true),"already-satisfied Track update reported an undo")
+print("CASE:track-update-already-satisfied")
 local focusedMixerRead=call("get_track_mixer",'{"trackIndex":1}')
 assert(focusedMixerRead:find('"trackFingerprint":',1,true),"focused mixer read omitted the Track guard required for a writeIntent Context")
 print("CASE:focused-mixer-write-context")
@@ -2118,7 +2209,29 @@ call("snap_position",'{"view":"mainEditor","position":400000000}')
 call("convert_editor_coordinates",'{"view":"mainEditor","time":352800000,"value":60}')
 callWrite("script_data",'{"operation":"set","objectType":"project","key":"synthv-agent-bridge.test","value":{"ok":true}}')
 call("script_data",'{"operation":"get","objectType":"project","key":"synthv-agent-bridge.test"}')
+do
+local scriptDataSetUndoBefore=project.undo
+local scriptDataSetNoop=call(
+    "script_data",
+    '{"operation":"set","objectType":"project","key":"synthv-agent-bridge.test","value":{"ok":true}}'
+)
+assert(project.undo==scriptDataSetUndoBefore,"already-satisfied script-data set created an Undo")
+assert(scriptDataSetNoop:find('"changedCount":0',1,true),"already-satisfied script-data set did not report zero changes")
+assert(scriptDataSetNoop:find('"undoRecordCount":0',1,true),"already-satisfied script-data set reported an Undo")
+print("CASE:script-data-set-already-satisfied")
+end
 callWrite("script_data",'{"operation":"remove","objectType":"project","key":"synthv-agent-bridge.test"}')
+do
+local scriptDataRemoveUndoBefore=project.undo
+local scriptDataRemoveNoop=call(
+    "script_data",
+    '{"operation":"remove","objectType":"project","key":"synthv-agent-bridge.test"}'
+)
+assert(project.undo==scriptDataRemoveUndoBefore,"already-satisfied script-data remove created an Undo")
+assert(scriptDataRemoveNoop:find('"changedCount":0',1,true),"already-satisfied script-data remove did not report zero changes")
+assert(scriptDataRemoveNoop:find('"undoRecordCount":0',1,true),"already-satisfied script-data remove reported an Undo")
+print("CASE:script-data-remove-already-satisfied")
+end
 
 callWrite("delete_note_group",'{"groupUuid":"'..cloneLibraryUuidFixture..'"}')
 assert(project.tracks[1]:getNumGroups()==1 and project.tracks[2]:getNumGroups()==1,"deleting a library group must remove linked references")
@@ -2677,5 +2790,5 @@ do
 end
 end
 
-assert(project.undo==82,"expected 82 undo records, got "..project.undo)
+assert(project.undo==85,"expected 85 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

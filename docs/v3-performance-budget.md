@@ -2,7 +2,7 @@
 
 Status: enforced budgets with measured Phase 6 baseline
 
-Date: 2026-07-30
+Date: 2026-07-31
 
 These targets prioritize correctness. A budget failure blocks optimization
 claims but never permits dropping required Guards, preflight, or
@@ -173,18 +173,44 @@ collection shadows each counted four private UUID/fingerprint fields without
 exposing them. Every Trace reported zero mutation or Undo stages. Snapshot
 caching remained disabled, so each result came from the authoritative host.
 
+The fresh 2026-07-31 Node 24 validation exercised all 17 Query actions on the
+current installed build. Representative end-to-end results ranged from about
+5.7 to 48.4 ms and every ordinary model-facing response remained below the
+20,000-character/byte budget. This heterogeneous 17-action pass is coverage
+evidence, not a statistically valid p95 distribution. UI dialogs are also
+excluded from the ordinary target: one timed out at 15 seconds by design and
+the confirmed retry completed in 10.85 seconds. Formal Stage 3 repetition later
+passed 1,000/1,000 mixed reads, 200/200 concurrent requests, 380/380
+reduced-capability fail-closed calls, 30/30 reload/Session invalidation cycles,
+and 100 samples per trace state. Trace p95 was `48.076 ms` off and `48.155 ms`
+on, a `0.164%` increment that passes the `<5%` target. The user-approved
+one-hour dense soak also completed 200 writes, 3,400 reads, and 10 reloads, but
+does not satisfy the original four-hour duration. Its declared resource gate
+failed in the final sampling window (working-set/private-byte ratios
+`2.471113 / 2.338203`, with 9/10 batch samples); a later read-only recovery
+sample does not change that gate result.
+
+Trace collection is enabled by default. A controlled validation process may
+set `SYNTHV_AGENT_TRACE_ENABLED=0` (or `false`/`off`) to establish the no-trace
+baseline; this affects only bounded in-process trace collection and does not
+change the MCP surface, file IPC, host calls, or project state. Use
+`npm run validate:v3-stability -- --live --mode trace-ab ...` for the
+alternating real-host comparison. Formal runs require Stage 2 acknowledgement
+and at least 100 measured calls per state; smaller counts are development
+smoke.
+
 ### Reproducible Phase 6 synthetic baseline
 
 Run `npm run benchmark:v3` after a build. The benchmark uses generated data
 only and does not connect to SynthV or copy project content.
 
-On 2026-07-31 with Node `v26.1.0`, 500 iterations produced:
+On 2026-07-31 with the requested Node `v24.18.0`, 500 iterations produced:
 
 | Projection | p95 | Result chars / UTF-8 bytes | Budget chars / bytes |
 |---|---:|---:|---:|
 | Six-tool catalog | N/A | 4,336 / 4,336 | 6,000 / 6,000 |
-| 64-note compact phrase Query | 1.104 ms | 4,757 / 4,757 | 20,000 / 20,000 |
-| Changed command acknowledgement | 0.008 ms | 129 / 129 | 2,048 / 2,048 |
+| 64-note compact phrase Query | 0.181 ms | 4,757 / 4,757 | 20,000 / 20,000 |
+| Changed command acknowledgement | 0.002 ms | 129 / 129 | 2,048 / 2,048 |
 
 The repository test also constructs a 100,000-character private fingerprint
 and multibyte Chinese diagnostics, and proves that the normal public error

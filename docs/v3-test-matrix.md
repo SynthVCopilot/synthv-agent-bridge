@@ -1,39 +1,38 @@
 # v3 Test Matrix
 
-Status: enforced alpha baseline
+Status: enforced Alpha baseline; current release decision remains Alpha
 
-Date: 2026-07-30
+Date: 2026-07-31
 
-Current automated baseline: 216 passing tests. Recorded real-host acceptance
-uses SynthV Studio 2 Pro 2.2.1 standalone and a saved disposable test project.
-It currently covers the Mixer command/no-op path, Session invalidation,
-Sidebar Apply/Undo, isolated clone/source preservation, and closed-range
-Automation/Undo scenarios, a guarded note transform, and representative
-successful/dependent-failure transaction recovery, plus the first Mixer Query
-Projector shadow-parity slice and the compact/explicit Group Voice Query
-Projector slice; it does not certify every Semantic action. Collection
-acceptance additionally covers
-`list_tracks` order, optional public fields, nested read-only Contexts, private
-fingerprint isolation, and count-only projection. Automated collection
-coverage also includes `list_note_groups` order, shared ownership summaries,
-nested write-intent Contexts, private Group UUID/fingerprint isolation, and
-count-only projection. Its real-host gate confirms the same projection and
-privacy behavior on two current library Groups; the multiply referenced case
-remains covered by the deterministic fixture. Phase 3 automation additionally
-proves exact policy coverage for all 17 public Query actions, bounded host
-pages for time-axis/Track/library-Group/computed-data/Smart-Pitch collections,
-compact Automation summaries, shared projection behavior, and a redacted
-20,000-character default-response gate. It also verifies Retake/nested Track
-Guard redaction, retry-safe pending computed data, 1-based page reconstruction,
-and stable full-state Guards across pages/range projections. The final
-real-host Phase 3 gate covers ten representative paths on the final build:
-43-219 ms end to end, 160-1,698 model-facing characters, zero shadow
-differences, private Group UUID isolation even for guardless reads, and zero
-mutation/Undo stages. All 38 live semantic writes are also joined to the
-machine-readable official API inventory and Command Policy catalog. All 215
-official methods classified as Agent semantic capabilities inherit a checked
-public-tool, Action, Host Adapter, preflight, postcondition, automated-test,
-and real-host evidence mapping.
+Current automated baseline: 249 passing tests. Fresh real-host acceptance uses
+SynthV Studio 2 Pro 2.2.1 standalone and the saved disposable
+`D:\Projects\sv\test.svp` project. The current build has 17/17 Query and 9/9
+UI actions exercised, plus the ordinary writes listed below. Four reproducible
+native-host crashes caused the unsafe clone and transaction tail to be
+classified `experimental` and disabled before project IPC. Vocal/Vocal Mode
+onboarding, the machine-verifiable tuning write matrix, and human listening are
+complete. Stage 3 read, concurrency, reduced-capability, reload, trace A/B,
+200 ordinary write/Undo, and 30 linked-clone/Undo gates have passed. At the
+user-approved one-hour deadline, the dense continuation also completed 200
+writes, 3,400 reads, and 10 reloads with the prepared digest restored. The
+original four-hour duration was not run, and the resource gate failed in its
+declared final sampling window, so this matrix does not support a stable claim.
+
+The executable Stage 3 harness now covers the read, concurrent-request,
+Bridge-reload/Session-invalidation, reduced-capability fail-closed and trace
+A/B slices. Sub-threshold real-host development smoke has passed for each new
+stability slice. The formal read, concurrency, fail-closed, reload, trace A/B,
+ordinary write/Undo and linked-clone/Undo counts now also pass. The one-hour
+functional soak passes, while the four-hour duration and settled-resource gate
+remain unmet release evidence.
+
+All 38 live semantic writes are joined to the machine-readable official API
+inventory, Command Policy catalog, and live capability-stability registry.
+The coverage checker now accepts the Stage 2 terminal states `verified`,
+`unsupported`, and `experimental`, and rejects any drift between an
+experimental runtime capability and this matrix. Historical host samples are
+context only and do not override the fresh status recorded here and in
+`docs/v3-test-evidence-2026-07-31-1510.zh-CN.md`.
 
 This matrix turns architecture and known production-session failures into
 release gates. It supplements the current tests; it does not replace the
@@ -91,12 +90,12 @@ It does not model audio rendering or Vocal timbre.
 | ID | Case | Required result | Automated | Real host |
 |---|---|---|---|---|
 | CLN-001 | `linked` reference clone | same Group UUID; reference count increases | Yes | Yes |
-| CLN-002 | `isolated` non-main Group clone | different UUID; intended new reference count | Yes | Yes |
-| CLN-003 | Delete notes from isolated clone | source note count/fingerprint unchanged | Yes | Yes |
-| CLN-004 | Automation write to isolated clone | source curve unchanged | Yes | Yes |
-| CLN-005 | Ambiguous clone with non-main vocal Groups | default rejection | Existing + new postconditions | Yes |
-| CLN-006 | `clone_track_shell` | one verified-empty Track shell | Existing + fake host | Yes |
-| CLN-007 | Detached non-main Vocal identity | manual-review warning; no identity claim | Yes | Yes |
+| CLN-002 | `isolated` non-main Group clone | disabled before IPC after reproducible native crash | Yes | Experimental disabled |
+| CLN-003 | Delete notes from isolated clone | source unchanged; live path unavailable while isolated clone is disabled | Yes | Experimental disabled |
+| CLN-004 | Automation write to isolated clone | source unchanged; live path unavailable while isolated clone is disabled | Yes | Experimental disabled |
+| CLN-005 | Ambiguous Track clone with non-main Vocal Groups | whole host-clone action disabled before IPC | Existing + new postconditions | Experimental disabled |
+| CLN-006 | `clone_track_shell` | disabled before IPC after reproducible Track-shell crash | Existing + fake host | Experimental disabled |
+| CLN-007 | Detached non-main Vocal identity | manual-review warning retained in schema; action unavailable | Yes | Experimental disabled |
 
 ## Context, projection, and cache cases
 
@@ -175,31 +174,32 @@ Fixtures contain synthetic lyrics only and are not `.svp` files.
 
 ## Real SynthV acceptance matrix
 
-Recorded `0.2.0-alpha.1` evidence:
+Fresh `0.2.0-alpha.1` evidence from the current installed build:
 
 | Area | Environment and result |
 |---|---|
-| Query projection | SynthV 2.2.1 Pro standalone; ten representative reads completed in 43-219 ms and 160-1,698 model-facing characters, with zero shadow differences and zero mutation/Undo stages |
+| Query projection | SynthV 2.2.1 Pro standalone; 17/17 Query actions passed with bounded projections and no private locator/Guard leak |
+| UI | 9/9 UI actions passed with actual selection, viewport, clipboard/dialog, snap/coordinate, playback, and playhead readback; all temporary state restored |
 | Mixer Command | `0 dB → -3 dB` returned `changed`, one Undo and verified readback; repeating `-3 dB` returned `alreadySatisfied`, zero Undo; one Edit-menu Undo restored `0 dB` |
 | Sidebar review | Preview did not mutate; Apply muted Track 1 with one Undo; one Edit-menu Undo restored mute off while gain remained `0 dB` |
-| Linked clone | Source UUID was shared intentionally, fresh reference count increased, and one Undo removed only the new reference |
-| Isolated clone | New UUID differed, reference count was one, deleting/restoring the clone's final note never changed the 42-note source |
-| Track shell/delete | A verified-empty Track shell was removed by one Undo boundary while the source Track and isolated clone Track remained |
-| Automation | A gender curve was visibly applied to the test Group and one Undo restored the prior flat curve |
-| Note transform | The selected Group's first note changed from MIDI pitch 60 to 61 with one Undo record and verified readback; one Edit-menu Undo restored pitch 60 while all 42 notes remained |
-| Transaction success | A one-step Track creation and a two-step dependent create/update both completed with one Undo record; the two-step result reported two changes, and one Edit-menu Undo removed the created Track |
-| Transaction recovery | A dependent stale-Track preflight failed after Track creation with `wrote=true` and `undoRequired=true`; one Edit-menu Undo removed the created Track and restored the original two 42-note Tracks |
+| Linked clone | Source UUID was shared intentionally, fresh reference count increased, and one Undo removed only the new reference; the formal Stage 3 loop passed 30/30 writes with 30 visible Undos and complete baseline restoration |
+| Note and structure writes | guarded edit/delete/transform, Track add/update/delete, Group/reference add/update/delete, library Group create/delete, time-axis, metadata, and local score import all passed authoritative readback and visible Undo recovery |
+| Native clone risk | isolated Group-reference clone followed by Undo reproduced `0xc0000005` three times at the same fault offset; Track shell reproduced `0xc0000409` once |
+| Experimental fail-closed | isolated Group-reference clone, Note Group/Track/Track-shell clone, harmony Track, and transaction apply/rollback are classified experimental and rejected before project IPC with no write or Undo |
+| Tuning tail | Voice/Vocal Modes, phoneme, Retake, Smart Pitch, Automation, humanization, expression, lyrics, and integrated tuning passed authoritative readback and visible Undo recovery; human listening confirmation passed |
+| Visible Undo focus recovery | A transient foreground race caused fail-closed before Undo; one actual Edit-menu Undo restored the complete digest. A deterministic injected-focus regression changed from red with one attempt to green with three bounded attempts, and window coordinates are reread after movement |
+| Stage 3 repetition | 200/200 ordinary writes covered all 31 verified actions; every write changed state, created one Undo Record, and one visible Undo restored the identical full-project digest. The user-approved one-hour dense continuation also passed 200 writes, 3,400 reads and 10 reloads on the same timeline; the original four-hour duration was not run |
+| Stage 3 resources | `FAIL` under the declared gate: warm baseline working set/private bytes `320,593,920 / 352,129,024 B`; final-window ratios `2.471113 / 2.338203` exceeded `1.2`, and only 9/10 batch samples were captured. A read-only sample about 148 seconds later recovered to `1.040935 / 1.009957`, but does not replace the declared final sample or missing batch |
 
-These are bounded representative host checks, not a claim that every official
-API method has been manually exercised.
+The authoritative per-action status is the machine-readable `actionGroups`
+inventory in `docs/sv2-api-coverage-v3.md`. Current totals are 17 verified
+reads, 9 verified UI actions, 31 verified writes, 7 experimental writes, and
+zero pending writes. No action is currently classified `unsupported`.
 
-One initial two-step transaction attempt caused a SynthV native
-`0xc0000005` APPCRASH before a response was written. The same one-step,
-two-step-success, and dependent-failure cases then completed without recurrence
-after diagnostic crash breadcrumbs were installed. Transaction real-host
-coverage therefore remains `sampled`, not fully verified. The breadcrumb
-records only trace, action, stage, build, and Session identifiers; successful
-and handled-failure paths remove it.
+The four native crashes are release evidence, not a fixed-host claim. The
+public TypeScript boundary now prevents those command variants from reaching
+the file-IPC project request path. Fake Host behavior remains covered for
+diagnosis, but it does not override the experimental real-host classification.
 
 At minimum, each release candidate records:
 
@@ -221,7 +221,11 @@ only project copy.
 npm run check
 node --check scripts/clean.mjs
 node --check scripts/install-synthv-bridge.mjs
+node --check scripts/release-validation-v3.mjs
+node --check scripts/stage3-stability-v3.mjs
 luac5.4 -p synthv/SynthVAgentBridge.lua synthv/StopSynthVAgentBridge.lua
+npm run validate:v3-reads -- --dry-run
+npm run validate:v3-stability -- --dry-run --mode all
 ```
 
 Actual SynthV integration remains a manual release gate.

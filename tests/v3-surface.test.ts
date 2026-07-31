@@ -541,6 +541,47 @@ test("set_selection consumes only a compatible piano-roll Group context", () => 
   );
 });
 
+test("selection write readback hides the private Group UUID", () => {
+  const contexts = new V2ContextStore();
+  const guardTokens = new GuardTokenStore();
+  const result: Record<string, unknown> = {
+    current: {
+      trackIndex: 2,
+      groupIndex: 3,
+      groupUuid: GROUP_UUID,
+    },
+    selectedNotes: [
+      {
+        noteIndex: 1,
+        fingerprint: "note-1",
+      },
+    ],
+    selectedPitchControls: [],
+  };
+
+  v2Testing.addNestedContexts(
+    "get_selection",
+    result,
+    contexts,
+    guardTokens,
+    "readOnly",
+    "selection-session",
+  );
+
+  assert.equal(
+    Object.hasOwn(result.current as Record<string, unknown>, "groupUuid"),
+    false,
+  );
+  assert.equal(
+    Object.hasOwn(
+      (result.selectedNotes as Record<string, unknown>[])[0]!,
+      "fingerprint",
+    ),
+    false,
+  );
+  assert.equal(typeof result.contextId, "string");
+});
+
 test("contextId fails closed for UI operations that do not consume it", () => {
   const contexts = new V2ContextStore();
   const contextId = contexts.issue({

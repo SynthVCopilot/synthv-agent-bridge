@@ -84,6 +84,18 @@ function withTraceId(value: unknown): unknown {
     : root;
 }
 
+function assertPublicCommandOperation(action: string, args: JsonRecord): void {
+  if (action !== "script_data") {
+    return;
+  }
+  const operation = args.operation;
+  if (operation !== "set" && operation !== "remove") {
+    throw new BridgeProtocolError(
+      "sv_command script_data supports only operation=set or operation=remove",
+    );
+  }
+}
+
 function executorBuildIdFromStatus(value: unknown): string | undefined {
   const root = asRecord(value, "status result");
   const status =
@@ -480,6 +492,7 @@ export function registerV3Facade(
     async (input) =>
       runWithTrace(async () => {
         try {
+          assertPublicCommandOperation(input.action, input.args);
           await assertCoherentExecutor(internals, getSidebarBuildIdentity);
         } catch (error) {
           return jsonResult(failedOutcome(error, "freshRead"), true);

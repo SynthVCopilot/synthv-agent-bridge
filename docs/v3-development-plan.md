@@ -2,7 +2,7 @@
 
 Status: implementation Phases 0-8 complete; final alpha release gate active
 
-Date: 2026-07-30
+Date: 2026-07-31
 
 The public v2 surface and protocol have been replaced by v3. All live semantic
 writes are classified by the v3 Command Policy catalog and enter the common
@@ -396,9 +396,8 @@ Automated clone slice implemented on 2026-07-30:
     the shared reference count, and one Edit-menu Undo restored Track 2 from
     three Groups/84 notes to two Groups/42 notes while Track 1 stayed at
     42 notes;
-  - isolated trace `tr_mCtgKI_LkSBFEIix` created UUID
-    `c9f0e34a-7999-4ab0-92fd-edb7acc0b836` distinct from source UUID
-    `dede7f4c-8061-40dd-b8b5-fdaf8dd878ed`, with one reference and one Undo;
+  - isolated trace `tr_mCtgKI_LkSBFEIix` created a new UUID distinct from the
+    source UUID (raw UUIDs redacted), with one reference and one Undo;
     fresh reads showed Track 1 unchanged at 42 notes and the new library Group
     at 42 notes/reference count 1, then one Undo removed it and restored the
     two-Group baseline;
@@ -562,9 +561,74 @@ Only if file IPC remains the dominant measured cost should a new ADR evaluate a
 named pipe or another local transport. Any future transport must retain local,
 network-free defaults and the versioned protocol semantics.
 
-The intermittent transaction APPCRASH above keeps Phase 9 active. It does not
-block publishing the diagnostic alpha branch, but it blocks declaring
-`0.2.0` stable or `apply_transaction` fully verified.
+Fresh 2026-07-31 validation keeps Phase 9 active. Isolated Group-reference
+clone followed by Undo reproduced the same SynthV `0xc0000005` crash three
+times, and Track-shell creation reproduced one `0xc0000409` crash. The public
+boundary now classifies isolated Group clone, Note Group/Track/Track-shell
+clone, harmony Track, and transaction apply/rollback as experimental and
+rejects them before project IPC. The API coverage checker enforces agreement
+between that live stability registry and the machine-readable evidence
+matrix.
+
+The current build has 17/17 Query and 9/9 UI actions verified, plus 31/38
+writes verified, 7/38 experimental, and 0/38 pending. Vocal onboarding, the
+machine-verifiable tuning surface, and human listening are complete. Stage 3
+ordinary write/Undo and linked-clone/Undo repetition are complete. The
+user-approved one-hour dense functional soak also completed, while the original
+four-hour duration and declared resource gate remain unmet. An executable
+read-matrix driver now generates the exact 1,000
+call/17-Action schedule, enforces project/Session/executor and response-budget
+stop conditions, and refuses a full live run without explicit Stage 2
+completion. Its 17-call current-host development smoke passed, but is not
+classified as Stage 3 evidence. Publishing the diagnostic Alpha branch remains
+possible, but neither full nor reduced `0.2.0` stable is supported by the
+current evidence.
+
+The stability driver now also provides executable dry-run and live slices for
+200-request concurrency, 30 Bridge reload/Session invalidation cycles, the
+reduced-capability fail-closed matrix, and trace on/off p95 comparison. A first
+development smoke passed 10 concurrent reads without loss, 16 disabled-action
+calls without IPC, one reload with the old Context rejected as
+`UNKNOWN_CONTEXT`, and 10 samples per trace state with 2.561% p95 overhead.
+Formal runs subsequently passed 1,000/1,000 mixed reads, 200/200 concurrent
+requests without loss, 380/380 reduced-capability fail-closed calls, 30/30
+reload/Session invalidation cycles, and 100-sample-per-state trace A/B with
+0.164% p95 overhead. The ordinary matrix subsequently passed 200/200 cycles
+across all 31 verified writes, and the supported linked-clone matrix passed
+30/30 cycles; every command changed state, created one Undo Record, and one
+operator-visible SynthV Undo restored the same complete digest. The mixed soak
+was shortened by explicit user direction to one hour and increased in density;
+it completed 200 writes, 3,400 reads, and 10 reloads on the same original
+timeline, with the prepared digest restored and `pending=null`. A user window
+move exposed a second transient foreground race at write 9; the runner failed
+closed before the actual Undo, one visible menu Undo restored the prepared
+digest, and the user explicitly requested continuation rather than restart.
+The same original start/deadline and JSONL timeline are retained. Foreground
+acquisition now uses a deterministic red/green regression, up to three bounded
+attempts, and a fresh window rectangle on every pointer activation. Resume is
+fail-closed unless state is clean and at most one recovered write is ahead of
+the log; that write's missing read/reload evidence is completed before the
+next write.
+
+Two transient fresh-baseline read failures during dense continuation occurred
+only after the write and visible Undo had completed and the full digest had
+already been restored. Resume retained those failures as separate evidence,
+then filled the missing read evidence. The driver now retries only the exact
+read-only fresh-baseline connection error, at most three times with a bounded
+750 ms interval; it never retries a write, visible Undo, or stale Context.
+
+The companion resource gate did not pass its declared window: the warm
+working-set/private-byte baseline was `320,593,920 / 352,129,024 B`, while the
+final ratios were `2.471113 / 2.338203`, and only 9 of 10 batch samples were
+captured. A later read-only diagnostic sample recovered to ratios
+`1.040935 / 1.009957`, but cannot replace the declared final sample or missing
+batch. Therefore the functional one-hour run passes, but it neither satisfies
+the original four-hour duration nor supports a stable release.
+
+The stability dry-run freezes the exact completed write distribution:
+200 ordinary calls over all 31 verified Actions (7 each for the first 14 and 6
+each for the remaining 17), plus 30 linked-clone/Undo cycles. Counts below 93
+are rejected because they cannot satisfy the minimum of three per Action.
 
 ## Per-slice work template
 

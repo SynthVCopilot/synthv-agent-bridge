@@ -229,6 +229,7 @@ test("sv_describe publishes cloneIntent without legacy clone booleans", async (c
       }),
     );
     const described = (result.actions as Record<string, unknown>[])[0];
+    assert.ok(described);
     const schema = described?.inputSchema as Record<string, unknown>;
     const properties = schema.properties as Record<string, unknown>;
     assert.deepEqual(
@@ -238,6 +239,151 @@ test("sv_describe publishes cloneIntent without legacy clone booleans", async (c
     assert.equal("deepCopy" in properties, false);
     assert.equal("linked" in properties, false);
     assert.ok((schema.required as string[]).includes("cloneIntent"));
+    if (action === "clone_group_reference") {
+      assert.deepEqual(described.stability, {
+        availability: "partiallyAvailable",
+        classification: "experimental",
+        disabledIntents: ["isolated"],
+        reason:
+          "isolated Group-reference clone is disabled after a reproducible SynthV 2.2.1 native crash during Undo; linked clone remains available.",
+      });
+    }
+  }
+});
+
+test("sv_describe and sv_command expose only script-data writes", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "synthv-v3-script-data-command-"),
+  );
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const server = createServer(loadConfig({}, directory));
+  const client = new Client({
+    name: "v3-script-data-command-test",
+    version: "1.0.0",
+  });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  context.after(async () => {
+    await client.close();
+    await server.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  const described = toolJson(
+    await client.callTool({
+      name: "sv_describe",
+      arguments: { action: "script_data" },
+    }),
+  );
+  const actionDescription = (
+    described.actions as Record<string, unknown>[]
+  )[0] as Record<string, unknown>;
+  const schema = actionDescription.inputSchema as Record<string, unknown>;
+  const properties = schema.properties as Record<string, unknown>;
+  assert.deepEqual(
+    (properties.operation as Record<string, unknown>).enum,
+    ["set", "remove"],
+  );
+
+  for (const operation of ["get", "list"]) {
+    const rejected = toolJson(
+      await client.callTool({
+        name: "sv_command",
+        arguments: {
+          action: "script_data",
+          args: {
+            operation,
+            objectType: "project",
+            key: "synthv-agent-bridge.test",
+          },
+        },
+      }),
+    );
+    assert.equal(rejected.outcome, "failed");
+    assert.equal(rejected.phase, "freshRead");
+    assert.equal(rejected.wrote, false);
+    assert.equal(rejected.undoRequired, false);
+    assert.equal(
+      (rejected.error as Record<string, unknown>).code,
+      "BRIDGE_PROTOCOL_ERROR",
+    );
+  }
+});
+
+test("disabled experimental capabilities fail before project IPC", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "synthv-v3-disabled-capability-"),
+  );
+  const config = loadConfig({}, directory);
+  await writeStatus(config);
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const server = createServer(config);
+  const client = new Client({
+    name: "v3-disabled-capability-test",
+    version: "1.0.0",
+  });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  context.after(async () => {
+    await client.close();
+    await server.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  for (const action of ["apply_transaction", "rollback_transaction"]) {
+    const described = toolJson(
+      await client.callTool({
+        name: "sv_describe",
+        arguments: { action },
+      }),
+    );
+    const actionDescription = (
+      described.actions as Record<string, unknown>[]
+    )[0];
+    assert.equal(
+      (
+        actionDescription?.stability as Record<string, unknown>
+      ).availability,
+      "experimentalDisabled",
+    );
+  }
+
+  for (const [action, args] of [
+    [
+      "clone_group_reference",
+      {
+        cloneIntent: "isolated",
+        sourceTrackIndex: 1,
+        sourceGroupIndex: 2,
+        targetTrackIndex: 1,
+      },
+    ],
+    ["clone_note_group", {}],
+    ["clone_track", { cloneIntent: "isolated", trackIndex: 1 }],
+    ["clone_track_shell", { cloneIntent: "shell", trackIndex: 1 }],
+    ["create_harmony_track", { sourceTrackIndex: 1, intervalSemitones: 3 }],
+    ["apply_transaction", {}],
+    ["rollback_transaction", {}],
+  ] as const) {
+    const result = await client.callTool({
+      name: "sv_command",
+      arguments: { action, args },
+    });
+    const failure = toolJson(result);
+    assert.equal(result.isError, true);
+    assert.equal(
+      (failure.error as Record<string, unknown>).code,
+      "EXPERIMENTAL_CAPABILITY_DISABLED",
+    );
+    await assert.rejects(fs.access(config.paths.requestFile), {
+      code: "ENOENT",
+    });
   }
 });
 
@@ -281,16 +427,6 @@ test("sv_command preserves cloneIntent through internal action parsing", async (
         targetTrackIndex: 2,
       },
     },
-    {
-      action: "clone_track",
-      cloneIntent: "isolated",
-      args: { trackIndex: 1 },
-    },
-    {
-      action: "clone_track_shell",
-      cloneIntent: "shell",
-      args: { trackIndex: 1 },
-    },
   ] as const) {
     const bridge = serveOneCloneCommand(config);
     const result = await client.callTool({
@@ -311,7 +447,7 @@ test("sv_command preserves cloneIntent through internal action parsing", async (
   }
 });
 
-test("sv_command exposes detached Vocal review warnings through the bounded public outcome", async (context) => {
+test("sv_command exposes manual review warnings through the bounded public outcome", async (context) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "synthv-v3-clone-warning-"),
   );
@@ -359,11 +495,12 @@ test("sv_command exposes detached Vocal review warnings through the bounded publ
     await client.callTool({
       name: "sv_command",
       arguments: {
-        action: "clone_track",
+        action: "clone_group_reference",
         args: {
-          cloneIntent: "isolated",
-          trackIndex: 1,
-          nonMainGroupPolicy: "detach",
+          cloneIntent: "linked",
+          sourceTrackIndex: 1,
+          sourceGroupIndex: 2,
+          targetTrackIndex: 2,
         },
       },
     }),

@@ -868,6 +868,16 @@ local function raiseUndoRequiredExecutionError(action, errorValue)
     )
 end
 
+function raiseUndoRequiredPostconditionError(action, message, details)
+    details = details or {}
+    details.action = action
+    details.partialWritePossible = true
+    details.undoRequired = true
+    details.undoGuidance =
+        "Use SynthV Edit > Undo once before any retry, then reread the target."
+    raiseBridgeError("HOST_POSTCONDITION_FAILED", message, details)
+end
+
 local function telemetryNowMs()
     return os.clock() * 1000
 end
@@ -2265,6 +2275,29 @@ local function serializeAutomation(group, parameterName, breadcrumbPrefix)
         pointCount = #points,
         points = points
     }
+end
+
+runtimeState.automationValuesEqual = function(expected, actual)
+    if expected == actual then return true end
+    if type(expected) ~= "number" or type(actual) ~= "number" then
+        return false
+    end
+    local normalized = string.unpack("f", string.pack("f", expected))
+    return actual == normalized
+end
+
+runtimeState.automationPointsEqual = function(expected, actual)
+    if #expected ~= #actual then return false end
+    for index = 1, #expected do
+        if expected[index].position ~= actual[index].position
+            or not runtimeState.automationValuesEqual(
+                expected[index].value,
+                actual[index].value
+            ) then
+            return false
+        end
+    end
+    return true
 end
 
 local CLONE_STATE = {
@@ -4242,9 +4275,11 @@ function handlers.set_time_axis(payload)
     end
 
     local candidate = timeAxis:clone()
+    local candidateResult = nil
     local valid, validationError = pcall(function()
         applyOperations(candidate)
-        assertPostconditions(serializeTimeAxis(candidate), "INVALID_ARGUMENT", "validation")
+        candidateResult = serializeTimeAxis(candidate)
+        assertPostconditions(candidateResult, "INVALID_ARGUMENT", "validation")
     end)
     if not valid then
         if type(validationError) == "table" and getmetatable(validationError) == BRIDGE_ERROR_MT then
@@ -4253,6 +4288,15 @@ function handlers.set_time_axis(payload)
         raiseBridgeError("INVALID_ARGUMENT", "SynthV rejected the requested time-axis edits", {
             cause = tostring(validationError)
         })
+    end
+
+    if candidateResult.fingerprint == before.fingerprint then
+        before.appliedOperationCount = 0
+        before.changedCount = 0
+        before.alreadySatisfied = true
+        before.undoRecordCount = 0
+        before.verified = true
+        return before
     end
 
     createUndoRecord(project)
@@ -4328,6 +4372,11 @@ end
 function handlers.create_note_group(payload)
     payload = requireObject(payload, "payload")
     local project = getProject()
+    local groupCountBefore = project:getNumNoteGroupsInLibrary()
+    local groupUuidsBefore = {}
+    for libraryIndex = 1, groupCountBefore do
+        groupUuidsBefore[libraryIndex] = project:getNoteGroup(libraryIndex):getUUID()
+    end
     local name = optionalString(payload.name, "name", false) or "New Group"
     local suggestedIndex = optionalInteger(
         payload.suggestedIndex,
@@ -4348,7 +4397,41 @@ function handlers.create_note_group(payload)
     if type(libraryIndex) ~= "number" then
         libraryIndex = group:getIndexInParent()
     end
-    return serializeLibraryGroup(project, group, libraryIndex)
+    local groupCountAfter = project:getNumNoteGroupsInLibrary()
+    if groupCountAfter ~= groupCountBefore + 1 then
+        raiseUndoRequiredPostconditionError(
+            "create_note_group",
+            "SynthV did not add exactly one library Note Group",
+            { libraryIndex = libraryIndex }
+        )
+    end
+    local inserted = project:getNoteGroup(libraryIndex)
+    if not inserted or inserted:getUUID() ~= group:getUUID() then
+        raiseUndoRequiredPostconditionError(
+            "create_note_group",
+            "SynthV did not retain the created Note Group at the reported library index",
+            { libraryIndex = libraryIndex }
+        )
+    end
+    local beforeIndex = 1
+    for observedIndex = 1, groupCountAfter do
+        if observedIndex ~= libraryIndex then
+            local observedUuid = project:getNoteGroup(observedIndex):getUUID()
+            if observedUuid ~= groupUuidsBefore[beforeIndex] then
+                raiseUndoRequiredPostconditionError(
+                    "create_note_group",
+                    "SynthV did not preserve library Note Group order after creation",
+                    { libraryIndex = libraryIndex }
+                )
+            end
+            beforeIndex = beforeIndex + 1
+        end
+    end
+    local result = serializeLibraryGroup(project, inserted, libraryIndex)
+    result.changedCount = 1
+    result.undoRecordCount = 1
+    result.verified = true
+    return result
 end
 
 function handlers.clone_note_group(payload)
@@ -4400,13 +4483,44 @@ end
 function handlers.delete_note_group(payload)
     payload = requireObject(payload, "payload")
     local project, group, libraryIndex = resolveLibraryGroup(payload)
+    local groupCountBefore = project:getNumNoteGroupsInLibrary()
+    local groupUuidsBefore = {}
+    for index = 1, groupCountBefore do
+        groupUuidsBefore[index] = project:getNoteGroup(index):getUUID()
+    end
     local deleted = serializeLibraryGroup(project, group, libraryIndex)
     createUndoRecord(project)
     project:removeNoteGroup(libraryIndex)
+    local groupCountAfter = project:getNumNoteGroupsInLibrary()
+    if groupCountAfter ~= groupCountBefore - 1 then
+        raiseUndoRequiredPostconditionError(
+            "delete_note_group",
+            "SynthV did not remove exactly one library Note Group",
+            { libraryIndex = libraryIndex }
+        )
+    end
+    local expectedIndex = 1
+    for observedIndex = 1, groupCountAfter do
+        if expectedIndex == libraryIndex then
+            expectedIndex = expectedIndex + 1
+        end
+        local observedUuid = project:getNoteGroup(observedIndex):getUUID()
+        if observedUuid ~= groupUuidsBefore[expectedIndex] then
+            raiseUndoRequiredPostconditionError(
+                "delete_note_group",
+                "SynthV did not preserve library Note Group order after deletion",
+                { libraryIndex = libraryIndex }
+            )
+        end
+        expectedIndex = expectedIndex + 1
+    end
     return {
         deletedGroup = deleted,
         removedReferenceCount = deleted.referenceCount,
-        groupCount = project:getNumNoteGroupsInLibrary()
+        groupCount = groupCountAfter,
+        changedCount = 1,
+        undoRecordCount = 1,
+        verified = true
     }
 end
 
@@ -4443,15 +4557,48 @@ function handlers.add_group_reference(payload)
     if voice ~= nil then reference:setVoice(voice) end
     if timeRange ~= nil then reference:setTimeRange(timeRange.onset, timeRange.duration) end
 
+    local groupCountBefore = track:getNumGroups()
+    local referenceCountBefore = countGroupReferences(project, group)
+    local expectedReferenceFingerprint = makeReferenceFingerprint(reference)
     createUndoRecord(project)
     local groupIndex = track:addGroupReference(reference)
     if type(groupIndex) ~= "number" then
         groupIndex = reference:getIndexInParent()
     end
+    if track:getNumGroups() ~= groupCountBefore + 1 then
+        raiseUndoRequiredPostconditionError(
+            "add_group_reference",
+            "SynthV did not add exactly one Group Reference",
+            { trackIndex = trackIndex, groupIndex = groupIndex }
+        )
+    end
+    local observedReference = track:getGroupReference(groupIndex)
+    if not observedReference
+        or observedReference:isInstrumental()
+        or not observedReference:getTarget()
+        or observedReference:getTarget():getUUID() ~= group:getUUID()
+        or makeReferenceFingerprint(observedReference)
+            ~= expectedReferenceFingerprint then
+        raiseUndoRequiredPostconditionError(
+            "add_group_reference",
+            "SynthV did not retain the requested Group Reference",
+            { trackIndex = trackIndex, groupIndex = groupIndex }
+        )
+    end
+    if countGroupReferences(project, group) ~= referenceCountBefore + 1 then
+        raiseUndoRequiredPostconditionError(
+            "add_group_reference",
+            "SynthV did not update the shared Note Group reference count",
+            { trackIndex = trackIndex, groupIndex = groupIndex }
+        )
+    end
     return {
         trackIndex = trackIndex,
-        group = serializeGroup(reference, groupIndex, 0, 0),
-        track = serializeTrackSummary(track, trackIndex)
+        group = serializeGroup(observedReference, groupIndex, 0, 0),
+        track = serializeTrackSummary(track, trackIndex),
+        changedCount = 1,
+        undoRecordCount = 1,
+        verified = true
     }
 end
 
@@ -6698,9 +6845,53 @@ function handlers.update_track(payload)
         })
     end
 
+    local before = serializeTrackSummary(track, trackIndex)
+    local changedCount = 0
+    if name ~= nil and before.name ~= name then
+        changedCount = changedCount + 1
+    end
+    if displayColor ~= nil and before.displayColorArgb ~= displayColor then
+        changedCount = changedCount + 1
+    end
+    if bounced ~= nil and before.bounced ~= bounced then
+        changedCount = changedCount + 1
+    end
+    if changedCount == 0 then
+        before.changedCount = 0
+        before.alreadySatisfied = true
+        before.undoRecordCount = 0
+        before.verified = true
+        return before
+    end
+
     createUndoRecord(project)
     applyUpdates(track)
-    return serializeTrackSummary(track, trackIndex)
+    local result = serializeTrackSummary(track, trackIndex)
+    if name ~= nil and result.name ~= name then
+        raiseBridgeError(
+            "HOST_POSTCONDITION_FAILED",
+            "SynthV did not retain the requested track name",
+            { field = "name" }
+        )
+    end
+    if displayColor ~= nil and result.displayColorArgb ~= displayColor then
+        raiseBridgeError(
+            "HOST_POSTCONDITION_FAILED",
+            "SynthV did not retain the requested track display color",
+            { field = "displayColor" }
+        )
+    end
+    if bounced ~= nil and result.bounced ~= bounced then
+        raiseBridgeError(
+            "HOST_POSTCONDITION_FAILED",
+            "SynthV did not retain the requested bounced state",
+            { field = "bounced" }
+        )
+    end
+    result.changedCount = changedCount
+    result.undoRecordCount = 1
+    result.verified = true
+    return result
 end
 
 local function copyReferenceScriptData(sourceReference, targetReference)
@@ -7526,12 +7717,48 @@ function handlers.delete_track(payload)
         raiseBridgeError("FINAL_TRACK", "The project's final track cannot be deleted")
     end
 
+    local trackCountBefore = project:getNumTracks()
+    local previousFingerprint = trackIndex > 1
+        and makeTrackFingerprint(project:getTrack(trackIndex - 1))
+        or nil
+    local nextFingerprint = trackIndex < trackCountBefore
+        and makeTrackFingerprint(project:getTrack(trackIndex + 1))
+        or nil
     local deletedTrack = serializeTrackSummary(track, trackIndex)
     createUndoRecord(project)
     project:removeTrack(trackIndex)
+    local trackCountAfter = project:getNumTracks()
+    if trackCountAfter ~= trackCountBefore - 1 then
+        raiseUndoRequiredPostconditionError(
+            "delete_track",
+            "SynthV did not remove exactly one Track",
+            { trackIndex = trackIndex }
+        )
+    end
+    if previousFingerprint ~= nil
+        and makeTrackFingerprint(project:getTrack(trackIndex - 1))
+            ~= previousFingerprint then
+        raiseUndoRequiredPostconditionError(
+            "delete_track",
+            "SynthV changed the Track preceding the deleted Track",
+            { trackIndex = trackIndex }
+        )
+    end
+    if nextFingerprint ~= nil
+        and makeTrackFingerprint(project:getTrack(trackIndex))
+            ~= nextFingerprint then
+        raiseUndoRequiredPostconditionError(
+            "delete_track",
+            "SynthV did not preserve Track order after deletion",
+            { trackIndex = trackIndex }
+        )
+    end
     return {
         deletedTrack = deletedTrack,
-        trackCount = project:getNumTracks()
+        trackCount = trackCountAfter,
+        changedCount = 1,
+        undoRecordCount = 1,
+        verified = true
     }
 end
 
@@ -7599,14 +7826,77 @@ function handlers.update_group(payload)
         })
     end
 
+    local before = serializeGroup(reference, groupIndex, 0, 0)
+    local changedCount = 0
+    if name ~= nil and before.name ~= name then
+        changedCount = changedCount + 1
+    end
+    if muted ~= nil and before.muted ~= muted then
+        changedCount = changedCount + 1
+    end
+    if timeOffset ~= nil and timeRange == nil and before.timeOffset ~= timeOffset then
+        changedCount = changedCount + 1
+    end
+    if pitchOffset ~= nil and before.pitchOffset ~= pitchOffset then
+        changedCount = changedCount + 1
+    end
+    if timeRange ~= nil then
+        changedCount = changedCount + 1
+    end
+    if voice ~= nil then
+        changedCount = changedCount + 1
+    end
+    if changedCount == 0 then
+        return {
+            trackIndex = trackIndex,
+            group = before,
+            changedCount = 0,
+            alreadySatisfied = true,
+            undoRecordCount = 0,
+            verified = true
+        }
+    end
+
     createUndoRecord(project)
     applyReferenceUpdates(reference)
     if name ~= nil and group then
         group:setName(name)
     end
+    local observed = serializeGroup(reference, groupIndex, 0, 0)
+    if name ~= nil and observed.name ~= name then
+        raiseBridgeError(
+            "HOST_POSTCONDITION_FAILED",
+            "SynthV did not retain the requested Group name",
+            { field = "name" }
+        )
+    end
+    if muted ~= nil and observed.muted ~= muted then
+        raiseBridgeError(
+            "HOST_POSTCONDITION_FAILED",
+            "SynthV did not retain the requested Group mute state",
+            { field = "muted" }
+        )
+    end
+    if timeOffset ~= nil and timeRange == nil and observed.timeOffset ~= timeOffset then
+        raiseBridgeError(
+            "HOST_POSTCONDITION_FAILED",
+            "SynthV did not retain the requested Group time offset",
+            { field = "timeOffset" }
+        )
+    end
+    if pitchOffset ~= nil and observed.pitchOffset ~= pitchOffset then
+        raiseBridgeError(
+            "HOST_POSTCONDITION_FAILED",
+            "SynthV did not retain the requested Group pitch offset",
+            { field = "pitchOffset" }
+        )
+    end
     return {
         trackIndex = trackIndex,
-        group = serializeGroup(reference, groupIndex, 0, 0)
+        group = observed,
+        changedCount = changedCount,
+        undoRecordCount = 1,
+        verified = true
     }
 end
 
@@ -7659,13 +7949,49 @@ function handlers.delete_group_reference(payload)
     if groupIndex == 1 or reference:isMain() then
         raiseBridgeError("MAIN_GROUP", "A track's main group reference cannot be removed")
     end
+    local groupCountBefore = track:getNumGroups()
+    local previousFingerprint = groupIndex > 1
+        and makeReferenceFingerprint(track:getGroupReference(groupIndex - 1))
+        or nil
+    local nextFingerprint = groupIndex < groupCountBefore
+        and makeReferenceFingerprint(track:getGroupReference(groupIndex + 1))
+        or nil
     local deletedGroup = serializeGroup(reference, groupIndex, 0, 0)
     createUndoRecord(project)
     track:removeGroupReference(groupIndex)
+    local groupCountAfter = track:getNumGroups()
+    if groupCountAfter ~= groupCountBefore - 1 then
+        raiseUndoRequiredPostconditionError(
+            "delete_group_reference",
+            "SynthV did not remove exactly one Group Reference",
+            { trackIndex = trackIndex, groupIndex = groupIndex }
+        )
+    end
+    if previousFingerprint ~= nil
+        and makeReferenceFingerprint(track:getGroupReference(groupIndex - 1))
+            ~= previousFingerprint then
+        raiseUndoRequiredPostconditionError(
+            "delete_group_reference",
+            "SynthV changed the Group Reference preceding the deletion",
+            { trackIndex = trackIndex, groupIndex = groupIndex }
+        )
+    end
+    if nextFingerprint ~= nil
+        and makeReferenceFingerprint(track:getGroupReference(groupIndex))
+            ~= nextFingerprint then
+        raiseUndoRequiredPostconditionError(
+            "delete_group_reference",
+            "SynthV did not preserve Group Reference order after deletion",
+            { trackIndex = trackIndex, groupIndex = groupIndex }
+        )
+    end
     return {
         trackIndex = trackIndex,
         deletedGroup = deletedGroup,
-        track = serializeTrackSummary(track, trackIndex)
+        track = serializeTrackSummary(track, trackIndex),
+        changedCount = 1,
+        undoRecordCount = 1,
+        verified = true
     }
 end
 
@@ -9528,8 +9854,10 @@ function handlers.simplify_automation(payload)
             end
             local expectedPoints =
                 runtimeState.serializeAutomationPoints(candidate)
-            local changed =
-                json.encode(before.points) ~= json.encode(expectedPoints)
+            local changed = not runtimeState.automationPointsEqual(
+                before.points,
+                expectedPoints
+            )
             local removedPointCount =
                 before.pointCount - #expectedPoints
             return {
@@ -9592,8 +9920,10 @@ function handlers.simplify_automation(payload)
                 resolveGroup(payload)
             local _automation, after =
                 serializeAutomation(group, state.parameterName)
-            if json.encode(after.points)
-                ~= json.encode(state.expectedPoints) then
+            if not runtimeState.automationPointsEqual(
+                state.expectedPoints,
+                after.points
+            ) then
                 raiseBridgeError(
                     "HOST_POSTCONDITION_FAILED",
                     "SynthV did not retain the requested Automation simplification",
@@ -9723,9 +10053,10 @@ function handlers.set_automation_points(payload)
                 rangeBegin = rangeBegin,
                 rangeEnd = rangeEnd,
                 expectedPoints = expectedPoints,
-                changed =
-                    json.encode(before.points)
-                    ~= json.encode(expectedPoints)
+                changed = not runtimeState.automationPointsEqual(
+                    before.points,
+                    expectedPoints
+                )
             }
         end,
         preflight = function(state)
@@ -9770,8 +10101,10 @@ function handlers.set_automation_points(payload)
                 resolveGroup(payload)
             local _automation, serialized =
                 serializeAutomation(group, state.parameterName)
-            if json.encode(serialized.points)
-                ~= json.encode(state.expectedPoints) then
+            if not runtimeState.automationPointsEqual(
+                state.expectedPoints,
+                serialized.points
+            ) then
                 raiseBridgeError(
                     "HOST_POSTCONDITION_FAILED",
                     "SynthV did not retain the complete requested Automation curve",
@@ -9904,8 +10237,10 @@ function handlers.clear_automation(payload)
                 resolveGroup(payload)
             local _automation, serialized =
                 serializeAutomation(group, state.parameterName)
-            if json.encode(serialized.points)
-                ~= json.encode(state.expectedPoints) then
+            if not runtimeState.automationPointsEqual(
+                state.expectedPoints,
+                serialized.points
+            ) then
                 raiseBridgeError(
                     "HOST_POSTCONDITION_FAILED",
                     "SynthV did not retain the complete requested Automation clear",
@@ -10311,9 +10646,10 @@ function handlers.apply_group_tuning(payload)
                     rangeEnd,
                     points
                 )
-            prepared.effective =
-                json.encode(before.points)
-                ~= json.encode(prepared.expectedPoints)
+            prepared.effective = not runtimeState.automationPointsEqual(
+                before.points,
+                prepared.expectedPoints
+            )
             if prepared.effective then
                 effectiveAutomationCount =
                     effectiveAutomationCount + 1
@@ -10764,8 +11100,10 @@ function handlers.apply_group_tuning(payload)
                     prepared.rangeEnd,
                     prepared.points
                 )
-                if json.encode(serialized.points)
-                    ~= json.encode(prepared.expectedPoints) then
+                if not runtimeState.automationPointsEqual(
+                    prepared.expectedPoints,
+                    serialized.points
+                ) then
                     raiseBridgeError(
                         "HOST_POSTCONDITION_FAILED",
                         "SynthV changed Automation outside the requested aggregate effect",
@@ -10939,24 +11277,74 @@ function handlers.script_data(payload)
         if not isProvided(payload.value) then
             raiseBridgeError("INVALID_ARGUMENT", "value is required for operation=set")
         end
+        local expectedEncoded = nil
         local encodable, encodeError = pcall(function()
-            json.encode(payload.value)
+            expectedEncoded = json.encode(payload.value)
         end)
         if not encodable then
             raiseBridgeError("INVALID_ARGUMENT", "value must be JSON-serializable", {
                 cause = tostring(encodeError)
             })
         end
+        if object:hasScriptData(key) then
+            local currentEncoded = nil
+            local currentEncodable = pcall(function()
+                currentEncoded = json.encode(object:getScriptData(key))
+            end)
+            if currentEncodable and currentEncoded == expectedEncoded then
+                result.exists = true
+                result.value = sanitizeForJson(object:getScriptData(key))
+                result.changedCount = 0
+                result.alreadySatisfied = true
+                result.undoRecordCount = 0
+                result.verified = true
+                return result
+            end
+        end
         createUndoRecord(project)
         object:setScriptData(key, payload.value)
-        result.exists = true
-        result.value = sanitizeForJson(object:getScriptData(key))
+        local observedExists = object:hasScriptData(key)
+        local observedValue = object:getScriptData(key)
+        local observedEncoded = nil
+        local observedEncodable = pcall(function()
+            observedEncoded = json.encode(observedValue)
+        end)
+        if not observedExists or not observedEncodable or observedEncoded ~= expectedEncoded then
+            raiseUndoRequiredPostconditionError(
+                "script_data",
+                "SynthV did not retain the requested script-data value",
+                { key = key }
+            )
+        end
+        result.exists = observedExists
+        result.value = sanitizeForJson(observedValue)
+        result.changedCount = 1
+        result.undoRecordCount = 1
+        result.verified = true
         return result
     elseif operation == "remove" then
         local existed = object:hasScriptData(key)
+        if not existed then
+            result.removed = false
+            result.changedCount = 0
+            result.alreadySatisfied = true
+            result.undoRecordCount = 0
+            result.verified = true
+            return result
+        end
         createUndoRecord(project)
         object:removeScriptData(key)
-        result.removed = existed
+        if object:hasScriptData(key) then
+            raiseUndoRequiredPostconditionError(
+                "script_data",
+                "SynthV did not remove the requested script-data value",
+                { key = key }
+            )
+        end
+        result.removed = true
+        result.changedCount = 1
+        result.undoRecordCount = 1
+        result.verified = true
         return result
     end
     raiseBridgeError("INVALID_ARGUMENT", "operation must be list, get, set, or remove")

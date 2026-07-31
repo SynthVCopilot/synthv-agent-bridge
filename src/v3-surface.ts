@@ -25,6 +25,10 @@ import {
   traceStage,
 } from "./v3-command-kernel.js";
 import {
+  assertV3CapabilityEnabled,
+  describeV3CapabilityStability,
+} from "./v3-capability-stability.js";
+import {
   enforceQueryResponseBudget,
   prepareQueryArguments,
   projectQueryResult,
@@ -518,6 +522,7 @@ function addNestedContexts(
       delete track.fingerprint;
       delete track.trackFingerprint;
       delete track.referenceFingerprint;
+      delete track.mainGroupUuid;
     }
     delete root.trackFingerprint;
     return;
@@ -1160,6 +1165,7 @@ function minimalWriteResult(
 
 function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
   const commandPolicy = optionalCommandPolicy(name);
+  const stability = describeV3CapabilityStability(name);
   const schema = tool.inputSchema;
   let inputSchema: unknown = {};
   if (schema !== undefined) {
@@ -1196,6 +1202,27 @@ function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
       minimum: 1,
       description:
         "Fresh referenceCount from list_note_groups. Required with sharedGroupPolicy=allowAllReferences and checked again before writing.",
+    };
+    schemaRecord.properties = properties;
+  }
+  if (
+    name === "script_data" &&
+    typeof inputSchema === "object" &&
+    inputSchema !== null &&
+    !Array.isArray(inputSchema)
+  ) {
+    const schemaRecord = inputSchema as JsonRecord;
+    const properties =
+      typeof schemaRecord.properties === "object" &&
+      schemaRecord.properties !== null &&
+      !Array.isArray(schemaRecord.properties)
+        ? (schemaRecord.properties as JsonRecord)
+        : {};
+    properties.operation = {
+      type: "string",
+      enum: ["set", "remove"],
+      description:
+        "Write or remove Bridge-owned namespaced metadata. Read-only list/get operations are not exposed through sv_command.",
     };
     schemaRecord.properties = properties;
   }
@@ -1265,6 +1292,7 @@ function describeActionTool(name: string, tool: RegisteredTool): JsonRecord {
         }),
     inputSchema,
     ...(contextHint === undefined ? {} : { v3Context: contextHint }),
+    ...(stability === undefined ? {} : { stability }),
     category:
       commandPolicy?.category ??
       (isReadAction(tool) ? "read" : "edit"),
@@ -1677,6 +1705,7 @@ export function registerV3InternalAdapters(
       async (input) => {
         try {
           assertActionCategory(definitions, input.action, category);
+          assertV3CapabilityEnabled(input.action, input.args);
           const sessionChange = await observeSession();
           if (sessionChange !== undefined) {
             throw sessionChangedError(sessionChange);
@@ -1737,6 +1766,7 @@ export function registerV3InternalAdapters(
     async (input) => {
       try {
         assertActionCategory(definitions, input.action, "transaction");
+        assertV3CapabilityEnabled(input.action, input.args);
         const sessionChange = await observeSession();
         if (sessionChange !== undefined) {
           throw sessionChangedError(sessionChange);
@@ -1799,7 +1829,10 @@ export function registerV3InternalAdapters(
             contexts,
           ),
         );
-        if (result.isError || input.action !== "get_selection") {
+        if (
+          result.isError ||
+          (input.action !== "get_selection" && input.action !== "set_selection")
+        ) {
           return result;
         }
         const root = asRecord(readJsonResult(result), "result");
@@ -1807,7 +1840,7 @@ export function registerV3InternalAdapters(
           root.sessionReset = sessionResetResult(sessionChange);
         }
         addNestedContexts(
-          input.action,
+          "get_selection",
           root,
           contexts,
           guardTokens,
@@ -1852,6 +1885,7 @@ export function registerV3InternalAdapters(
           const previewAction = optionalString(args.action);
           const payload = optionalRecord(args.payload, "args.payload");
           if (previewAction !== undefined && payload !== undefined) {
+            assertV3CapabilityEnabled(previewAction, payload);
             const expandedPayload =
               previewAction === "apply_transaction"
                 ? expandTransactionContexts({ ...payload }, contexts)

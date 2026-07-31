@@ -312,6 +312,63 @@ test("offline installation never claims that hot reload succeeded", async (conte
   );
 });
 
+test("an existing three-component installation upgrades atomically to the current build", async (context) => {
+  const fixture = await mkdtemp(path.join(os.tmpdir(), "synthv-install-test-"));
+  context.after(async () => rm(fixture, { recursive: true, force: true }));
+  const target = path.join(fixture, "scripts");
+  const installedDirectory = path.join(target, "SynthV Agent Bridge");
+  await mkdir(installedDirectory, { recursive: true });
+  const priorMarker = "prior installed component\n";
+  await Promise.all(
+    [
+      "SynthVAgentBridge.lua",
+      "StopSynthVAgentBridge.lua",
+      "SynthVAgentSidebar.lua",
+    ].map((name) =>
+      writeFile(path.join(installedDirectory, name), priorMarker, "utf8"),
+    ),
+  );
+  const installer = fileURLToPath(
+    new URL("../../scripts/install-synthv-bridge.mjs", import.meta.url),
+  );
+  const result = spawnSync(
+    process.execPath,
+    [installer, "--target", target, "--no-reload"],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SYNTHV_AGENT_BRIDGE_DIR: path.join(fixture, "ipc"),
+      },
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  const installedBridge = await readFile(
+    path.join(installedDirectory, "SynthVAgentBridge.lua"),
+    "utf8",
+  );
+  const installedStop = await readFile(
+    path.join(installedDirectory, "StopSynthVAgentBridge.lua"),
+    "utf8",
+  );
+  const installedSidebar = await readFile(
+    path.join(installedDirectory, "SynthVAgentSidebar.lua"),
+    "utf8",
+  );
+  assert.doesNotMatch(installedBridge, /prior installed component/u);
+  assert.doesNotMatch(installedStop, /prior installed component/u);
+  assert.doesNotMatch(installedSidebar, /prior installed component/u);
+  assert.match(installedBridge, new RegExp(EXECUTOR_BUILD_ID, "u"));
+  assert.match(installedSidebar, new RegExp(SIDEBAR_BUILD_ID, "u"));
+  assert.deepEqual(
+    (await readdir(installedDirectory)).filter((name) =>
+      name.startsWith(".v3-install-"),
+    ),
+    [],
+  );
+});
+
 test("an interrupted component replacement restores the complete prior set", async (context) => {
   const fixture = await mkdtemp(path.join(os.tmpdir(), "synthv-install-test-"));
   context.after(async () => rm(fixture, { recursive: true, force: true }));

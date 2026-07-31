@@ -1430,3 +1430,80 @@ test("v3 Note Group collection shadow-compares ownership Contexts with one host 
     privateFieldCount: 4,
   });
 });
+
+test("get_track_notes never exposes the nested private main Group locator", async (context) => {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "synthv-v3-track-notes-privacy-"),
+  );
+  context.after(async () => fs.rm(directory, { recursive: true, force: true }));
+  const config = loadConfig(
+    {
+      SYNTHV_AGENT_BRIDGE_DIR: directory,
+      SYNTHV_AGENT_BRIDGE_TIMEOUT_MS: "2000",
+      SYNTHV_AGENT_BRIDGE_POLL_MS: "5",
+      SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS: "3000",
+    },
+    directory,
+  );
+  await writeStatus(config);
+
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  const server = createServer(config);
+  const client = new Client({
+    name: "v3-track-notes-privacy-test",
+    version: "1.0.0",
+  });
+  await Promise.all([
+    server.connect(serverTransport),
+    client.connect(clientTransport),
+  ]);
+  context.after(async () => {
+    await client.close();
+    await server.close();
+  });
+
+  const privateMainGroupUuid = "private-main-group-uuid";
+  const resultFixture = {
+    trackIndex: 1,
+    track: {
+      trackIndex: 1,
+      name: "Lead",
+      fingerprint: "private-track-fingerprint",
+      mainGroupUuid: privateMainGroupUuid,
+    },
+    groupCount: 1,
+    groups: [
+      {
+        groupIndex: 1,
+        groupUuid: privateMainGroupUuid,
+        referenceFingerprint: "private-reference-fingerprint",
+        noteCount: 0,
+        notes: [],
+      },
+    ],
+  };
+  const variants = [
+    {},
+    { fields: ["track"] },
+    { debug: true },
+  ] as const;
+
+  for (const variant of variants) {
+    const bridge = serveRead(config, "get_track_notes", resultFixture);
+    const response = await client.callTool({
+      name: "sv_query",
+      arguments: {
+        action: "get_track_notes",
+        contextMode: "readOnly",
+        args: { trackIndex: 1 },
+        ...variant,
+      },
+    });
+    assert.equal(await bridge, 1);
+    assert.doesNotMatch(
+      JSON.stringify(toolJson(response)),
+      /private-main-group-uuid/u,
+    );
+  }
+});

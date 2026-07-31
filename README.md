@@ -37,10 +37,13 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 > Status: **v0.2.0-alpha.1 / protocol v3**. The six-tool semantic Facade,
 > typed Query Contexts, compact Command outcomes, component build-coherence
 > checks, Query Projector, common Command Kernel, semantic write-policy
-> catalog, aggregate tuning, safe clone semantics, and dependent transaction
-> recovery are implemented. Representative SynthV 2.2.1 standalone
-> certification is recorded; the stable `0.2.0` release gate remains open.
-> Test writes only on saved working copies.
+> catalog, aggregate tuning, and dependent transaction recovery are
+> implemented. Alpha validation currently has fresh evidence for 17/17 Query,
+> 9/9 UI, and 31/38 write Actions. Seven clone/transaction/harmony paths with
+> native-host risk are marked experimental and disabled before project IPC;
+> no write Action remains pending. Human listening has passed; the remaining
+> Stage 3 write/Undo and four-hour stability gates are still required. The stable
+> `0.2.0` release gate remains open. Test writes only on saved working copies.
 
 See the [v3 architecture](docs/architecture-v3.md),
 [development plan](docs/v3-development-plan.md), and
@@ -60,6 +63,12 @@ See the [v3 architecture](docs/architecture-v3.md),
 | Timing, editor, and playback | Convert seconds, quarter notes, and blicks; edit tempo/time signatures; control selection, viewport, clipboard, grid snapping, coordinates, mixer, and playback. |
 | Safe editing | Protect writes with fresh fingerprints, typed/scope-bound `contextId` values, and Guard Tokens; fully preflight independent transaction steps, resolve forward dependencies just in time, create one SynthV undo record, and optionally retain a guarded rollback plan. |
 | Review and local privacy | Review, apply, dismiss, or cancel guarded previews in the optional native side panel. File IPC stays local: the Bridge does not parse `.svp` files, open a network port, or call an AI API. |
+
+> To avoid reproducible SynthV 2.2.1 native crashes, the current Alpha rejects
+> isolated Group clone, Note Group/Track/Track-shell clone, harmony Track, and
+> transaction apply/rollback before project IPC. The table describes the full
+> design surface, not current availability of those experimental paths. Linked
+> Group-reference clone remains available.
 
 ## Responsibility boundaries
 
@@ -184,7 +193,7 @@ verification, and the first guarded tuning edit.
 ### 1. Build the MCP server
 
 ```bash
-git clone https://github.com/zhoupengjie/synthv-agent-bridge.git
+git clone https://github.com/SynthVCopilot/synthv-agent-bridge.git
 cd synthv-agent-bridge
 npm install
 npm run build
@@ -634,23 +643,25 @@ modifies the project or installed files.
 
 - One request may be in flight at a time.
 - A client-side timeout is ambiguous: SynthV may still finish the operation. The processing marker remains until the Lua host completes, and the agent should read the current project before deciding whether to retry a write.
-- The side panel holds one pending preview at a time. That preview may contain
-  either one write or one `apply_transaction` batch.
-- Generic transactions reject conflicting writes to the same guarded scope.
-  A later step may use an earlier result through a complete-field `$result`
-  reference. Independent steps are fully preflighted before writing; dependent
-  steps are resolved and checked just in time because their targets do not yet
-  exist during the first pass. Index-shifting track/library-group deletes must
-  be the only step.
+- The current build classifies isolated Group clone, Note Group/Track/
+  Track-shell clone, harmony Track, and transaction apply/rollback as
+  experimental and rejects them before project IPC. Linked Group-reference
+  clone remains available.
+- The side panel holds one pending preview at a time; previews targeting those
+  experimental paths fail before project IPC too.
+- The generic transaction schema and Fake Host implementation remain for
+  diagnosis: they reject conflicting guarded scopes, support complete-field
+  `$result` references, and perform full/just-in-time preflight for independent
+  and dependent steps. Public transaction apply/rollback is not runnable in
+  the current build.
 - `atomicity: "singleUndoRecord"` means one SynthV recovery boundary, not
   automatic rollback.
   An independent preflight failure makes no project changes. A dependent
   validation or unexpected host failure can occur after earlier steps have
   written; when the error reports `undoRequired`, immediately use
   **Edit > Undo** once before rereading or retrying.
-- Rollback plans are held in Bridge memory for the current project/session and
-  are lost when the Bridge reloads or SynthV closes. A rollback is a new
-  guarded write and is refused if its fingerprints are stale.
+- Rollback-plan design remains project/Session-bound; current
+  `rollback_transaction` is experimental-disabled together with apply.
 - The panel cannot initiate a Codex turn by itself. **Copy & queue** writes a
   local request and puts a handoff prompt on the clipboard for the user to paste.
 - SynthV's public scripting API does not expose an Undo command. The panel shows
@@ -658,8 +669,9 @@ modifies the project or installed files.
   **Ctrl+Z**, with **Edit > Undo** as the focus-independent fallback.
 - SynthV's public scripting API does not expose project save, audio rendering,
   selecting an installed singer database by display name, reading Vocal
-  identity, or Voice Panel scale/mode settings. `clone_track_shell` can
-  host-clone a source track's main Vocal context without naming it.
+  identity, or Voice Panel scale/mode settings. The `clone_track_shell` schema
+  describes host-cloned main-Vocal inheritance, but the current host-clone path
+  is disabled after native crashes and still cannot name that Vocal.
 - Local score support is intentionally import-only and bounded. It accepts
   absolute local `.xml`, `.musicxml`, `.mxl`, `.mid`, or `.midi` paths after
   explicit inspection and rights confirmation. It rejects URLs, `.svp`,

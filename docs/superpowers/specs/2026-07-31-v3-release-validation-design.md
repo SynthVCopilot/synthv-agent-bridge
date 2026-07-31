@@ -214,6 +214,47 @@ single functional scenarios cannot expose.
 
 ### Repetition matrix
 
+The read-only portion has an executable driver. Inspect its redacted schedule
+without connecting to SynthV:
+
+```text
+npm run validate:v3-reads -- --dry-run
+```
+
+After Stage 2 is complete, run the declared 1,000-read matrix only against an
+explicit saved disposable project and target:
+
+```text
+npm run validate:v3-reads -- --live --stage2-complete --project-file <absolute-svp-path> --track-index <1-based> --group-index <1-based> --note-index <1-based>
+```
+
+The driver probes the project, Session and executor identity around every
+Query, stops on drift or a 20,000-character/byte response, emits aggregate
+timings/counts only, and removes its generated local MusicXML probe. Omitting
+`--stage2-complete` makes a 1,000-read live run fail before connection. Smaller
+live counts are development smoke only and are not Stage 3 evidence.
+
+The non-read stability slices have a second executable driver. Inspect its
+redacted formal plan without connecting to SynthV:
+
+```text
+npm run validate:v3-stability -- --dry-run --mode all
+```
+
+Live runs require one explicit mode (`concurrency`, `experimental`, `reload`,
+or `trace-ab`), the saved disposable project and target, and explicit
+`--stage2-complete` acknowledgement at formal counts. Lower `--count` values
+are development smoke only. The reload slice verifies both a fresh Session and
+write-before-IPC rejection of every old Context. The trace slice starts
+separate MCP processes with `SYNTHV_AGENT_TRACE_ENABLED=0/1`, warms each state,
+and compares real-host p95 without changing the project.
+
+The dry-run also emits the exact 200-call ordinary write/Undo distribution:
+31 verified write Actions, 7 calls for the first 14 and 6 calls for the
+remaining 17, so every supported Action exceeds the minimum of three. It also
+declares the separate 30 linked-clone/Undo cycles and marks both slices as
+requiring visible SynthV Undo; the official scripting API cannot execute Undo.
+
 - 1,000 mixed read-only queries distributed across all 17 Query actions.
 - 200 ordinary write/Undo cycles distributed across every supported write
   action, with at least three cycles per action.
@@ -224,6 +265,33 @@ single functional scenarios cannot expose.
   request loss or overlap.
 - At least four continuous hours of mixed read, write, Undo, reload, and idle
   heartbeat operation.
+
+Run `validate:v3-resources` as a read-only companion to the four-hour soak,
+passing the independent soak PowerShell process ID. It samples the visible
+SynthV process and Bridge status every minute, records an additional settled
+sample 60 seconds after every 20-write/reload batch, and fails unless all ten batches and
+at least five settled-baseline samples are present. Each post-batch and final
+working-set/private-byte sample must be within 120% of the settled median;
+neither ten-sample batch series may grow monotonically;
+heartbeat age must remain within 5 seconds and no processing/control marker may
+remain stale for more than 30 seconds. The clean-stop Doctor check remains the
+authoritative final IPC-residual check.
+
+The monitor records cold-start samples for diagnosis, but by default only
+regular samples taken after at least 10 completed writes are eligible for the
+five-sample settled baseline. This enforces the Stage 3 "after warm-up"
+criterion instead of comparing a loaded Voice/render working set against an
+unloaded process. Batch discovery uses the greatest completed multiple of 20,
+so restarting only the read-only monitor after an interruption cannot silently
+miss a batch that completed between polling intervals.
+
+For a reduced-stable candidate, an action disabled at the public boundary must
+not be re-enabled merely to satisfy the historical native-host repetition
+count. The `experimental` driver instead repeats every disabled capability 30
+times and repeats both dependent-transaction shapes 100 times each, requiring
+`EXPERIMENTAL_CAPABILITY_DISABLED`, `undoRequired=false`, unchanged
+project/Session/executor identity, and no project IPC. The still-supported
+linked clone remains part of the ordinary write/Undo matrix.
 
 ### Crash and recovery criteria
 

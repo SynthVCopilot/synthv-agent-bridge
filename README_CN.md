@@ -36,9 +36,12 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 > 列表。
 
 > 状态：**v0.2.0-alpha.1／协议 v3**。六工具语义入口、类型化 Query
-> Context、紧凑 Command 结果、组件构建一致性检查和首个统一命令内核切片
-> 已实现；私有操作迁移与真机认证仍在进行。工程写入只能在已保存的工作
-> 副本上测试。
+> Context、紧凑 Command 结果、组件构建一致性检查、统一命令内核和全部
+> 私有操作迁移已经完成。当前正在执行 Alpha 发布验证：17/17 Query、9/9 UI
+> 和 31/38 写 Action 已有当前构建真机证据；7 条发生原生宿主风险的
+> clone/transaction/harmony 路径已标记 experimental 并在工程 IPC 前禁用，
+> 已无 pending 写 Action，人工听感已通过；Stage 3 写入/Undo 与四小时长稳门禁仍未完成。
+> 工程写入只能在已保存的工作副本上测试。
 
 参阅 [v3 架构](docs/architecture-v3.md)、
 [开发计划](docs/v3-development-plan.md)和
@@ -58,6 +61,11 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 | 时序、编辑器与播放 | 转换秒、四分音符和 blick；编辑速度/拍号；控制选区、视口、剪贴板、网格吸附、坐标、混音器和播放。 |
 | 安全编辑 | 使用最新指纹、带类型/作用域的 `contextId` 和 Guard Token 保护写入；完整预检独立事务步骤，按需解析正向依赖；创建一个 SynthV 撤销记录，并可选保留受保护回滚计划。 |
 | 审核与本地隐私 | 在可选原生侧边栏中审核、应用、放弃或取消受保护预览。文件 IPC 保持本地：Bridge 不解析 `.svp` 文件、不打开网络端口，也不调用 AI API。 |
+
+> 当前 Alpha 为避免已复现的 SynthV 2.2.1 原生崩溃，在工程 IPC 前禁用
+> isolated Group clone、Note Group/Track/Track-shell clone、和声轨以及
+> transaction apply/rollback；上表描述完整设计能力，不表示这些实验路径在
+> 当前构建可用。linked Group reference clone 仍可用。
 
 ## 责任边界
 
@@ -167,7 +175,7 @@ Node.js、安装脚本、注册 MCP、验证连接和第一次受保护调音修
 ### 1. 构建 MCP 服务器
 
 ```bash
-git clone https://github.com/zhoupengjie/synthv-agent-bridge.git
+git clone https://github.com/SynthVCopilot/synthv-agent-bridge.git
 cd synthv-agent-bridge
 npm install
 npm run build
@@ -591,19 +599,21 @@ Codex 配置。添加 `--json` 可获得机器可读输出。它不会修改工�
 - 同一时间只能有一个请求进行中。
 - 客户端超时具有不确定性：SynthV 可能仍会完成操作。处理标记会保留到
   Lua 宿主执行结束；Agent 应先读取当前工程，再决定是否重试写入。
-- 侧边栏同一时间只保存一个待处理预览。该预览可以包含一个写入或一批
-  `apply_transaction`。
-- 通用事务会拒绝多个冲突修改同一受保护作用域的步骤。后续步骤可以用完整
-  字段形式的 `$result` 引用前一步结果。独立步骤在写入前完整预检；依赖
-  步骤由于目标尚不存在，只能解析结果后即时预检。会改变索引的轨道/库
-  Group 删除必须是唯一步骤。
+- 当前构建将 isolated Group clone、Note Group/Track/Track-shell clone、
+  和声轨和 transaction apply/rollback 标记为 experimental，并在工程 IPC
+  前拒绝。linked Group reference clone 仍可用。
+- 侧边栏同一时间只保存一个待处理预览；指向上述实验路径的预览同样在工程
+  IPC 前拒绝。
+- 通用事务 schema 和 Fake Host 实现保留用于诊断：它会拒绝冲突作用域，
+  支持完整字段 `$result`，并对独立/依赖步骤分别执行完整/即时预检；但当前
+  公共 transaction apply/rollback 不可运行。
 - `atomicity: "singleUndoRecord"` 表示一个 SynthV 恢复边界，不表示自动
   回滚。独立预检失败不会修改工程；依赖预检或宿主执行失败可能发生在前面
   步骤已经写入之后。
   错误返回 `undoRequired` 时，重新读取或重试前请立即执行一次
   **编辑 → 撤销**。
-- 回滚计划保存在当前工程/会话的 Bridge 内存中，Bridge 重载或 SynthV
-  关闭后会丢失。回滚本身是新的受保护写入；指纹陈旧时会被拒绝。
+- 回滚计划设计仍绑定当前工程/会话；当前 `rollback_transaction` 与 apply
+  一起处于实验性禁用状态。
 - 面板无法自行启动 Codex 回合。**Copy & queue** 会写入本地请求，并把
   交接提示复制到剪贴板，仍需用户粘贴。
 - SynthV 公开脚本 API 不提供 Undo 命令。面板会显示最新写入，并提示用户
@@ -611,7 +621,8 @@ Codex 配置。添加 `--json` 可获得机器可读输出。它不会修改工�
   **编辑 → 撤销**。
 - SynthV 公开脚本 API 不支持工程保存、音频渲染、按显示名称选择已安装
   歌手数据库、读取 Vocal 身份或 Voice Panel 音阶/模式设置。
-  `clone_track_shell` 可以通过宿主克隆继承源轨主 Vocal 上下文，但无法命名它。
+  `clone_track_shell` 的 schema 描述宿主克隆 Vocal 上下文语义，但当前宿主
+  clone 路径因原生崩溃风险被禁用，也无法命名该 Vocal。
 - 本地曲谱支持有意限定为有界导入。它只接受绝对本地 `.xml`、`.musicxml`、
   `.mxl`、`.mid` 或 `.midi` 路径，并要求先检查、再确认使用权；URL、
   `.svp`、XML `DOCTYPE`/`ENTITY`、含歧义或复调的声部、已变化的文件哈希，

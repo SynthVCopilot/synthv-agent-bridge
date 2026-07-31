@@ -100,6 +100,41 @@ test("v3 command outcomes distinguish changes from already-satisfied state", asy
   });
 });
 
+test("v3 command outcomes and failures keep internal Group UUIDs private", async () => {
+  await runWithTrace(async () => {
+    const privateUuid = "private-group-uuid";
+    const acknowledgement = commandOutcome("clone_group_reference", {
+      changedCount: 1,
+      undoRecordCount: 1,
+      verified: true,
+      sourceTrackIndex: 1,
+      sourceGroupIndex: 2,
+      sourceGroupUuid: privateUuid,
+      targetTrackIndex: 1,
+      targetGroupIndex: 3,
+      targetGroupUuid: privateUuid,
+    });
+    const failure = failedOutcome(
+      new BridgeError("shared", "SHARED_GROUP_WRITE", {
+        trackIndex: 1,
+        groupIndex: 2,
+        groupUuid: privateUuid,
+        referenceCount: 2,
+      }),
+      "guarded",
+    );
+
+    assert.equal(acknowledgement.sourceTrackIndex, 1);
+    assert.equal(acknowledgement.sourceGroupIndex, 2);
+    assert.equal(acknowledgement.targetTrackIndex, 1);
+    assert.equal(acknowledgement.targetGroupIndex, 3);
+    assert.equal(acknowledgement.sourceGroupUuid, undefined);
+    assert.equal(acknowledgement.targetGroupUuid, undefined);
+    assert.doesNotMatch(JSON.stringify(acknowledgement), /private-group-uuid/u);
+    assert.doesNotMatch(JSON.stringify(failure), /private-group-uuid/u);
+  });
+});
+
 test("v3 public stale errors stay bounded and redact raw project fingerprints", async () => {
   await runWithTrace(async () => {
     const rawFingerprint = `group|${"private-note-data".repeat(20_000)}`;

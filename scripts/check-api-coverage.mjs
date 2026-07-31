@@ -14,6 +14,7 @@ import {
   commandPolicyFor,
   optionalCommandPolicy,
 } from "../dist/src/v3-command-policy.js";
+import { describeV3CapabilityStability } from "../dist/src/v3-capability-stability.js";
 
 const INVENTORY_PATTERN =
   /<!-- SV2_API_INVENTORY_START -->\s*```json\s*([\s\S]*?)\s*```\s*<!-- SV2_API_INVENTORY_END -->/u;
@@ -24,6 +25,8 @@ const METHOD_CLASSES = [
 ];
 const REAL_HOST_STATES = new Set([
   "verified",
+  "unsupported",
+  "experimental",
   "sampled",
   "pending",
   "notApplicable",
@@ -310,9 +313,9 @@ const verifiedReads = asStringArray(
   "actionGroups.verifiedReads",
   errors,
 );
-const sampledUi = asStringArray(
-  actionGroups.sampledUi,
-  "actionGroups.sampledUi",
+const verifiedUi = asStringArray(
+  actionGroups.verifiedUi,
+  "actionGroups.verifiedUi",
   errors,
 );
 const writes = Array.isArray(actionGroups.writes) ? actionGroups.writes : [];
@@ -320,13 +323,13 @@ if (!Array.isArray(actionGroups.writes)) {
   errors.push("actionGroups.writes must be an array");
 }
 
-const classifiedActions = [...verifiedReads, ...sampledUi];
+const classifiedActions = [...verifiedReads, ...verifiedUi];
 for (const action of verifiedReads) {
   if (!liveByCategory.read?.has(action)) {
     errors.push(`classified read is not live: ${action}`);
   }
 }
-for (const action of sampledUi) {
+for (const action of verifiedUi) {
   if (!liveByCategory.ui?.has(action)) {
     errors.push(`classified UI Action is not live: ${action}`);
   }
@@ -381,6 +384,23 @@ for (const [index, rawWrite] of writes.entries()) {
   }
   if (!REAL_HOST_STATES.has(write.realHost)) {
     errors.push(`${action}.realHost has an unknown status`);
+  }
+  const stability = describeV3CapabilityStability(action);
+  if (
+    stability?.classification === "experimental" &&
+    write.realHost !== "experimental"
+  ) {
+    errors.push(
+      `${action}.realHost must be experimental while the live capability registry classifies it as experimental`,
+    );
+  }
+  if (
+    write.realHost === "experimental" &&
+    stability?.classification !== "experimental"
+  ) {
+    errors.push(
+      `${action}.realHost is experimental without a matching live capability classification`,
+    );
   }
   // This call deliberately proves the policy is total and throws on drift.
   commandPolicyFor(action);

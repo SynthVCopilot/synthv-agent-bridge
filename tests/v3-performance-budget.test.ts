@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { access } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
@@ -8,6 +8,7 @@ import { BridgeError } from "../src/errors.js";
 import {
   commandOutcome,
   failedOutcome,
+  isTraceCollectionEnabled,
   runWithTrace,
 } from "../src/v3-command-kernel.js";
 import {
@@ -37,6 +38,57 @@ function phraseFixture(noteCount: number): Record<string, unknown> {
     })),
   };
 }
+
+test("PERF-000: trace collection has an explicit opt-out for controlled A/B validation", () => {
+  assert.equal(isTraceCollectionEnabled(undefined), true);
+  assert.equal(isTraceCollectionEnabled("1"), true);
+  assert.equal(isTraceCollectionEnabled("true"), true);
+  assert.equal(isTraceCollectionEnabled("on"), true);
+  assert.equal(isTraceCollectionEnabled("0"), false);
+  assert.equal(isTraceCollectionEnabled("false"), false);
+  assert.equal(isTraceCollectionEnabled("off"), false);
+  assert.equal(isTraceCollectionEnabled(" OFF "), false);
+});
+
+test("PERF-000: disabling collection preserves one request trace identity", () => {
+  const program = `
+    import {
+      currentTraceId,
+      runWithTrace,
+      traceDiagnostics,
+      traceIdForCurrentOperation,
+    } from "./dist/src/v3-command-kernel.js";
+    let first;
+    let second;
+    await runWithTrace(async () => {
+      first = currentTraceId();
+      second = traceIdForCurrentOperation();
+    });
+    process.stdout.write(JSON.stringify({
+      first,
+      second,
+      diagnostics: traceDiagnostics({ level: "support", limit: 1 }),
+    }));
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "--eval", program],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, SYNTHV_AGENT_TRACE_ENABLED: "0" },
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout) as {
+    readonly first: string;
+    readonly second: string;
+    readonly diagnostics: { readonly traceCount: number };
+  };
+  assert.match(payload.first, /^tr_/u);
+  assert.equal(payload.second, payload.first);
+  assert.equal(payload.diagnostics.traceCount, 0);
+});
 
 test("PERF-001: ordinary Query fixture p95 stays below 20 KB", () => {
   const projectedResults = Array.from({ length: 100 }, (_, index) => {

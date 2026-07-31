@@ -27,7 +27,7 @@
 - A read-only doctor for installed versions, heartbeats, IPC state, and Codex
   configuration.
 
-## Current — official API coverage expansion
+## Completed — official API coverage expansion and v3 migration
 
 - Reusable note-group library and linked/deep reference operations.
 - Vocal and instrumental Group-reference updates and removal.
@@ -49,10 +49,10 @@
   recommendation-only review targets.
 - Explicit complete-overlap or binary onset-only range scans, guarded phrase
   page cursors, and one-sweep multi-range phrase analysis with shared notes.
-- Legacy P4 MCP v2 surface with eight domain tools, just-in-time action
-  schemas, range-scoped `contextId` guards, phrase field projection, minimal
-  write acknowledgements, and Dense rows for large note sets.
-- V2 note insertion automatically creates a reusable non-main group when the
+- Six-tool MCP v3 Facade with just-in-time action schemas, range-scoped
+  `contextId` guards, phrase field projection, minimal write acknowledgements,
+  and Dense rows for large note sets. The legacy v2 surface is removed.
+- v3 note insertion automatically creates a reusable non-main group when the
   requested target is a track main group, preserving Voice/Vocal Mode editing
   for newly inserted notes.
 - Deterministic guarded note transforms apply one explicit onset, duration, or
@@ -87,14 +87,18 @@ performance roadmap or a second SynthV editing interface.
 
 ## Current — v3 alpha stabilization
 
-- Complete action migration behind the six-tool v3 Facade.
-- Finish real SynthV acceptance for the Mixer slice and high-risk clone,
-  note, Automation, Smart Pitch, and aggregate-tuning commands.
-- Complete the official API coverage matrix with one recorded disposition per
-  method family.
+- Keep the completed six-tool migration and 64/64 Action coverage checks from
+  drifting while release evidence is collected.
+- Preserve the completed Vocal onboarding, 31 verified write Actions, and
+  passed human listening result for the integrated tuning scenario.
+- Keep the seven native-risk clone/transaction/harmony paths explicitly
+  experimental and disabled until a future repetition matrix proves them safe.
+- Preserve the completed Stage 3 read/reload/concurrency, reduced-capability,
+  and tracing A/B evidence; finish the write/Undo and four-hour stability
+  matrix.
 - Keep Snapshot LRU disabled until traces prove repeated read projection is a
   significant cost.
-- Remove private v2 migration adapters before stable `0.2.0`.
+- Make the evidence-based full stable, reduced stable, or remain-Alpha decision.
 
 See [v3 development plan](v3-development-plan.md).
 

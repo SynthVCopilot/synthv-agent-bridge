@@ -7,6 +7,8 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { readComponentBuildIdentity } from "./component-build-identity.mjs";
+
 const SERVER_NAME = "synthv-agent-bridge";
 const EXPECTED_PROTOCOL_VERSION = 3;
 const argumentsList = process.argv.slice(2);
@@ -110,12 +112,9 @@ record(
   `Package version is ${expectedVersion}; the v3 alpha line must remain 0.2.0-alpha.`,
 );
 
-const sourceBridge = await readText(
-  path.join(repositoryRoot, "synthv", "SynthVAgentBridge.lua"),
-);
-const sourceSidebar = await readText(
-  path.join(repositoryRoot, "synthv", "SynthVAgentSidebar.lua"),
-);
+const componentBuildIdentity = await readComponentBuildIdentity(repositoryRoot);
+const sourceBridge = componentBuildIdentity.prepareExecutorSource();
+const sourceSidebar = componentBuildIdentity.prepareSidebarSource();
 const sourceBridgeVersion = sourceBridge?.match(
   /BRIDGE_VERSION\s*=\s*"([^"]+)"/u,
 )?.[1];
@@ -125,12 +124,8 @@ const sourceProtocolVersion = Number(
 const sourceSidebarVersion = sourceSidebar?.match(
   /SIDEBAR_VERSION\s*=\s*"([^"]+)"/u,
 )?.[1];
-const sourceExecutorBuildId = sourceBridge?.match(
-  /EXECUTOR_BUILD_ID\s*=\s*"([^"]+)"/u,
-)?.[1];
-const sourceSidebarBuildId = sourceSidebar?.match(
-  /SIDEBAR_BUILD_ID\s*=\s*"([^"]+)"/u,
-)?.[1];
+const sourceExecutorBuildId = componentBuildIdentity.executorBuildId;
+const sourceSidebarBuildId = componentBuildIdentity.sidebarBuildId;
 record(
   "source-versions",
   sourceBridgeVersion === expectedVersion &&

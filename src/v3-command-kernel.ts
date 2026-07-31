@@ -35,6 +35,14 @@ interface StoredTrace {
 }
 
 const recentTraces: StoredTrace[] = [];
+export function isTraceCollectionEnabled(
+  value = process.env.SYNTHV_AGENT_TRACE_ENABLED,
+): boolean {
+  const normalized = value?.trim().toLocaleLowerCase("en-US");
+  return normalized !== "0" && normalized !== "false" && normalized !== "off";
+}
+
+const TRACE_COLLECTION_ENABLED = isTraceCollectionEnabled();
 const TRACE_METADATA_KEYS = new Set([
   "action",
   "tool",
@@ -81,7 +89,7 @@ export async function runWithTrace<T>(
       } finally {
         traceStage("projected");
         const context = traceStorage.getStore();
-        if (context !== undefined) {
+        if (TRACE_COLLECTION_ENABLED && context !== undefined) {
           let previousElapsedMs = 0;
           recentTraces.push({
             traceId: context.traceId,
@@ -119,6 +127,9 @@ export function traceStage(
   stage: string,
   metadata?: Readonly<Record<string, string | number | boolean>>,
 ): void {
+  if (!TRACE_COLLECTION_ENABLED) {
+    return;
+  }
   const context = traceStorage.getStore();
   if (context === undefined) {
     return;
@@ -289,7 +300,7 @@ function copyDurableIdentifiers(
     if (
       (typeof value === "string" &&
         value.length <= 128 &&
-        /(?:Id|Uuid)$/u.test(key) &&
+        /Id$/u.test(key) &&
         !/fingerprint/iu.test(key)) ||
       (typeof value === "number" && /(?:Index|TakeId)$/u.test(key))
     ) {
@@ -349,7 +360,7 @@ export function commandOutcome(
 }
 
 const SENSITIVE_KEY =
-  /(?:fingerprint|lyrics?|phonemes?|notes?|points?|automation|pitchCurve|traceback|requestedValue|actualValue)/iu;
+  /(?:fingerprint|guardToken|uuid|lyrics?|phonemes?|notes?|points?|automation|pitchCurve|traceback|requestedValue|actualValue)/iu;
 
 function redactValue(value: unknown, depth = 0): unknown {
   if (depth > 4) {

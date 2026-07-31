@@ -147,6 +147,14 @@ test("Fake Host: already-satisfied mixer command creates no Undo", (context) => 
   assertMarker(context, "already-satisfied-no-undo");
 });
 
+test("CMD-005: already-satisfied Track update creates no Undo", (context) => {
+  assertMarker(context, "track-update-already-satisfied");
+});
+
+test("CMD-005: already-satisfied Group update creates no Undo", (context) => {
+  assertMarker(context, "group-update-already-satisfied");
+});
+
 test("SAF-007: already-satisfied note edit creates no Undo", (context) => {
   assertMarker(context, "note-edit-already-satisfied");
 });
@@ -157,6 +165,14 @@ test("SAF-008: ignored note setter fails its postcondition with Undo guidance", 
 
 test("SAF-008: ignored note deletion fails its postcondition with Undo guidance", (context) => {
   assertMarker(context, "note-delete-postcondition-failure");
+});
+
+test("SAF-008: ignored Track deletion fails its postcondition with Undo guidance", (context) => {
+  assertMarker(context, "track-delete-postcondition-failure");
+});
+
+test("SAF-008: ignored Group Reference deletion fails its postcondition with Undo guidance", (context) => {
+  assertMarker(context, "group-reference-delete-postcondition-failure");
 });
 
 test("SAF-008: note deletion verifies remaining note order", (context) => {
@@ -187,6 +203,18 @@ test("Fake Host: time-axis reads return independent bounded mark pages", (contex
   assertMarker(context, "query-time-axis-page");
 });
 
+test("CMD-005: already-satisfied time-axis update creates no Undo", (context) => {
+  assertMarker(context, "time-axis-already-satisfied");
+});
+
+test("CMD-005: already-satisfied script-data set creates no Undo", (context) => {
+  assertMarker(context, "script-data-set-already-satisfied");
+});
+
+test("CMD-005: removing absent script data creates no Undo", (context) => {
+  assertMarker(context, "script-data-remove-already-satisfied");
+});
+
 test("Fake Host: Track and Note Group collections return bounded pages", (context) => {
   assertMarker(context, "query-track-page");
   assertMarker(context, "query-note-group-page");
@@ -209,6 +237,10 @@ test("CMD-005: standalone Smart Pitch no-op creates no Undo", (context) => {
 
 test("CMD-005: Automation set no-op creates no Undo", (context) => {
   assertMarker(context, "automation-set-already-satisfied");
+});
+
+test("CMD-006: Automation postconditions accept host float32 normalization", (context) => {
+  assertMarker(context, "automation-float32-postcondition");
 });
 
 test("CMD-005: Automation clear no-op creates no Undo", (context) => {

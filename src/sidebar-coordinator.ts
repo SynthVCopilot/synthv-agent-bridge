@@ -159,16 +159,74 @@ async function removeIfExists(filePath: string): Promise<void> {
   }
 }
 
-async function writeTextAtomically(filePath: string, content: string): Promise<void> {
-  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+type AtomicTextFileOperations = {
+  writeFile(
+    filePath: string,
+    content: string,
+    encoding: "utf8",
+  ): Promise<unknown>;
+  unlink(filePath: string): Promise<unknown>;
+  rename(source: string, destination: string): Promise<unknown>;
+};
+
+const TRANSIENT_WINDOWS_FILE_CODES = new Set(["EACCES", "EBUSY", "EPERM"]);
+const FILE_CONTENTION_RETRY_DELAYS_MS = [5, 10, 20, 40, 80, 100, 100] as const;
+
+function isTransientFileContention(error: unknown): boolean {
+  return TRANSIENT_WINDOWS_FILE_CODES.has(
+    (error as NodeJS.ErrnoException).code ?? "",
+  );
+}
+
+async function retryTransientFileContention<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  for (const delayMs of FILE_CONTENTION_RETRY_DELAYS_MS) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isTransientFileContention(error)) {
+        throw error;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return operation();
+}
+
+async function removeIfExistsWith(
+  operations: AtomicTextFileOperations,
+  filePath: string,
+): Promise<void> {
   try {
-    await fs.writeFile(temporary, content, "utf8");
-    await removeIfExists(filePath);
-    await fs.rename(temporary, filePath);
-  } finally {
-    await removeIfExists(temporary).catch(() => undefined);
+    await retryTransientFileContention(() => operations.unlink(filePath));
+  } catch (error) {
+    if (!isMissingFile(error)) {
+      throw error;
+    }
   }
 }
+
+async function writeTextAtomically(
+  filePath: string,
+  content: string,
+  operations: AtomicTextFileOperations = fs,
+): Promise<void> {
+  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await operations.writeFile(temporary, content, "utf8");
+    await removeIfExistsWith(operations, filePath);
+    await retryTransientFileContention(() =>
+      operations.rename(temporary, filePath),
+    );
+  } finally {
+    await removeIfExistsWith(operations, temporary).catch(() => undefined);
+  }
+}
+
+export const sidebarCoordinatorTesting = {
+  writeTextAtomically,
+};
 
 function lineValue(text: string, key: string): string | undefined {
   const prefix = `${key}=`;
@@ -1090,6 +1148,7 @@ export class SidebarCoordinator {
       `buildFingerprint=${SERVER_BUILD_FINGERPRINT}`,
       `capabilityFingerprint=${SERVER_CAPABILITY_FINGERPRINT}`,
       `updatedAtEpochMs=${now}`,
+      `processId=${process.pid}`,
       `ipcDirectory=${sanitizeLine(this.config.paths.directory)}`,
     ];
     if (this.lastError !== null) {
