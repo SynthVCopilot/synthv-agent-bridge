@@ -936,6 +936,7 @@ test("v3 mixer query shadow-compares its projection without another host read", 
   assert.equal(projectedStage?.metadata?.action, "get_track_mixer");
   assert.equal(projectedStage?.metadata?.projectionStrategy, "fixed");
   assert.equal(projectedStage?.metadata?.budgetExceeded, false);
+  assert.equal(typeof projectedStage?.metadata?.durationMs, "number");
   assert.equal(typeof projectedStage?.metadata?.responseCharacters, "number");
 });
 

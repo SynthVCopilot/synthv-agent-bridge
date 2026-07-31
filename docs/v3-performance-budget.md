@@ -1,6 +1,6 @@
 # v3 Performance and Token Budget
 
-Status: initial engineering targets
+Status: enforced budgets with measured Phase 6 baseline
 
 Date: 2026-07-30
 
@@ -158,6 +158,48 @@ collection shadows each counted four private UUID/fingerprint fields without
 exposing them. Every Trace reported zero mutation or Undo stages. Snapshot
 caching remained disabled, so each result came from the authoritative host.
 
+### Reproducible Phase 6 synthetic baseline
+
+Run `npm run benchmark:v3` after a build. The benchmark uses generated data
+only and does not connect to SynthV or copy project content.
+
+On 2026-07-31 with Node `v26.1.0`, 500 iterations produced:
+
+| Projection | p95 | Result characters | Budget |
+|---|---:|---:|---:|
+| Six-tool catalog | N/A | 4,336 | 6,000 |
+| 64-note compact phrase Query | 0.549 ms | 4,757 | 20,000 |
+| Changed command acknowledgement | 0.003 ms | 129 | 2,048 |
+
+The repository test also constructs a 100,000-character private fingerprint
+and proves that the normal stale error remains below 4,096 characters without
+containing that fingerprint. Normal Trace correlation adds less than the
+1,024-character response allowance.
+
+The file IPC Trace now records queue entry and dequeue wait separately. Query
+projection records its own duration, while Lua continues to report bounded
+numeric schema/read/preflight/mutation/verification stage timings.
+
+### Snapshot cache decision
+
+**Decision on 2026-07-31: Snapshot LRU not justified; activation is deferred.**
+
+The measured 30-request real-host sample has a 149 ms p95 and the final Phase 3
+matrix remains below the 300 ms ordinary-operation target. Model-facing
+results are already 160-1,698 characters in that matrix, and pure projection is
+well below 1 ms in the reproducible 64-note fixture. A cache could avoid some
+authoritative read latency, but SynthV provides no complete project-change
+subscription, so a read-only hit may omit a user's later manual edit. The
+current latency and token data do not justify that freshness tradeoff or the
+additional invalidation surface.
+
+`V3SnapshotCache` remains a bounded, disposable tested component but is not
+wired into `sv_query`; every current Query reaches SynthV. Task 12 is skipped.
+It may be reconsidered only after new traces show repeated cache-tolerant reads
+are a material workload and a specific projection can declare acceptable
+staleness. Write-intent reads and all write authorization will remain
+host-authoritative regardless.
+
 ## Cache targets
 
 - Cache memory is bounded by both entry count and estimated weight.
@@ -208,6 +250,7 @@ model-token character totals.
 2. Keep raw Guards server-side behind Contexts/Tokens.
 3. Batch one logical aggregate edit into one command.
 4. Return deltas and postcondition summaries.
-5. Add bounded read-only snapshot caching.
+5. Consider bounded read-only snapshot caching only when measurements justify
+   its freshness and invalidation cost.
 6. Profile again.
 7. Consider transport changes only with measured remaining IPC dominance.

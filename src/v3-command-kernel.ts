@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 
 import { toPublicError, type PublicError } from "./errors.js";
+import { V3_PERFORMANCE_BUDGETS } from "./v3-performance.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -210,7 +211,10 @@ export function traceDiagnostics(
           },
     ),
   }));
-  const budget = options.level === "support" ? 8_192 : 16_384;
+  const budget =
+    options.level === "support"
+      ? V3_PERFORMANCE_BUDGETS.supportTraceCharacters
+      : V3_PERFORMANCE_BUDGETS.debugTraceCharacters;
   let result: JsonRecord = {
     level: options.level,
     traceCount: traces.length,
@@ -321,7 +325,10 @@ export function commandOutcome(
       .slice(0, 4)
       .map((warning) => redactValue(warning));
   }
-  if (JSON.stringify(projected).length > 2_048) {
+  if (
+    JSON.stringify(projected).length >
+    V3_PERFORMANCE_BUDGETS.commandAcknowledgementCharacters
+  ) {
     projected.warnings = [
       "Additional warnings were omitted to satisfy the public response budget.",
     ];
@@ -411,7 +418,10 @@ export function failedOutcome(
           : "correct_request",
     error: publicError,
   };
-  if (JSON.stringify(result).length > 4_096) {
+  if (
+    JSON.stringify(result).length >
+    V3_PERFORMANCE_BUDGETS.publicErrorCharacters
+  ) {
     result.error = {
       code: publicError.code,
       message: publicError.message,

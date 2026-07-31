@@ -166,6 +166,7 @@ test("FileIpcClient folds bounded Lua timings into the active cross-layer trace"
     limit: 1,
   });
   const serialized = JSON.stringify(diagnostics);
+  assert.match(serialized, /ipcDequeued/u);
   assert.match(serialized, /luaFreshRead/u);
   assert.match(serialized, /"durationMs":2\.25/u);
   assert.match(serialized, /"luaTotalMs":7\.5/u);

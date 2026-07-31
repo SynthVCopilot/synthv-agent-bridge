@@ -1590,6 +1590,7 @@ export function registerV3Surface(
           input.contextMode,
           await getSessionToken?.(),
         );
+        const projectionStartedAtMs = Date.now();
         const projected = projectQueryResult(
           input.action,
           root,
@@ -1607,6 +1608,7 @@ export function registerV3Surface(
         );
         traceStage("queryProjected", {
           action: input.action,
+          durationMs: Date.now() - projectionStartedAtMs,
           responseCharacters: projected.responseCharacters,
           budgetExceeded: projected.budgetExceeded,
           budgetClass: projected.budgetClass,

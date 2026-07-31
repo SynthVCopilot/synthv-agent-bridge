@@ -416,7 +416,7 @@ Rollback:
 
 - disable the newly migrated clone strategy and keep safe rejection.
 
-## Phase 6: Group aggregate commands
+## Phase 6: Group aggregate commands — implemented
 
 Deliver:
 
@@ -439,16 +439,16 @@ Rollback:
 - retain the old guarded action and do not split a failed logical write into
   multiple automatic retries.
 
-## Phase 7: measured performance optimization
+## Phase 7: measured performance optimization — baseline complete; cache deferred
 
-Deliver:
+Delivered:
 
-- immutable projection keys and freshness classes;
-- bounded entry/weight/age eviction;
-- read-only cache-aside path;
-- Bridge-write invalidation and verified-result repopulation;
-- session-wide invalidation;
-- support metrics for hit, miss, dirty reason, age, and fallback.
+- one shared set of model-facing response budgets;
+- a reproducible synthetic Query/Command benchmark;
+- explicit IPC queue-wait and Query projection timing;
+- repository gates for the tool catalog, ordinary Query fixture, command
+  acknowledgement, public error redaction, and normal Trace overhead;
+- a measured decision on whether to activate cache-aside.
 
 Restrictions:
 
@@ -460,10 +460,19 @@ Restrictions:
 
 Exit criteria:
 
-- CAC-001 through CAC-006 pass;
-- a deliberately stale read cache cannot cause an unsafe write;
-- cache failure degrades to host reads;
-- measured hit rate and latency justify keeping the cache.
+- the six-tool catalog is below 6 KB;
+- the representative 64-note Query is below 20 KB;
+- command acknowledgements and public errors remain below 2 KB and 4 KB;
+- raw fingerprints remain absent from normal results;
+- existing real-host p95 remains below the ordinary 300 ms target;
+- cache activation occurs only if measured benefit justifies stale-read and
+  invalidation complexity.
+
+Decision:
+
+- the 2026-07-31 baseline does not justify activating Snapshot LRU;
+- Task 12 is skipped and `sv_query` continues to reach the authoritative host;
+- the bounded cache component remains unused by production Query paths.
 
 Rollback:
 

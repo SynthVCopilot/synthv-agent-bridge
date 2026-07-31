@@ -1,10 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 
 import { BridgeError } from "./errors.js";
+import { V3_PERFORMANCE_BUDGETS } from "./v3-performance.js";
 
 type JsonRecord = Record<string, unknown>;
 
-export const ORDINARY_QUERY_RESPONSE_BUDGET_CHARACTERS = 20_000;
+export const ORDINARY_QUERY_RESPONSE_BUDGET_CHARACTERS =
+  V3_PERFORMANCE_BUDGETS.ordinaryQueryCharacters;
 const TRACE_ID_PLACEHOLDER = "tr_0000000000000000";
 
 const QUERY_ENVELOPE_FIELDS = [

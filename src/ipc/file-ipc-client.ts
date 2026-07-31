@@ -120,14 +120,21 @@ export class FileIpcClient {
     action: BridgeAction,
     payload: Record<string, unknown> = {},
   ): Promise<T> {
-    return this.serialExecutor.run(async () => this.sendSerial<T>(action, payload));
+    const queuedAtMs = Date.now();
+    traceStage("ipcQueued", { action });
+    return this.serialExecutor.run(async () => {
+      traceStage("ipcDequeued", {
+        action,
+        durationMs: Date.now() - queuedAtMs,
+      });
+      return this.sendSerial<T>(action, payload);
+    });
   }
 
   private async sendSerial<T>(
     action: BridgeAction,
     payload: Record<string, unknown>,
   ): Promise<T> {
-    traceStage("ipcQueued", { action });
     await fs.mkdir(this.config.paths.directory, { recursive: true });
 
     const requestId = randomBytes(12).toString("base64url");
