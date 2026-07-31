@@ -4,6 +4,12 @@ Status: required release procedure
 
 Node, Lua executor, and Sidebar artifacts are one build set.
 
+The atomic installer, staged-hash verification, backup restoration, runtime
+coherence gate, and mismatch write rejection are implemented in
+`0.2.0-alpha.1`. A package is not considered installed merely because files
+were copied; the active Lua executor and optional Sidebar must be reloaded and
+report matching Build IDs.
+
 ## Build-time identity
 
 The package injects:
@@ -42,3 +48,17 @@ with reinstall/reload guidance.
 Stop the persistent Bridge, reinstall one complete known-good package, reload
 the Lua executor and optional Sidebar, then confirm `coherence.state=matched`
 before issuing a project command. Protocol v2 is not a fallback mode.
+
+## Release acceptance record
+
+For each release candidate record:
+
+- source commit and generated Node/Lua/Sidebar Build IDs;
+- installer target and staged/installed manifest verification;
+- active `sv_status` coherence after SynthV script reload and MCP restart;
+- confirmation that a deliberately mixed build blocks `writeIntent` and
+  `sv_command`;
+- the bounded real-host Query/Command matrix and its Undo recovery result.
+
+The previous installed set remains the rollback unit until all five checks
+pass.

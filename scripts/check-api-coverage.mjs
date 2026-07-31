@@ -28,6 +28,14 @@ const REAL_HOST_STATES = new Set([
   "pending",
   "notApplicable",
 ]);
+const PUBLIC_TOOLS = new Set([
+  "sv_status",
+  "sv_describe",
+  "sv_query",
+  "sv_command",
+  "sv_ui",
+  "sv_review",
+]);
 
 function asObject(value, label, errors) {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -115,6 +123,7 @@ if (!Array.isArray(inventory.classes)) {
   errors.push("classes must be an array");
 }
 const classNames = [];
+const semanticMethodsByClass = new Map();
 let officialMethodCount = 0;
 for (const [classIndex, rawClass] of classes.entries()) {
   const classEntry = asObject(rawClass, `classes[${classIndex}]`, errors);
@@ -127,14 +136,22 @@ for (const [classIndex, rawClass] of classes.entries()) {
   }
   classNames.push(name);
   const methods = [];
+  const semanticMethods = asStringArray(
+    classEntry.semantic,
+    `${name}.semantic`,
+    errors,
+  );
+  semanticMethodsByClass.set(name, semanticMethods);
   for (const classification of METHOD_CLASSES) {
-    methods.push(
-      ...asStringArray(
-        classEntry[classification],
-        `${name}.${classification}`,
-        errors,
-      ),
-    );
+    methods.push(...(
+      classification === "semantic"
+        ? semanticMethods
+        : asStringArray(
+            classEntry[classification],
+            `${name}.${classification}`,
+            errors,
+          )
+    ));
   }
   officialMethodCount += methods.length;
   for (const duplicate of duplicateValues(methods)) {
@@ -171,6 +188,116 @@ for (const category of ["read", "edit", "delete", "ui", "transaction"]) {
 }
 for (const duplicate of duplicateValues(liveActions)) {
   errors.push(`live Action appears in multiple categories: ${duplicate}`);
+}
+
+const semanticEvidence = Array.isArray(inventory.semanticEvidence)
+  ? inventory.semanticEvidence
+  : [];
+if (!Array.isArray(inventory.semanticEvidence)) {
+  errors.push("semanticEvidence must be an array");
+}
+const semanticMethodEvidence = new Set();
+for (const [index, rawEvidence] of semanticEvidence.entries()) {
+  const evidence = asObject(
+    rawEvidence,
+    `semanticEvidence[${index}]`,
+    errors,
+  );
+  const className =
+    typeof evidence.class === "string" ? evidence.class : "";
+  const officialSemanticMethods = semanticMethodsByClass.get(className);
+  if (officialSemanticMethods === undefined) {
+    errors.push(`semanticEvidence[${index}].class is not official: ${className}`);
+    continue;
+  }
+  if (evidence.methods !== "allSemantic") {
+    errors.push(`${className}.methods must declare allSemantic`);
+  }
+  const publicTools = asStringArray(
+    evidence.publicTools,
+    `${className}.publicTools`,
+    errors,
+  );
+  for (const tool of publicTools) {
+    if (!PUBLIC_TOOLS.has(tool)) {
+      errors.push(`${className} names unknown public tool: ${tool}`);
+    }
+  }
+  const evidenceActions = asStringArray(
+    evidence.actions,
+    `${className}.actions`,
+    errors,
+  );
+  for (const action of evidenceActions) {
+    if (!liveActions.includes(action)) {
+      errors.push(`${className} evidence names non-live Action: ${action}`);
+    }
+  }
+  const methodGroups = Array.isArray(evidence.methodGroups)
+    ? evidence.methodGroups
+    : [];
+  if (!Array.isArray(evidence.methodGroups) || methodGroups.length === 0) {
+    errors.push(`${className}.methodGroups must be a non-empty array`);
+  }
+  for (const [groupIndex, rawGroup] of methodGroups.entries()) {
+    const group = asObject(
+      rawGroup,
+      `${className}.methodGroups[${groupIndex}]`,
+      errors,
+    );
+    const methods = asStringArray(
+      group.methods,
+      `${className}.methodGroups[${groupIndex}].methods`,
+      errors,
+    );
+    const actions = asStringArray(
+      group.actions,
+      `${className}.methodGroups[${groupIndex}].actions`,
+      errors,
+    );
+    for (const action of actions) {
+      if (!evidenceActions.includes(action)) {
+        errors.push(
+          `${className}.methodGroups[${groupIndex}] action is absent from the class Action union: ${action}`,
+        );
+      }
+    }
+    for (const method of methods) {
+      if (!officialSemanticMethods.includes(method)) {
+        errors.push(`${className}.${method} is not a semantic official method`);
+        continue;
+      }
+      const key = `${className}.${method}`;
+      if (semanticMethodEvidence.has(key)) {
+        errors.push(`${key} has duplicate semantic evidence`);
+      }
+      semanticMethodEvidence.add(key);
+    }
+  }
+  for (const field of [
+    "hostAdapter",
+    "preflight",
+    "postcondition",
+    "automated",
+  ]) {
+    if (
+      typeof evidence[field] !== "string" ||
+      evidence[field].trim().length === 0
+    ) {
+      errors.push(`${className}.${field} must be non-empty`);
+    }
+  }
+  if (!REAL_HOST_STATES.has(evidence.realHost)) {
+    errors.push(`${className}.realHost has an unknown status`);
+  }
+}
+for (const [className, methods] of semanticMethodsByClass.entries()) {
+  for (const method of methods) {
+    const key = `${className}.${method}`;
+    if (!semanticMethodEvidence.has(key)) {
+      errors.push(`${key} has no semantic evidence mapping`);
+    }
+  }
 }
 
 const actionGroups = asObject(
@@ -277,6 +404,7 @@ for (const action of classifiedSet) {
 const result = {
   officialClassCount: classes.length,
   officialMethodCount,
+  semanticMethodEvidenceCount: semanticMethodEvidence.size,
   unavailableCapabilityCount: unavailableCapabilities.length,
   liveActionCount: liveActions.length,
   classifiedActionCount: classifiedSet.size,

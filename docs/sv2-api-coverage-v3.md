@@ -18,10 +18,12 @@ completed real SynthV acceptance.
 The JSON block below freezes every class and method listed by the official
 index generated on 2025-10-09. Methods are grouped as `semantic`, `internal`,
 or `intentionallyUnexposed`. API omissions are capabilities rather than
-methods, so they are listed separately. The coverage checker joins every
-semantic write to its live `V3CommandPolicy` and rejects missing/duplicate
-methods, missing Actions, aggregate mismatches, blank evidence, or unknown
-real-host status.
+methods, so they are listed separately. Each `semanticEvidence.methodGroups`
+entry lists exact official methods and their exact live Action mappings; the
+checker requires their union to equal that class's `allSemantic` declaration.
+The coverage checker joins every semantic write to its live
+`V3CommandPolicy` and rejects missing/duplicate method evidence, missing
+Actions, aggregate mismatches, blank evidence, or unknown real-host status.
 
 <!-- SV2_API_INVENTORY_START -->
 ```json
@@ -167,6 +169,332 @@ real-host status.
       "intentionallyUnexposed": []
     }
   ],
+  "semanticEvidence": [
+    {
+      "class": "ArrangementSelectionState",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["clearAll","clearGroups","selectGroup","unselectGroup"],"actions":["set_selection"]},
+        {"methods":["getSelectedGroups","hasSelectedContent","hasSelectedGroups","hasUnfinishedEdits"],"actions":["get_selection"]}
+      ],
+      "publicTools": ["sv_ui"],
+      "actions": ["get_selection", "set_selection"],
+      "hostAdapter": "Lua Arrangement selection adapter",
+      "preflight": "selection shape and current host view",
+      "postcondition": "host selection reread",
+      "automated": "UI schema and state-reread contracts",
+      "realHost": "sampled"
+    },
+    {
+      "class": "ArrangementView",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getNavigation"],"actions":["get_editor_view"]},
+        {"methods":["getSelection"],"actions":["get_selection"]}
+      ],
+      "publicTools": ["sv_ui"],
+      "actions": ["get_editor_view", "get_selection"],
+      "hostAdapter": "Lua Arrangement view adapter",
+      "preflight": "current host view resolution",
+      "postcondition": "authoritative navigation or selection projection",
+      "automated": "UI projection contracts",
+      "realHost": "sampled"
+    },
+    {
+      "class": "Automation",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["get","getAllPoints","getDefinition","getInterpolationMethod","getLinear","getPoints","getType"],"actions":["get_automation","sample_automation"]},
+        {"methods":["add"],"actions":["set_automation_points","apply_group_tuning","apply_expression_preset"]},
+        {"methods":["remove","removeAll"],"actions":["set_automation_points","clear_automation","apply_group_tuning","apply_expression_preset"]},
+        {"methods":["simplify"],"actions":["simplify_automation"]}
+      ],
+      "publicTools": ["sv_query", "sv_command"],
+      "actions": ["get_automation", "sample_automation", "set_automation_points", "clear_automation", "simplify_automation", "apply_group_tuning", "apply_expression_preset"],
+      "hostAdapter": "Lua Automation definition/range adapter",
+      "preflight": "fresh curve Guard, shared ownership and current definition.range",
+      "postcondition": "closed-range point-by-point host reread",
+      "automated": "Automation endpoint, no-op, range and aggregate Fake Host matrix",
+      "realHost": "sampled"
+    },
+    {
+      "class": "CoordinateSystem",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getTimePxPerUnit","getTimeViewRange","getValuePxPerUnit","getValueViewRange"],"actions":["get_editor_view"]},
+        {"methods":["setTimeLeft","setTimeRight","setTimeScale","setValueCenter"],"actions":["set_editor_view"]},
+        {"methods":["snap"],"actions":["snap_position"]},
+        {"methods":["t2x","v2y","x2t","y2v"],"actions":["convert_editor_coordinates"]}
+      ],
+      "publicTools": ["sv_ui"],
+      "actions": ["get_editor_view", "set_editor_view", "snap_position", "convert_editor_coordinates"],
+      "hostAdapter": "Lua coordinate-system adapter",
+      "preflight": "finite coordinate and view arguments",
+      "postcondition": "resulting navigation or converted scalar projection",
+      "automated": "UI coordinate schema and projection contracts",
+      "realHost": "sampled"
+    },
+    {
+      "class": "GroupSelection",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["clearGroups","selectGroup","unselectGroup"],"actions":["set_selection"]},
+        {"methods":["getSelectedGroups","hasSelectedGroups"],"actions":["get_selection"]}
+      ],
+      "publicTools": ["sv_ui"],
+      "actions": ["get_selection", "set_selection"],
+      "hostAdapter": "Lua Group selection adapter",
+      "preflight": "bounded target locators",
+      "postcondition": "host selection reread",
+      "automated": "selection state contracts",
+      "realHost": "sampled"
+    },
+    {
+      "class": "MainEditorView",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getCurrentGroup","getCurrentTrack"],"actions":["get_project_info"]},
+        {"methods":["getNavigation"],"actions":["get_editor_view"]},
+        {"methods":["getSelection"],"actions":["get_selection"]}
+      ],
+      "publicTools": ["sv_query", "sv_ui"],
+      "actions": ["get_project_info", "get_editor_view", "get_selection"],
+      "hostAdapter": "Lua main-editor adapter",
+      "preflight": "current editor availability",
+      "postcondition": "authoritative current Group, Track, navigation or selection projection",
+      "automated": "project/editor projection contracts",
+      "realHost": "sampled"
+    },
+    {
+      "class": "Note",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getAttributes","getDetune","getDuration","getEnd","getLanguageOverride","getLyrics","getMusicalType","getOnset","getPhonemes","getPitch","getPitchAutoMode","getRapAccent"],"actions":["get_track_notes","get_note_phoneme_data","get_phrase_context","get_computed_group_data"]},
+        {"methods":["getRetakes"],"actions":["get_note_retakes"]},
+        {"methods":["setAttributes","setDetune","setDuration","setLanguageOverride","setLyrics","setMusicalType","setOnset","setPhonemes","setPitch","setPitchAutoMode","setRapAccent","setTimeRange"],"actions":["add_notes","edit_notes","transform_notes","set_note_phoneme_properties","humanize_notes","fit_lyrics","apply_group_tuning"]}
+      ],
+      "publicTools": ["sv_query", "sv_command"],
+      "actions": ["get_track_notes", "get_note_phoneme_data", "get_phrase_context", "get_computed_group_data", "get_note_retakes", "add_notes", "edit_notes", "transform_notes", "set_note_phoneme_properties", "generate_note_retake", "activate_note_retake", "delete_note_retake", "delete_notes", "humanize_notes", "fit_lyrics", "apply_group_tuning"],
+      "hostAdapter": "Lua guarded Note adapter",
+      "preflight": "fresh per-note Guard, ranges, geometry and shared ownership",
+      "postcondition": "complete ordered Group note-content reread",
+      "automated": "guarded note, transform, deletion-order and aggregate Fake Host matrix",
+      "realHost": "sampled"
+    },
+    {
+      "class": "NoteGroup",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getName","getNote","getNumNotes","getNumPitchControls","getParameter","getPitchControl","getUUID"],"actions":["list_note_groups","get_track_notes","get_pitch_controls","get_automation"]},
+        {"methods":["addNote","removeNote"],"actions":["create_note_group","clone_note_group","add_notes","delete_notes","apply_group_tuning"]},
+        {"methods":["addPitchControl","removePitchControl"],"actions":["create_note_group","add_pitch_controls","edit_pitch_controls","delete_pitch_controls","apply_group_tuning"]},
+        {"methods":["setName"],"actions":["create_note_group","update_group"]}
+      ],
+      "publicTools": ["sv_query", "sv_command"],
+      "actions": ["list_note_groups", "get_track_notes", "get_pitch_controls", "get_automation", "create_note_group", "clone_note_group", "delete_note_group", "update_group", "add_notes", "delete_notes", "add_pitch_controls", "edit_pitch_controls", "delete_pitch_controls", "apply_group_tuning"],
+      "hostAdapter": "Lua GroupContent ownership adapter",
+      "preflight": "fresh Group UUID, reference count, Guards and clone intent",
+      "postcondition": "Group UUID, content and source-unchanged host reread",
+      "automated": "CLN, shared-ownership, note, Automation and Smart Pitch Fake Host matrix",
+      "realHost": "sampled"
+    },
+    {
+      "class": "NoteGroupReference",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getDuration","getEnd","getOnset","getPitchOffset","getTarget","getTimeOffset","getVoice","isInstrumental","isMain","isMuted"],"actions":["list_tracks","get_group_voice","get_phrase_context"]},
+        {"methods":["setMuted","setPitchOffset","setTarget","setTimeOffset","setTimeRange","setVoice"],"actions":["add_group_reference","clone_group_reference","update_group","set_group_voice","apply_group_tuning"]}
+      ],
+      "publicTools": ["sv_query", "sv_command"],
+      "actions": ["list_tracks", "get_group_voice", "get_phrase_context", "add_group_reference", "clone_group_reference", "delete_group_reference", "update_group", "set_group_voice", "apply_group_tuning"],
+      "hostAdapter": "Lua GroupReference adapter",
+      "preflight": "fresh Reference Guard and explicit linked/isolated ownership",
+      "postcondition": "target association and reference-local state host reread",
+      "automated": "reference policy and CLN Fake Host matrix",
+      "realHost": "sampled"
+    },
+    {
+      "class": "PitchControlCurve",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getPitch","getPoints","getPosition","getValueAt"],"actions":["get_pitch_controls"]},
+        {"methods":["setPitch","setPoints","setPosition"],"actions":["add_pitch_controls","edit_pitch_controls","apply_group_tuning"]}
+      ],
+      "publicTools": ["sv_query", "sv_command"],
+      "actions": ["get_pitch_controls", "add_pitch_controls", "edit_pitch_controls", "delete_pitch_controls", "apply_group_tuning"],
+      "hostAdapter": "Lua Smart Pitch curve adapter",
+      "preflight": "fresh per-control Guard and complete bounded curve",
+      "postcondition": "complete Group Smart Pitch content reread",
+      "automated": "Smart Pitch no-op, mutation and aggregate Fake Host matrix",
+      "realHost": "sampled"
+    },
+    {
+      "class": "PitchControlPoint",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getPitch","getPosition"],"actions":["get_pitch_controls"]},
+        {"methods":["setPitch","setPosition"],"actions":["add_pitch_controls","edit_pitch_controls","apply_group_tuning"]}
+      ],
+      "publicTools": ["sv_query", "sv_command"],
+      "actions": ["get_pitch_controls", "add_pitch_controls", "edit_pitch_controls", "delete_pitch_controls", "apply_group_tuning"],
+      "hostAdapter": "Lua Smart Pitch point adapter",
+      "preflight": "fresh per-control Guard and bounded point values",
+      "postcondition": "complete Group Smart Pitch content reread",
+      "automated": "Smart Pitch no-op, mutation and aggregate Fake Host matrix",
+      "realHost": "sampled"
+    },
+    {
+      "class": "PlaybackControl",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getPlayhead","getStatus"],"actions":["playback"]},
+        {"methods":["loop","pause","play","seek","stop"],"actions":["playback"]}
+      ],
+      "publicTools": ["sv_ui"],
+      "actions": ["playback"],
+      "hostAdapter": "Lua playback adapter",
+      "preflight": "finite playhead and loop arguments",
+      "postcondition": "current status and playhead reread",
+      "automated": "playback schema and state contracts",
+      "realHost": "sampled"
+    },
+    {
+      "class": "Project",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getDuration","getFileName"],"actions":["get_project_info"]},
+        {"methods":["getNoteGroup","getNumNoteGroupsInLibrary"],"actions":["list_note_groups"]},
+        {"methods":["getNumTracks","getTrack"],"actions":["list_tracks"]},
+        {"methods":["getTimeAxis"],"actions":["get_time_axis","convert_time"]},
+        {"methods":["addNoteGroup","removeNoteGroup"],"actions":["create_note_group","delete_note_group"]},
+        {"methods":["addTrack","removeTrack"],"actions":["add_track","delete_track"]}
+      ],
+      "publicTools": ["sv_query", "sv_command"],
+      "actions": ["get_project_info", "get_time_axis", "convert_time", "list_tracks", "list_note_groups", "set_time_axis", "create_note_group", "delete_note_group", "add_track", "delete_track"],
+      "hostAdapter": "Lua Project aggregate adapter",
+      "preflight": "fresh project/session, collection Guards and final-Track safety",
+      "postcondition": "authoritative collection, timeline or target reread",
+      "automated": "project collections, session invalidation and destructive command contracts",
+      "realHost": "sampled"
+    },
+    {
+      "class": "RetakeList",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getNumTakes"],"actions":["get_note_retakes"]},
+        {"methods":["generateTake"],"actions":["generate_note_retake"]},
+        {"methods":["setActiveTake"],"actions":["activate_note_retake"]},
+        {"methods":["deleteTake"],"actions":["delete_note_retake"]}
+      ],
+      "publicTools": ["sv_query", "sv_command"],
+      "actions": ["get_note_retakes", "generate_note_retake", "activate_note_retake", "delete_note_retake"],
+      "hostAdapter": "Lua Retake capability adapter",
+      "preflight": "fresh note Guard, capability and Take bounds",
+      "postcondition": "available Retake metadata reread",
+      "automated": "Retake schema, capability and Fake Host contracts",
+      "realHost": "pending"
+    },
+    {
+      "class": "SV",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["blackKey","freq2Pitch","pitch2freq"],"actions":["convert_pitch"]},
+        {"methods":["blick2Quarter","blick2Seconds","blickRoundDiv","blickRoundTo","quarter2Blick","seconds2Blick"],"actions":["convert_time"]},
+        {"methods":["getArrangement","getMainEditor","getProject"],"actions":["get_project_info","get_selection","get_editor_view"]},
+        {"methods":["getComputedAttributesForGroup","getComputedPitchForGroup"],"actions":["get_computed_group_data","get_phrase_context"]},
+        {"methods":["getPhonemesForGroup"],"actions":["get_note_phoneme_data","get_phrase_context"]},
+        {"methods":["getHostClipboard","setHostClipboard"],"actions":["host_clipboard"]},
+        {"methods":["getHostInfo"],"actions":["get_project_info"]},
+        {"methods":["getPlayback"],"actions":["playback"]},
+        {"methods":["showCustomDialog","showCustomDialogAsync","showInputBox","showInputBoxAsync","showMessageBox","showMessageBoxAsync","showOkCancelBox","showOkCancelBoxAsync","showYesNoCancelBox","showYesNoCancelBoxAsync"],"actions":["show_dialog"]}
+      ],
+      "publicTools": ["sv_status", "sv_query", "sv_ui"],
+      "actions": ["convert_pitch", "convert_time", "get_project_info", "get_computed_group_data", "get_note_phoneme_data", "get_phrase_context", "host_clipboard", "show_dialog", "get_selection", "get_editor_view", "playback"],
+      "hostAdapter": "Lua SV runtime anti-corruption adapter",
+      "preflight": "host capability, finite scalar and current Reference dependencies",
+      "postcondition": "authoritative scalar, computed result or UI state projection",
+      "automated": "conversion, computed-data retry, status and UI contracts",
+      "realHost": "sampled"
+    },
+    {
+      "class": "SelectionStateBase",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["clearAll"],"actions":["set_selection"]},
+        {"methods":["hasSelectedContent","hasUnfinishedEdits"],"actions":["get_selection"]}
+      ],
+      "publicTools": ["sv_ui"],
+      "actions": ["get_selection", "set_selection"],
+      "hostAdapter": "Lua selection-state adapter",
+      "preflight": "current view and bounded selection target",
+      "postcondition": "host selection reread",
+      "automated": "selection contracts; callbacks remain internal dirty hints",
+      "realHost": "sampled"
+    },
+    {
+      "class": "TimeAxis",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getAllMeasureMarks","getAllTempoMarks","getMeasureAt","getMeasureMarkAt","getMeasureMarkAtBlick","getTempoMarkAt"],"actions":["get_time_axis"]},
+        {"methods":["getBlickFromSeconds","getSecondsFromBlick"],"actions":["convert_time","transform_notes"]},
+        {"methods":["addMeasureMark","addTempoMark","removeMeasureMark","removeTempoMark"],"actions":["set_time_axis"]}
+      ],
+      "publicTools": ["sv_query", "sv_command", "sv_ui"],
+      "actions": ["get_time_axis", "convert_time", "set_time_axis", "transform_notes", "snap_position"],
+      "hostAdapter": "Lua ProjectTimeline adapter",
+      "preflight": "fresh time-axis Guard and complete mark/range validation",
+      "postcondition": "tempo/measure mark or conversion host reread",
+      "automated": "time-axis pagination, conversion and policy contracts",
+      "realHost": "sampled"
+    },
+    {
+      "class": "Track",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getDisplayColor","getDisplayOrder","getDuration","getGroupReference","getName","getNumGroups","isBounced"],"actions":["list_tracks","get_track_notes"]},
+        {"methods":["getMixer"],"actions":["get_track_mixer"]},
+        {"methods":["addGroupReference","removeGroupReference"],"actions":["add_group_reference","delete_group_reference","clone_group_reference"]},
+        {"methods":["setBounced","setDisplayColor","setName"],"actions":["add_track","update_track","clone_track","clone_track_shell"]}
+      ],
+      "publicTools": ["sv_query", "sv_command"],
+      "actions": ["list_tracks", "get_track_notes", "get_track_mixer", "add_track", "update_track", "clone_track", "clone_track_shell", "delete_track", "add_group_reference", "clone_group_reference", "delete_group_reference", "set_track_mixer"],
+      "hostAdapter": "Lua TrackShell adapter",
+      "preflight": "fresh Track Guard, explicit clone mode and source snapshots",
+      "postcondition": "Track summary, reference order and source-unchanged reread",
+      "automated": "Track collection, CLN and mixer Command Kernel matrix",
+      "realHost": "sampled"
+    },
+    {
+      "class": "TrackInnerSelectionState",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["clearAll","clearGroups","clearNotes","clearPitchControls","selectGroup","selectNote","selectPitchControls","selectPoints","unselectGroup","unselectNote","unselectPitchControls","unselectPoints"],"actions":["set_selection"]},
+        {"methods":["getSelectedGroups","getSelectedNotes","getSelectedPitchControls","getSelectedPoints","hasSelectedContent","hasSelectedGroups","hasSelectedNotes","hasSelectedPitchControls","hasUnfinishedEdits"],"actions":["get_selection"]}
+      ],
+      "publicTools": ["sv_ui"],
+      "actions": ["get_selection", "set_selection"],
+      "hostAdapter": "Lua track-inner selection adapter",
+      "preflight": "bounded Group, Note, point and Pitch Control locators",
+      "postcondition": "host selection reread",
+      "automated": "selection schema and state-reread contracts",
+      "realHost": "sampled"
+    },
+    {
+      "class": "TrackMixer",
+      "methods": "allSemantic",
+      "methodGroups": [
+        {"methods":["getGainDecibel","getPan","isMuted","isSolo"],"actions":["get_track_mixer"]},
+        {"methods":["setGainDecibel","setMuted","setPan","setSolo"],"actions":["set_track_mixer"]}
+      ],
+      "publicTools": ["sv_query", "sv_command"],
+      "actions": ["get_track_mixer", "set_track_mixer"],
+      "hostAdapter": "Lua Track Mixer adapter",
+      "preflight": "fresh Track Guard and mixer range validation",
+      "postcondition": "complete mixer host reread",
+      "automated": "Command Kernel no-op, stage, failure and budget matrix",
+      "realHost": "sampled"
+    }
+  ],
   "unavailableCapabilities": [
     "current Vocal display name or database identity",
     "enumeration of untouched default Vocal Mode names",
@@ -192,19 +520,19 @@ real-host status.
       {"action":"delete_track","aggregates":["TrackShell"],"preflight":"fresh Track Guard and final-Track refusal","postcondition":"hostReadback","automated":"policy and Fake Host","realHost":"verified"},
       {"action":"update_group","aggregates":["GroupContent","GroupReference"],"preflight":"fresh content/reference guards and sharing policy","postcondition":"hostReadback","automated":"policy and Fake Host","realHost":"sampled"},
       {"action":"set_group_voice","aggregates":["GroupReference"],"preflight":"fresh Reference Guard and dynamic range validation","postcondition":"hostReadback","automated":"range and Fake Host","realHost":"sampled"},
-      {"action":"apply_group_tuning","aggregates":["GroupContent","GroupReference"],"preflight":"one complete Voice/note/Automation/Smart Pitch effect plan","postcondition":"hostReadback","automated":"aggregate Fake Host matrix","realHost":"verified"},
+      {"action":"apply_group_tuning","aggregates":["GroupContent","GroupReference"],"preflight":"one complete Voice/note/Automation/Smart Pitch effect plan","postcondition":"hostReadback","automated":"aggregate Fake Host matrix","realHost":"sampled"},
       {"action":"delete_group_reference","aggregates":["GroupReference"],"preflight":"fresh Reference Guard","postcondition":"hostReadback","automated":"policy and Fake Host","realHost":"pending"},
       {"action":"import_monophonic_score","aggregates":["GroupContent"],"preflight":"bounded local snapshot, rights confirmation and shared policy","postcondition":"hostReadback","automated":"score import contracts and Fake Host","realHost":"pending"},
       {"action":"add_notes","aggregates":["GroupContent"],"preflight":"complete bounded note plan and shared policy","postcondition":"hostReadback","automated":"note Fake Host matrix","realHost":"verified"},
       {"action":"edit_notes","aggregates":["GroupContent"],"preflight":"fresh per-note Guards and shared policy","postcondition":"hostReadback","automated":"guarded note Fake Host matrix","realHost":"verified"},
-      {"action":"transform_notes","aggregates":["GroupContent"],"preflight":"fresh scoped note Guards, time axis and geometry validation","postcondition":"hostReadback","automated":"transform Fake Host matrix","realHost":"verified"},
+      {"action":"transform_notes","aggregates":["GroupContent"],"preflight":"fresh scoped note Guards, time axis and geometry validation","postcondition":"hostReadback","automated":"transform Fake Host matrix","realHost":"sampled"},
       {"action":"set_note_phoneme_properties","aggregates":["GroupContent"],"preflight":"fresh per-note Guards and phoneme ranges","postcondition":"hostReadback","automated":"phoneme contract and Fake Host","realHost":"pending"},
       {"action":"generate_note_retake","aggregates":["GroupContent"],"preflight":"fresh note/Retake Guard and host capability","postcondition":"hostReadback","automated":"Retake contracts and Fake Host","realHost":"pending"},
       {"action":"activate_note_retake","aggregates":["GroupContent"],"preflight":"fresh note/Retake Guard and Take bounds","postcondition":"hostReadback","automated":"Retake contracts and Fake Host","realHost":"pending"},
-      {"action":"add_pitch_controls","aggregates":["GroupContent"],"preflight":"fresh shared policy and complete bounded controls","postcondition":"hostReadback","automated":"Smart Pitch Fake Host matrix","realHost":"verified"},
-      {"action":"edit_pitch_controls","aggregates":["GroupContent"],"preflight":"fresh per-control Guards and shared policy","postcondition":"hostReadback","automated":"Smart Pitch Fake Host matrix","realHost":"verified"},
-      {"action":"simplify_automation","aggregates":["GroupContent"],"preflight":"fresh curve Guard, host definition range and shared policy","postcondition":"hostReadback","automated":"Automation Fake Host matrix","realHost":"verified"},
-      {"action":"set_automation_points","aggregates":["GroupContent"],"preflight":"fresh curve Guard, host definition range and complete point plan","postcondition":"hostReadback","automated":"Automation Fake Host matrix","realHost":"verified"},
+      {"action":"add_pitch_controls","aggregates":["GroupContent"],"preflight":"fresh shared policy and complete bounded controls","postcondition":"hostReadback","automated":"Smart Pitch Fake Host matrix","realHost":"sampled"},
+      {"action":"edit_pitch_controls","aggregates":["GroupContent"],"preflight":"fresh per-control Guards and shared policy","postcondition":"hostReadback","automated":"Smart Pitch Fake Host matrix","realHost":"sampled"},
+      {"action":"simplify_automation","aggregates":["GroupContent"],"preflight":"fresh curve Guard, host definition range and shared policy","postcondition":"hostReadback","automated":"Automation Fake Host matrix","realHost":"sampled"},
+      {"action":"set_automation_points","aggregates":["GroupContent"],"preflight":"fresh curve Guard, host definition range and complete point plan","postcondition":"hostReadback","automated":"Automation Fake Host matrix","realHost":"sampled"},
       {"action":"script_data","aggregates":["Metadata"],"preflight":"fresh target resolution and explicit metadata operation","postcondition":"hostReadback","automated":"schema and Fake Host","realHost":"pending"},
       {"action":"set_track_mixer","aggregates":["TrackShell"],"preflight":"fresh Track Guard and mixer ranges","postcondition":"hostReadback","automated":"Command Kernel and Fake Host","realHost":"verified"},
       {"action":"create_harmony_track","aggregates":["TrackShell"],"preflight":"fresh source Track and bounded harmony plan","postcondition":"hostReadback","automated":"schema and Fake Host","realHost":"pending"},
@@ -213,7 +541,7 @@ real-host status.
       {"action":"fit_lyrics","aggregates":["GroupContent"],"preflight":"fresh note Guards and exact lyric count","postcondition":"hostReadback","automated":"schema and Fake Host","realHost":"pending"},
       {"action":"delete_notes","aggregates":["GroupContent"],"preflight":"fresh per-note Guards and shared policy","postcondition":"hostReadback","automated":"guarded delete Fake Host matrix","realHost":"verified"},
       {"action":"delete_note_retake","aggregates":["GroupContent"],"preflight":"fresh note/Retake Guard and Take bounds","postcondition":"hostReadback","automated":"Retake contracts and Fake Host","realHost":"pending"},
-      {"action":"delete_pitch_controls","aggregates":["GroupContent"],"preflight":"fresh per-control Guards and shared policy","postcondition":"hostReadback","automated":"Smart Pitch Fake Host matrix","realHost":"verified"},
+      {"action":"delete_pitch_controls","aggregates":["GroupContent"],"preflight":"fresh per-control Guards and shared policy","postcondition":"hostReadback","automated":"Smart Pitch Fake Host matrix","realHost":"sampled"},
       {"action":"clear_automation","aggregates":["GroupContent"],"preflight":"fresh curve Guard, closed range and shared policy","postcondition":"hostReadback","automated":"Automation endpoint Fake Host matrix","realHost":"verified"},
       {"action":"apply_transaction","aggregates":["Transaction"],"preflight":"all independent steps before Undo and dependent steps just in time","postcondition":"transactionSummary","automated":"transaction Fake Host matrix","realHost":"pending"},
       {"action":"rollback_transaction","aggregates":["Transaction"],"preflight":"stored reverse plan with fresh per-step guards","postcondition":"transactionSummary","automated":"transaction Fake Host matrix","realHost":"pending"}

@@ -1,18 +1,19 @@
 # v3 Architecture Baseline
 
-Status: implemented alpha baseline
+Status: implemented `0.2.0-alpha.1` architecture
 
 Decision date: 2026-07-30
 
-This document defines the authoritative architecture for Bridge v3. The
-implemented alpha contains the six-tool Facade, protocol-v3 envelope, typed
-Contexts, command result model, build-coherence gate, redacted tracing, and
-the first common command slice. Remaining action migrations are tracked in
-[the v3 development plan](v3-development-plan.md).
+This document defines the authoritative architecture implemented by Bridge
+v3. The alpha contains the six-tool Facade, protocol-v3 envelope, typed
+Contexts, compact Query projection, the common Command Kernel, build-coherence
+gate, redacted tracing, semantic command policies, and authoritative
+postcondition verification. Release evidence and remaining certification gates
+are tracked in [the v3 development plan](v3-development-plan.md).
 
 ## Outcome
 
-The target architecture is:
+The implemented architecture is:
 
 > CQRS-lite + session-scoped versioned snapshots + cache-aside +
 > optimistic concurrency control + one serialized Lua command executor.
@@ -82,7 +83,7 @@ Intent Facade
 Query Projector      Command Dispatcher
   |                     |
   v                     v
-Snapshot Proxy       Resolve -> Fresh Read -> Guard -> Preflight
+Authoritative Read   Resolve -> Fresh Read -> Guard -> Preflight
   |                  -> Undo -> Mutate -> Verify -> Compact Result
   |                     |
   +----------+----------+
@@ -185,16 +186,18 @@ as `sv_query` versus `sv_command`, while detailed actions remain internal.
 
 ### What may be cached
 
-Node may retain bounded, immutable, serialized values:
+Node retains bounded, immutable, serialized values:
 
 - static action descriptions and schemas;
-- compact read projections;
 - the existing Context/Guard bindings;
-- short-lived computed-data results keyed to a reference-specific input
-  version;
 - redacted trace metadata and aggregate counters.
 
 Lua must not retain long-lived SynthV object references between commands.
+
+The repository also contains a tested bounded `V3SnapshotCache` component for
+possible future read-only projections. Phase 6 measurements did not justify
+activating it, so the production `sv_query` path does not currently cache
+mutable project or computed-performance results.
 
 ### Cache entry identity
 
@@ -209,7 +212,8 @@ A mutable-state snapshot key must include:
 
 ### Freshness classes
 
-Every mutable projection is internally classified as one of:
+If the Snapshot LRU is activated by a later measured decision, every mutable
+projection is classified as one of:
 
 - `hostVerified`: obtained from the current host request or its verified
   postcondition read;
@@ -224,12 +228,13 @@ Only `hostVerified` data may mint a write-capable Context. A
 
 ### Read behavior
 
+- Every current project Query reaches the host, including `readOnly` Queries.
 - Read paths that mint write-capable Contexts always reach the host.
-- Pure status, description, and explicitly cache-tolerant read-only
-  projections may use `sessionCached` entries.
-- A cache hit reports compact freshness metadata in support/debug telemetry,
-  not verbose cache internals in the normal Agent response.
-- Cache misses and dirty entries fall back to the current file IPC read.
+- Static Action schemas and bounded diagnostics may be served from Node-owned
+  process state because they are not project snapshots.
+- A future cache activation must be limited to explicitly cache-tolerant
+  read-only projections, report freshness in support/debug telemetry, and fall
+  back to the current file IPC read on every miss, dirty entry, or error.
 
 ### Write behavior
 
@@ -241,12 +246,12 @@ For every write:
 4. Lua completes full preflight.
 5. Lua creates one Undo boundary and performs the mutation.
 6. Lua rereads supported postconditions.
-7. Node invalidates touched snapshot keys and may populate a new
-   `hostVerified` projection from the verified result.
+7. Node clears affected Context/Guard state and projects the verified result.
 
-Refreshing a cache after a Bridge-originated write is an optimization. It does
-not make the cache authoritative because user edits and other scripts can
-bypass the Bridge.
+If mutable read caching is enabled in a future release, a successful write
+must invalidate touched snapshot keys before optionally repopulating from the
+verified host result. Such a cache still cannot become authoritative because
+user edits and other scripts can bypass the Bridge.
 
 ## Concurrency model
 
@@ -353,25 +358,25 @@ Errors are classified by phase and recovery:
 Large raw Guard values are never included in a normal error. Support telemetry
 uses hashes, counts, target kinds, and phase information.
 
-## Proposed internal seams
+## Implemented internal seams
 
-The migration may introduce these seams without requiring an immediate
-directory rewrite:
+The v3 runtime uses these seams:
 
 - Query projector: builds bounded DTOs and projection identities.
-- Snapshot proxy: owns cache-aside policy and freshness state.
 - Command dispatcher: owns the common lifecycle and action routing.
 - Domain target resolver: distinguishes GroupContent, GroupReference,
   TrackShell, ProjectTimeline, and UI state.
 - Trace collector: correlates MCP, Context expansion, file IPC, Lua stages, and
   result projection.
 - Host adapter/fake host: gives Lua command behavior a deterministic test seam.
-
-Existing functions move behind these seams one vertical slice at a time.
+- Internal adapters use `v3_internal_*` names and cannot be registered as
+  public or legacy MCP tools.
+- The dormant Snapshot cache remains an optional component rather than an
+  active runtime seam.
 
 ## Delivery and acceptance
 
-Implementation order, rollback rules, and phase exit criteria are in
+Implementation history, rollback rules, and release gates are in
 [the v3 development plan](v3-development-plan.md).
 
 Required tests are in [the v3 test matrix](v3-test-matrix.md).

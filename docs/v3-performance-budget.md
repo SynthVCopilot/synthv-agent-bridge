@@ -21,6 +21,20 @@ A July 2026 production-sized tuning session showed:
 The first optimization target is projection and orchestration volume, not
 transport replacement.
 
+## Implemented Phase 6 outcome
+
+- The six-tool catalog, Query Projector, command acknowledgement, public error,
+  and normal Trace-size budgets are executable repository gates.
+- File IPC reports queue wait separately from host processing, and Query
+  projection reports its own duration.
+- The official API coverage checker joins every live semantic write to one
+  Command Policy and test/host-verification status.
+- Snapshot caching remains disabled in production after measurement; no
+  performance claim depends on a potentially stale project read.
+- File IPC remains the transport because total real-host round trips meet the
+  ordinary target, while the current traces do not isolate enough
+  transport-versus-host time to justify a transport rewrite.
+
 ## Model-facing size targets
 
 | Payload | Target |
@@ -37,8 +51,9 @@ Larger explicit reads are allowed only when the caller requests the relevant
 projection/page. They must report pagination or range coverage rather than
 silently truncating correctness data.
 
-Phase 3 enforces the ordinary-read target as a 20,000-character hard gate for
-unscoped defaults. The final public JSON is measured after compact projection.
+Phase 3 enforces the ordinary-read target as simultaneous 20,000-character and
+20,000-UTF-8-byte hard gates for unscoped defaults. The final public JSON is
+measured after compact projection.
 Explicit pages, ranges, `include`, or `fields` projections remain available
 when the caller deliberately requests them; telemetry records whether they
 exceed the ordinary budget. The rejected payload is never copied into the
@@ -165,16 +180,17 @@ only and does not connect to SynthV or copy project content.
 
 On 2026-07-31 with Node `v26.1.0`, 500 iterations produced:
 
-| Projection | p95 | Result characters | Budget |
+| Projection | p95 | Result chars / UTF-8 bytes | Budget chars / bytes |
 |---|---:|---:|---:|
-| Six-tool catalog | N/A | 4,336 | 6,000 |
-| 64-note compact phrase Query | 0.549 ms | 4,757 | 20,000 |
-| Changed command acknowledgement | 0.003 ms | 129 | 2,048 |
+| Six-tool catalog | N/A | 4,336 / 4,336 | 6,000 / 6,000 |
+| 64-note compact phrase Query | 1.104 ms | 4,757 / 4,757 | 20,000 / 20,000 |
+| Changed command acknowledgement | 0.008 ms | 129 / 129 | 2,048 / 2,048 |
 
 The repository test also constructs a 100,000-character private fingerprint
-and proves that the normal stale error remains below 4,096 characters without
-containing that fingerprint. Normal Trace correlation adds less than the
-1,024-character response allowance.
+and multibyte Chinese diagnostics, and proves that the normal public error
+remains below both 4,096 characters and 4,096 UTF-8 bytes without containing
+the fingerprint. Normal Trace correlation stays within both 1,024-unit
+response allowances.
 
 The file IPC Trace now records queue entry and dequeue wait separately. Query
 projection records its own duration, while Lua continues to report bounded
@@ -200,7 +216,7 @@ are a material workload and a specific projection can declare acceptable
 staleness. Write-intent reads and all write authorization will remain
 host-authoritative regardless.
 
-## Cache targets
+## Dormant cache requirements
 
 - Cache memory is bounded by both entry count and estimated weight.
 - Every entry includes session, target, projection, version digest, and
@@ -210,8 +226,10 @@ host-authoritative regardless.
 - Cache eviction never invalidates an in-flight command's copied Guard data.
 - No target is considered fresh only because its TTL has not expired.
 
-No minimum hit rate is set before real traces exist. A cache with a low hit
-rate or high invalidation cost should be removed rather than defended.
+No minimum hit rate is set because the component is not active. A future
+activation requires a new measured workload, an explicitly cache-tolerant
+projection, and a superseding implementation decision. A cache with a low hit
+rate or high invalidation cost should remain disabled.
 
 ## Trace overhead targets
 

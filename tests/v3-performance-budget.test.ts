@@ -14,6 +14,7 @@ import {
   V3_PERFORMANCE_BUDGETS,
   percentile95,
   serializedCharacterCount,
+  serializedUtf8ByteCount,
 } from "../src/v3-performance.js";
 import { projectQueryResult } from "../src/v3-query-projector.js";
 
@@ -38,7 +39,7 @@ function phraseFixture(noteCount: number): Record<string, unknown> {
 }
 
 test("PERF-001: ordinary Query fixture p95 stays below 20 KB", () => {
-  const sizes = Array.from({ length: 100 }, (_, index) => {
+  const projectedResults = Array.from({ length: 100 }, (_, index) => {
     const projected = projectQueryResult(
       "get_phrase_context",
       phraseFixture(8 + (index % 57)),
@@ -49,12 +50,16 @@ test("PERF-001: ordinary Query fixture p95 stays below 20 KB", () => {
         explicitlyScoped: false,
       },
     );
-    return projected.responseCharacters;
+    return projected;
   });
 
   assert.ok(
-    percentile95(sizes) <=
+    percentile95(projectedResults.map((result) => result.responseCharacters)) <=
       V3_PERFORMANCE_BUDGETS.ordinaryQueryCharacters,
+  );
+  assert.ok(
+    percentile95(projectedResults.map((result) => result.responseBytes)) <=
+      V3_PERFORMANCE_BUDGETS.ordinaryQueryBytes,
   );
 });
 
@@ -71,6 +76,10 @@ test("PERF-002: command and error envelopes satisfy their public budgets", async
       acknowledgementCharacters <=
         V3_PERFORMANCE_BUDGETS.commandAcknowledgementCharacters,
     );
+    assert.ok(
+      serializedUtf8ByteCount(acknowledgement) <=
+        V3_PERFORMANCE_BUDGETS.commandAcknowledgementBytes,
+    );
 
     const fingerprint = `private-fingerprint-${"x".repeat(100_000)}`;
     const failure = failedOutcome(
@@ -84,7 +93,28 @@ test("PERF-002: command and error envelopes satisfy their public budgets", async
     assert.ok(
       failureText.length <= V3_PERFORMANCE_BUDGETS.publicErrorCharacters,
     );
+    assert.ok(
+      Buffer.byteLength(failureText, "utf8") <=
+        V3_PERFORMANCE_BUDGETS.publicErrorBytes,
+    );
     assert.doesNotMatch(failureText, /private-fingerprint/u);
+  });
+});
+
+test("PERF-002: UTF-8 byte budgets cannot be bypassed with multibyte text", async () => {
+  await runWithTrace(async () => {
+    const failure = failedOutcome(
+      new BridgeError(
+        "\u0000".repeat(1_024) + "错".repeat(2_000),
+        "INVALID_ARGUMENT",
+      ),
+      "schema",
+    );
+    const failureText = JSON.stringify(failure);
+    assert.ok(
+      Buffer.byteLength(failureText, "utf8") <=
+        V3_PERFORMANCE_BUDGETS.publicErrorBytes,
+    );
   });
 });
 
@@ -121,9 +151,26 @@ test("PERF-005: the benchmark exercises the six-tool catalog and public envelope
     readonly toolCatalog: {
       readonly toolCount: number;
       readonly characters: number;
+      readonly bytes: number;
     };
-    readonly query: { readonly resultCharacters: number };
-    readonly command: { readonly resultCharacters: number };
+    readonly query: {
+      readonly resultCharacters: number;
+      readonly resultBytes: number;
+      readonly measurement: {
+        readonly action: string;
+        readonly targetKind: string;
+        readonly projection: string;
+      };
+    };
+    readonly command: {
+      readonly resultCharacters: number;
+      readonly resultBytes: number;
+      readonly measurement: {
+        readonly action: string;
+        readonly outcome: string;
+        readonly undoRecords: number;
+      };
+    };
   };
   assert.equal(result.toolCatalog.toolCount, 6);
   assert.ok(
@@ -131,11 +178,29 @@ test("PERF-005: the benchmark exercises the six-tool catalog and public envelope
       V3_PERFORMANCE_BUDGETS.toolCatalogCharacters,
   );
   assert.ok(
+    result.toolCatalog.bytes <=
+      V3_PERFORMANCE_BUDGETS.toolCatalogBytes,
+  );
+  assert.ok(
     result.query.resultCharacters <=
       V3_PERFORMANCE_BUDGETS.ordinaryQueryCharacters,
+  );
+  assert.ok(
+    result.query.resultBytes <=
+      V3_PERFORMANCE_BUDGETS.ordinaryQueryBytes,
   );
   assert.ok(
     result.command.resultCharacters <=
       V3_PERFORMANCE_BUDGETS.commandAcknowledgementCharacters,
   );
+  assert.ok(
+    result.command.resultBytes <=
+      V3_PERFORMANCE_BUDGETS.commandAcknowledgementBytes,
+  );
+  assert.equal(result.query.measurement.action, "get_phrase_context");
+  assert.equal(result.query.measurement.targetKind, "GroupReference");
+  assert.equal(result.query.measurement.projection, "notes:dense-auto");
+  assert.equal(result.command.measurement.action, "set_track_mixer");
+  assert.equal(result.command.measurement.outcome, "changed");
+  assert.equal(result.command.measurement.undoRecords, 1);
 });

@@ -36,9 +36,11 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 
 > Status: **v0.2.0-alpha.1 / protocol v3**. The six-tool semantic Facade,
 > typed Query Contexts, compact Command outcomes, component build-coherence
-> checks, and the first common Command Kernel slice are implemented. Private
-> action migration and real-host certification are still in progress. Test
-> writes only on saved working copies.
+> checks, Query Projector, common Command Kernel, semantic write-policy
+> catalog, aggregate tuning, safe clone semantics, and dependent transaction
+> recovery are implemented. Representative SynthV 2.2.1 standalone
+> certification is recorded; the stable `0.2.0` release gate remains open.
+> Test writes only on saved working copies.
 
 See the [v3 architecture](docs/architecture-v3.md),
 [development plan](docs/v3-development-plan.md), and

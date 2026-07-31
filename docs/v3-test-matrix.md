@@ -1,10 +1,10 @@
 # v3 Test Matrix
 
-Status: baseline
+Status: enforced alpha baseline
 
 Date: 2026-07-30
 
-Current automated baseline: 150 passing tests. Recorded real-host acceptance
+Current automated baseline: 215 passing tests. Recorded real-host acceptance
 uses SynthV Studio 2 Pro 2.2.1 standalone and a saved disposable test project.
 It currently covers the Mixer command/no-op path, Session invalidation,
 Sidebar Apply/Undo, isolated clone/source preservation, and closed-range
@@ -27,7 +27,11 @@ and stable full-state Guards across pages/range projections. The final
 real-host Phase 3 gate covers ten representative paths on the final build:
 43-219 ms end to end, 160-1,698 model-facing characters, zero shadow
 differences, private Group UUID isolation even for guardless reads, and zero
-mutation/Undo stages.
+mutation/Undo stages. All 38 live semantic writes are also joined to the
+machine-readable official API inventory and Command Policy catalog. All 215
+official methods classified as Agent semantic capabilities inherit a checked
+public-tool, Action, Host Adapter, preflight, postcondition, automated-test,
+and real-host evidence mapping.
 
 This matrix turns architecture and known production-session failures into
 release gates. It supplements the current tests; it does not replace the
@@ -45,8 +49,7 @@ checks in `AGENTS.md`.
 
 Fake-host tests must not be described as proof that SynthV implements an
 undocumented behavior. A `Yes` entry proves the regression fixture and current
-migrated slice; it does not certify every private legacy action against that
-case.
+migrated slice; it does not certify every semantic action against that case.
 
 ## Required fake-host capabilities
 
@@ -107,7 +110,7 @@ It does not model audio rendering or Vocal timbre.
 | PRJ-004 | Public Query catalog changes | every read Action must have exactly one projection policy |
 | PRJ-005 | Default pageable Query | bounded host page with count/offset/continuation metadata |
 | PRJ-006 | Default Automation Query | full private Guard, no public point array without an explicit range |
-| PRJ-007 | Unscoped default response exceeds 20,000 characters | bounded `QUERY_RESPONSE_BUDGET_EXCEEDED`; rejected payload not echoed |
+| PRJ-007 | Unscoped default response exceeds 20,000 characters or UTF-8 bytes | bounded `QUERY_RESPONSE_BUDGET_EXCEEDED`; rejected payload not echoed |
 | PRJ-008 | Explicit large page/range/projection | allowed, measured, and coverage reported |
 | CAC-001 | Cache hit for read-only projection | same DTO and `sessionCached` support trace |
 | CAC-002 | Write-capable Context request | host read even when a cache entry exists |
@@ -115,6 +118,10 @@ It does not model audio rendering or Vocal timbre.
 | CAC-004 | Cache corruption/miss | safe host-read fallback |
 | CAC-005 | Computed pitch key | different references never share one entry |
 | CAC-006 | Weight/age eviction | bounded memory and no write failure |
+
+`CAC-*` currently certifies the dormant bounded cache component only.
+Production `sv_query` does not use mutable project snapshots; every Query
+reaches SynthV because Phase 6 measurements did not justify stale-read risk.
 
 ## Command lifecycle cases
 
@@ -165,6 +172,21 @@ Sanitized generated fixtures must include:
 Fixtures contain synthetic lyrics only and are not `.svp` files.
 
 ## Real SynthV acceptance matrix
+
+Recorded `0.2.0-alpha.1` evidence:
+
+| Area | Environment and result |
+|---|---|
+| Query projection | SynthV 2.2.1 Pro standalone; ten representative reads completed in 43-219 ms and 160-1,698 model-facing characters, with zero shadow differences and zero mutation/Undo stages |
+| Mixer Command | `0 dB → -3 dB` returned `changed`, one Undo and verified readback; repeating `-3 dB` returned `alreadySatisfied`, zero Undo; one Edit-menu Undo restored `0 dB` |
+| Sidebar review | Preview did not mutate; Apply muted Track 1 with one Undo; one Edit-menu Undo restored mute off while gain remained `0 dB` |
+| Linked clone | Source UUID was shared intentionally, fresh reference count increased, and one Undo removed only the new reference |
+| Isolated clone | New UUID differed, reference count was one, deleting/restoring the clone's final note never changed the 42-note source |
+| Track shell/delete | A verified-empty Track shell was removed by one Undo boundary while the source Track and isolated clone Track remained |
+| Automation | A gender curve was visibly applied to the test Group and one Undo restored the prior flat curve |
+
+These are bounded representative host checks, not a claim that every official
+API method has been manually exercised.
 
 At minimum, each release candidate records:
 

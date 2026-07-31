@@ -982,6 +982,18 @@ local function executeCommandPipeline(specification)
             { action = specification.action }
         )
     end
+    if specification.requireSerializablePlan then
+        local planSerializable = pcall(function()
+            json.encode(plan)
+        end)
+        if not planSerializable then
+            raiseBridgeError(
+                "INTERNAL_ERROR",
+                "The command adapter produced a non-serializable effect plan",
+                { action = specification.action }
+            )
+        end
+    end
     recordLuaStage("preflighted")
     recordLuaStage("effectPlanned")
 
@@ -1175,6 +1187,19 @@ runtimeState.snapshotNoteContent = function(group)
             )
     end
     table.sort(snapshot)
+    return snapshot
+end
+
+runtimeState.snapshotNoteContentInOrder = function(group)
+    local groupUuid = group:getUUID()
+    local snapshot = {}
+    for noteIndex = 1, group:getNumNotes() do
+        snapshot[#snapshot + 1] =
+            runtimeState.makeNoteContentFingerprint(
+                groupUuid,
+                group:getNote(noteIndex)
+            )
+    end
     return snapshot
 end
 
@@ -7900,8 +7925,6 @@ end
 
 function handlers.transform_notes(payload)
     payload = requireObject(payload, "payload")
-    local project, _track, trackIndex, reference, group, groupIndex =
-        resolveGroup(payload)
     local targets = requireArray(payload.notes, "notes", 1, 512)
     local transform = requireObject(payload.transform, "transform")
 
@@ -7952,181 +7975,7 @@ function handlers.transform_notes(payload)
         )
     end
 
-    local timeAxis = onsetOffsetSeconds ~= nil and project:getTimeAxis() or nil
-    local referenceOffset = onsetOffsetSeconds ~= nil
-        and requireInteger(
-            reference:getTimeOffset(),
-            "reference.timeOffset",
-            -MAX_SAFE_INTEGER,
-            MAX_SAFE_INTEGER
-        )
-        or 0
-    local edits = json.array()
-    local seen = {}
-    local unchangedCount = 0
-
-    for index = 1, #targets do
-        local path = "notes[" .. index .. "]"
-        local target = requireObject(targets[index], path)
-        local noteIndex = requireInteger(
-            target.noteIndex,
-            path .. ".noteIndex",
-            1,
-            group:getNumNotes()
-        )
-        if seen[noteIndex] then
-            raiseBridgeError(
-                "INVALID_ARGUMENT",
-                "The same noteIndex appears more than once",
-                { noteIndex = noteIndex }
-            )
-        end
-        seen[noteIndex] = true
-        local fingerprint = requireString(
-            target.fingerprint,
-            path .. ".fingerprint",
-            false
-        )
-        local note = validateFingerprint(group, noteIndex, fingerprint)
-        local changes = {}
-
-        if onsetOffsetBlick ~= nil then
-            changes.onset = requireInteger(
-                note:getOnset() + onsetOffsetBlick,
-                path .. ".transformedOnset",
-                0,
-                MAX_SAFE_INTEGER
-            )
-        elseif onsetOffsetSeconds ~= nil then
-            local absoluteOnset = note:getOnset() + referenceOffset
-            local readSeconds, currentSecondsOrError = pcall(function()
-                return timeAxis:getSecondsFromBlick(absoluteOnset)
-            end)
-            if not readSeconds then
-                raiseBridgeError(
-                    "UNSUPPORTED_HOST_CAPABILITY",
-                    "SynthV could not convert the current note onset to seconds",
-                    {
-                        capability = "TimeAxis.getSecondsFromBlick",
-                        noteIndex = noteIndex,
-                        cause = tostring(currentSecondsOrError)
-                    }
-                )
-            end
-            local currentSeconds = requireFiniteNumber(
-                currentSecondsOrError,
-                path .. ".currentOnsetSeconds"
-            )
-            local targetSeconds = requireFiniteNumber(
-                currentSeconds + onsetOffsetSeconds,
-                path .. ".transformedOnsetSeconds",
-                0
-            )
-            local converted, convertedOrError = pcall(function()
-                return timeAxis:getBlickFromSeconds(targetSeconds)
-            end)
-            if not converted then
-                raiseBridgeError(
-                    "INVALID_ARGUMENT",
-                    "SynthV rejected the transformed note onset in seconds",
-                    {
-                        noteIndex = noteIndex,
-                        targetSeconds = targetSeconds,
-                        cause = tostring(convertedOrError)
-                    }
-                )
-            end
-            changes.onset = requireInteger(
-                convertedOrError - referenceOffset,
-                path .. ".transformedOnset",
-                0,
-                MAX_SAFE_INTEGER
-            )
-        end
-
-        if durationScale ~= 1 or durationOffsetBlick ~= 0 then
-            changes.duration = requireInteger(
-                math.floor(note:getDuration() * durationScale + 0.5)
-                    + durationOffsetBlick,
-                path .. ".transformedDuration",
-                1,
-                MAX_SAFE_INTEGER
-            )
-        end
-
-        if pitchOffsetSemitones ~= 0 then
-            changes.pitch = requireInteger(
-                note:getPitch() + pitchOffsetSemitones,
-                path .. ".transformedPitch",
-                0,
-                127
-            )
-        end
-
-        local effective = {}
-        if changes.onset ~= nil and changes.onset ~= note:getOnset() then
-            effective.onset = changes.onset
-        end
-        if changes.duration ~= nil
-            and changes.duration ~= note:getDuration() then
-            effective.duration = changes.duration
-        end
-        if changes.pitch ~= nil and changes.pitch ~= note:getPitch() then
-            effective.pitch = changes.pitch
-        end
-
-        if next(effective) == nil then
-            unchangedCount = unchangedCount + 1
-        else
-            edits[#edits + 1] = {
-                noteIndex = noteIndex,
-                fingerprint = fingerprint,
-                changes = effective
-            }
-        end
-    end
-
-    if #edits == 0 then
-        return {
-            trackIndex = trackIndex,
-            groupIndex = groupIndex,
-            groupUuid = group:getUUID(),
-            semanticAction = "transform_notes",
-            changedCount = 0,
-            editedCount = 0,
-            notes = json.array(),
-            targetedCount = #targets,
-            transformedCount = 0,
-            unchangedCount = unchangedCount,
-            transform = {
-                onsetOffsetBlick = onsetOffsetBlick or JSON_NULL,
-                onsetOffsetSeconds = onsetOffsetSeconds or JSON_NULL,
-                durationScale = durationScale,
-                durationOffsetBlick = durationOffsetBlick,
-                pitchOffsetSemitones = pitchOffsetSemitones,
-                durationUnitPreserved = "blick"
-            },
-            verified = true,
-            undoRecordCount = 0
-        }
-    end
-
-    -- edit_notes owns the clone preflight and the one undo boundary. This
-    -- semantic wrapper only performs deterministic expansion from explicit
-    -- numeric inputs; it never chooses musical intent or target notes.
-    local result = handlers.edit_notes({
-        trackIndex = trackIndex,
-        groupIndex = groupIndex,
-        groupUuid = group:getUUID(),
-        edits = edits
-    })
-
-    result.semanticAction = "transform_notes"
-    result.changedCount = #edits
-    result.targetedCount = #targets
-    result.transformedCount = #edits
-    result.unchangedCount = unchangedCount
-    result.transform = {
+    local transformSummary = {
         onsetOffsetBlick = onsetOffsetBlick or JSON_NULL,
         onsetOffsetSeconds = onsetOffsetSeconds or JSON_NULL,
         durationScale = durationScale,
@@ -8134,9 +7983,328 @@ function handlers.transform_notes(payload)
         pitchOffsetSemitones = pitchOffsetSemitones,
         durationUnitPreserved = "blick"
     }
-    result.verified = true
-    result.undoRecordCount = 1
-    return result
+
+    -- This semantic adapter deterministically expands only caller-supplied
+    -- numeric transforms. It never chooses musical intent or target notes.
+    return executeCommandPipeline({
+        action = "transform_notes",
+        requireSerializablePlan = true,
+        freshRead = function()
+            local project, _track, trackIndex, reference, group, groupIndex =
+                resolveGroup(payload)
+            return {
+                project = project,
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = group:getUUID(),
+                reference = reference,
+                group = group
+            }
+        end,
+        guard = function(state)
+            local seen = {}
+            local guarded = {}
+            for index = 1, #targets do
+                local path = "notes[" .. index .. "]"
+                local target = requireObject(targets[index], path)
+                local noteIndex = requireInteger(
+                    target.noteIndex,
+                    path .. ".noteIndex",
+                    1,
+                    state.group:getNumNotes()
+                )
+                if seen[noteIndex] then
+                    raiseBridgeError(
+                        "INVALID_ARGUMENT",
+                        "The same noteIndex appears more than once",
+                        { noteIndex = noteIndex }
+                    )
+                end
+                seen[noteIndex] = true
+                local fingerprint = requireString(
+                    target.fingerprint,
+                    path .. ".fingerprint",
+                    false
+                )
+                guarded[#guarded + 1] = {
+                    noteIndex = noteIndex,
+                    path = path,
+                    note = validateFingerprint(
+                        state.group,
+                        noteIndex,
+                        fingerprint
+                    )
+                }
+            end
+            state.guarded = guarded
+        end,
+        preflight = function(state)
+            local timeAxis =
+                onsetOffsetSeconds ~= nil
+                and state.project:getTimeAxis()
+                or nil
+            local referenceOffset =
+                onsetOffsetSeconds ~= nil
+                and requireInteger(
+                    state.reference:getTimeOffset(),
+                    "reference.timeOffset",
+                    -MAX_SAFE_INTEGER,
+                    MAX_SAFE_INTEGER
+                )
+                or 0
+            local expectedContent =
+                runtimeState.snapshotNoteContent(state.group)
+            local prepared = {}
+            local expectedAfter = {}
+            local unchangedCount = 0
+
+            for index = 1, #state.guarded do
+                local guarded = state.guarded[index]
+                local note = guarded.note
+                local path = guarded.path
+                local changes = {}
+
+                if onsetOffsetBlick ~= nil then
+                    changes.onset = requireInteger(
+                        note:getOnset() + onsetOffsetBlick,
+                        path .. ".transformedOnset",
+                        0,
+                        MAX_SAFE_INTEGER
+                    )
+                elseif onsetOffsetSeconds ~= nil then
+                    local absoluteOnset =
+                        note:getOnset() + referenceOffset
+                    local readSeconds, currentSecondsOrError =
+                        pcall(function()
+                            return timeAxis:getSecondsFromBlick(
+                                absoluteOnset
+                            )
+                        end)
+                    if not readSeconds then
+                        raiseBridgeError(
+                            "UNSUPPORTED_HOST_CAPABILITY",
+                            "SynthV could not convert the current note onset to seconds",
+                            {
+                                capability =
+                                    "TimeAxis.getSecondsFromBlick",
+                                noteIndex = guarded.noteIndex,
+                                cause = tostring(currentSecondsOrError)
+                            }
+                        )
+                    end
+                    local currentSeconds = requireFiniteNumber(
+                        currentSecondsOrError,
+                        path .. ".currentOnsetSeconds"
+                    )
+                    local targetSeconds = requireFiniteNumber(
+                        currentSeconds + onsetOffsetSeconds,
+                        path .. ".transformedOnsetSeconds",
+                        0
+                    )
+                    local converted, convertedOrError =
+                        pcall(function()
+                            return timeAxis:getBlickFromSeconds(
+                                targetSeconds
+                            )
+                        end)
+                    if not converted then
+                        raiseBridgeError(
+                            "INVALID_ARGUMENT",
+                            "SynthV rejected the transformed note onset in seconds",
+                            {
+                                noteIndex = guarded.noteIndex,
+                                targetSeconds = targetSeconds,
+                                cause = tostring(convertedOrError)
+                            }
+                        )
+                    end
+                    changes.onset = requireInteger(
+                        convertedOrError - referenceOffset,
+                        path .. ".transformedOnset",
+                        0,
+                        MAX_SAFE_INTEGER
+                    )
+                end
+
+                if durationScale ~= 1 or durationOffsetBlick ~= 0 then
+                    changes.duration = requireInteger(
+                        math.floor(
+                            note:getDuration() * durationScale + 0.5
+                        ) + durationOffsetBlick,
+                        path .. ".transformedDuration",
+                        1,
+                        MAX_SAFE_INTEGER
+                    )
+                end
+                if pitchOffsetSemitones ~= 0 then
+                    changes.pitch = requireInteger(
+                        note:getPitch() + pitchOffsetSemitones,
+                        path .. ".transformedPitch",
+                        0,
+                        127
+                    )
+                end
+
+                local effective = {}
+                if changes.onset ~= nil
+                    and changes.onset ~= note:getOnset() then
+                    effective.onset = changes.onset
+                end
+                if changes.duration ~= nil
+                    and changes.duration ~= note:getDuration() then
+                    effective.duration = changes.duration
+                end
+                if changes.pitch ~= nil
+                    and changes.pitch ~= note:getPitch() then
+                    effective.pitch = changes.pitch
+                end
+
+                if next(effective) == nil then
+                    unchangedCount = unchangedCount + 1
+                else
+                    local candidate = note:clone()
+                    applyPreparedNoteChanges(
+                        candidate,
+                        effective,
+                        path .. ".changes"
+                    )
+                    local beforeContent =
+                        runtimeState.makeNoteContentFingerprint(
+                            state.groupUuid,
+                            note
+                        )
+                    local afterContent =
+                        runtimeState.makeNoteContentFingerprint(
+                            state.groupUuid,
+                            candidate
+                        )
+                    for contentIndex = 1, #expectedContent do
+                        if expectedContent[contentIndex]
+                            == beforeContent then
+                            expectedContent[contentIndex] =
+                                afterContent
+                            break
+                        end
+                    end
+                    expectedAfter[#expectedAfter + 1] = afterContent
+                    prepared[#prepared + 1] = {
+                        note = note,
+                        changes = effective,
+                        path = path .. ".changes"
+                    }
+                end
+            end
+            table.sort(expectedContent)
+            state.prepared = prepared
+            return {
+                changedCount = #prepared,
+                targetedCount = #targets,
+                unchangedCount = unchangedCount,
+                transform = transformSummary,
+                expectedContent = expectedContent,
+                expectedAfter = expectedAfter
+            }
+        end,
+        alreadySatisfied = function(state, plan)
+            return {
+                trackIndex = state.trackIndex,
+                groupIndex = state.groupIndex,
+                groupUuid = state.groupUuid,
+                semanticAction = "transform_notes",
+                changedCount = 0,
+                editedCount = 0,
+                notes = json.array(),
+                targetedCount = plan.targetedCount,
+                transformedCount = 0,
+                unchangedCount = plan.unchangedCount,
+                transform = plan.transform,
+                verified = true,
+                undoRecordCount = 0
+            }
+        end,
+        mutate = function(state, _plan)
+            for index = 1, #state.prepared do
+                local prepared = state.prepared[index]
+                applyPreparedNoteChanges(
+                    prepared.note,
+                    prepared.changes,
+                    prepared.path
+                )
+            end
+        end,
+        verify = function(_state, plan)
+            local _project, _track, trackIndex, reference, group, groupIndex =
+                resolveGroup(payload)
+            local actualContent =
+                runtimeState.snapshotNoteContent(group)
+            if not runtimeState.noteContentSnapshotsEqual(
+                actualContent,
+                plan.expectedContent
+            ) then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not retain the complete transformed note result",
+                    {
+                        trackIndex = trackIndex,
+                        groupIndex = groupIndex,
+                        expectedNoteCount = #plan.expectedContent,
+                        actualNoteCount = #actualContent
+                    }
+                )
+            end
+
+            local wanted = {}
+            for index = 1, #plan.expectedAfter do
+                local content = plan.expectedAfter[index]
+                wanted[content] = (wanted[content] or 0) + 1
+            end
+            local notes = json.array()
+            local groupUuid = group:getUUID()
+            for noteIndex = 1, group:getNumNotes() do
+                local note = group:getNote(noteIndex)
+                local content =
+                    runtimeState.makeNoteContentFingerprint(
+                        groupUuid,
+                        note
+                    )
+                if (wanted[content] or 0) > 0 then
+                    notes[#notes + 1] =
+                        serializeNote(
+                            group,
+                            reference,
+                            note,
+                            noteIndex
+                        )
+                    wanted[content] = wanted[content] - 1
+                end
+            end
+            if #notes ~= plan.changedCount then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV retained the Group snapshot but not every transformed-note identity",
+                    {
+                        expectedEditedCount = plan.changedCount,
+                        actualEditedCount = #notes
+                    }
+                )
+            end
+            return {
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = groupUuid,
+                semanticAction = "transform_notes",
+                changedCount = plan.changedCount,
+                editedCount = #notes,
+                notes = notes,
+                targetedCount = plan.targetedCount,
+                transformedCount = plan.changedCount,
+                unchangedCount = plan.unchangedCount,
+                transform = plan.transform,
+                verified = true,
+                undoRecordCount = 1
+            }
+        end
+    })
 end
 
 local function makeDeterministicRandom(seed)
@@ -8588,7 +8756,6 @@ function handlers.delete_notes(payload)
                         )
                 end
             end
-            table.sort(expectedContent)
             table.sort(prepared, function(left, right)
                 return left.noteIndex > right.noteIndex
             end)
@@ -8629,7 +8796,7 @@ function handlers.delete_notes(payload)
             local _project, _track, trackIndex, _reference, group, groupIndex =
                 resolveGroup(payload)
             local actualContent =
-                runtimeState.snapshotNoteContent(group)
+                runtimeState.snapshotNoteContentInOrder(group)
             if not runtimeState.noteContentSnapshotsEqual(
                 actualContent,
                 state.expectedContent
@@ -9865,14 +10032,34 @@ end
 
 function handlers.apply_group_tuning(payload)
     payload = requireObject(payload, "payload")
-    local project, _track, trackIndex, reference, group, groupIndex =
-        resolveGroup(payload)
     local summary = requireString(payload.summary, "summary", false)
     if #summary > 1000 then
         raiseBridgeError("INVALID_ARGUMENT", "summary must be at most 1000 bytes")
     end
 
-    validateCurrentEditorGroupGuard(payload, reference, group)
+    local function applyPreparedAutomation(target, update)
+        if update.clearMode == "all" then
+            target:removeAll()
+        elseif update.clearMode == "range" then
+            removeAutomationClosedRange(
+                target,
+                update.rangeBegin,
+                update.rangeEnd
+            )
+        end
+        for pointIndex = 1, #update.points do
+            target:add(
+                update.points[pointIndex].position,
+                update.points[pointIndex].value
+            )
+        end
+    end
+
+    local function preparePlan(state)
+    local trackIndex = state.trackIndex
+    local reference = state.reference
+    local group = state.group
+    local groupIndex = state.groupIndex
 
     local voicePayload = nil
     local voiceUpdate = nil
@@ -10014,24 +10201,6 @@ function handlers.apply_group_tuning(payload)
         end
     end
     table.sort(expectedNoteContent)
-
-    local function applyPreparedAutomation(target, update)
-        if update.clearMode == "all" then
-            target:removeAll()
-        elseif update.clearMode == "range" then
-            removeAutomationClosedRange(
-                target,
-                update.rangeBegin,
-                update.rangeEnd
-            )
-        end
-        for pointIndex = 1, #update.points do
-            target:add(
-                update.points[pointIndex].position,
-                update.points[pointIndex].value
-            )
-        end
-    end
 
     local preparedAutomations = {}
     local effectiveAutomationCount = 0
@@ -10187,6 +10356,7 @@ function handlers.apply_group_tuning(payload)
         local deletes = {}
         local adds = {}
         local seen = {}
+        local requestedOperationCount = 0
         local operationCount = 0
 
         if isProvided(pitchInput.edits) then
@@ -10241,11 +10411,22 @@ function handlers.apply_group_tuning(payload)
                     path .. ".changes"
                 )
                 candidateApply(candidateControl)
-                edits[#edits + 1] = {
-                    control = control,
-                    apply = apply
-                }
-                operationCount = operationCount + 1
+                requestedOperationCount = requestedOperationCount + 1
+                local candidateSerialized = serializePitchControl(
+                    candidateGroup,
+                    candidateControl,
+                    controlIndex
+                )
+                if runtimeState.pitchControlContentValue(serialized)
+                    ~= runtimeState.pitchControlContentValue(
+                        candidateSerialized
+                    ) then
+                    edits[#edits + 1] = {
+                        control = control,
+                        apply = apply
+                    }
+                    operationCount = operationCount + 1
+                end
             end
         end
 
@@ -10292,6 +10473,7 @@ function handlers.apply_group_tuning(payload)
                 deletes[#deletes + 1] = {
                     pitchControlIndex = controlIndex
                 }
+                requestedOperationCount = requestedOperationCount + 1
                 operationCount = operationCount + 1
             end
             table.sort(deletes, function(left, right)
@@ -10341,11 +10523,12 @@ function handlers.apply_group_tuning(payload)
                 candidateGroup:addPitchControl(
                     candidateControlOrError
                 )
+                requestedOperationCount = requestedOperationCount + 1
                 operationCount = operationCount + 1
             end
         end
 
-        if operationCount == 0 then
+        if requestedOperationCount == 0 then
             raiseBridgeError(
                 "INVALID_ARGUMENT",
                 "pitchControls must add, edit, or delete at least one control"
@@ -10387,8 +10570,46 @@ function handlers.apply_group_tuning(payload)
         + effectiveAutomationCount
         + pitchControlChangedCount
 
+    local automationExpectations = {}
+    for index = 1, #preparedAutomations do
+        local prepared = preparedAutomations[index]
+        automationExpectations[#automationExpectations + 1] = {
+            parameter = prepared.parameter,
+            clearMode = prepared.clearMode,
+            rangeBegin = prepared.rangeBegin,
+            rangeEnd = prepared.rangeEnd,
+            points = prepared.points,
+            expectedPoints = prepared.expectedPoints
+        }
+    end
+    state.voiceUpdate = voiceUpdate
+    state.preparedNotes = preparedNotes
+    state.preparedAutomations = preparedAutomations
+    state.preparedPitchControls = preparedPitchControls
+
+    return {
+        summary = summary,
+        voiceIncluded = voiceUpdate ~= nil,
+        voiceChecks = voiceChecks,
+        expectedVocalModes = expectedVocalModes,
+        allowAdditionalVocalModes = allowAdditionalVocalModes,
+        voiceEffective = voiceEffective,
+        expectedNoteContent = expectedNoteContent,
+        effectiveNoteCount = effectiveNoteCount,
+        automationExpectations = automationExpectations,
+        effectiveAutomationCount = effectiveAutomationCount,
+        pitchExpectedContent =
+            preparedPitchControls ~= nil
+            and preparedPitchControls.expectedContent
+            or JSON_NULL,
+        pitchControlChangedCount = pitchControlChangedCount,
+        changedCount = changedCount
+    }
+    end
+
     return executeCommandPipeline({
         action = "apply_group_tuning",
+        requireSerializablePlan = true,
         freshRead = function()
             local currentProject, _currentTrack, currentTrackIndex,
                 currentReference, currentGroup, currentGroupIndex =
@@ -10402,17 +10623,22 @@ function handlers.apply_group_tuning(payload)
                 group = currentGroup
             }
         end,
-        preflight = function(_state)
-            return {
-                changedCount = changedCount
-            }
+        guard = function(state)
+            validateCurrentEditorGroupGuard(
+                payload,
+                state.reference,
+                state.group
+            )
         end,
-        alreadySatisfied = function(state, _plan)
+        preflight = function(state)
+            return preparePlan(state)
+        end,
+        alreadySatisfied = function(state, plan)
             return {
                 trackIndex = state.trackIndex,
                 groupIndex = state.groupIndex,
                 groupUuid = state.groupUuid,
-                summary = summary,
+                summary = plan.summary,
                 changedCount = 0,
                 voiceChanged = false,
                 noteEditedCount = 0,
@@ -10422,10 +10648,10 @@ function handlers.apply_group_tuning(payload)
                 verified = true
             }
         end,
-        mutate = function(_state, _plan)
-            if voiceEffective then
+        mutate = function(state, plan)
+            if plan.voiceEffective then
                 local applied, applyError = pcall(function()
-                    reference:setVoice(voiceUpdate)
+                    state.reference:setVoice(state.voiceUpdate)
                 end)
                 if not applied then
                     raiseBridgeError(
@@ -10436,8 +10662,8 @@ function handlers.apply_group_tuning(payload)
                 end
             end
 
-            for index = 1, #preparedNotes do
-                local prepared = preparedNotes[index]
+            for index = 1, #state.preparedNotes do
+                local prepared = state.preparedNotes[index]
                 if prepared.effective then
                     if prepared.noteChanges ~= nil then
                         applyPreparedNoteChanges(
@@ -10456,8 +10682,8 @@ function handlers.apply_group_tuning(payload)
                 end
             end
 
-            for index = 1, #preparedAutomations do
-                local prepared = preparedAutomations[index]
+            for index = 1, #state.preparedAutomations do
+                local prepared = state.preparedAutomations[index]
                 if prepared.effective then
                     applyPreparedAutomation(
                         prepared.automation,
@@ -10466,45 +10692,45 @@ function handlers.apply_group_tuning(payload)
                 end
             end
 
-            if preparedPitchControls ~= nil
-                and preparedPitchControls.effective then
-                for index = 1, #preparedPitchControls.edits do
+            if state.preparedPitchControls ~= nil
+                and state.preparedPitchControls.effective then
+                for index = 1, #state.preparedPitchControls.edits do
                     local prepared =
-                        preparedPitchControls.edits[index]
+                        state.preparedPitchControls.edits[index]
                     prepared.apply(prepared.control)
                 end
-                for index = 1, #preparedPitchControls.deletes do
-                    group:removePitchControl(
-                        preparedPitchControls.deletes[index]
+                for index = 1, #state.preparedPitchControls.deletes do
+                    state.group:removePitchControl(
+                        state.preparedPitchControls.deletes[index]
                             .pitchControlIndex
                     )
                 end
-                for index = 1, #preparedPitchControls.adds do
-                    group:addPitchControl(
-                        preparedPitchControls.adds[index]
+                for index = 1, #state.preparedPitchControls.adds do
+                    state.group:addPitchControl(
+                        state.preparedPitchControls.adds[index]
                     )
                 end
             end
         end,
-        verify = function(_state, _plan)
+        verify = function(_state, plan)
             local _currentProject, _currentTrack, currentTrackIndex,
                 currentReference, currentGroup, currentGroupIndex =
                 resolveGroup(payload)
 
-            if voiceUpdate ~= nil then
+            if plan.voiceIncluded then
                 local updatedVoice = safeCall(function()
                     return currentReference:getVoice()
                 end, nil)
                 verifyGroupVoiceChecks(
                     updatedVoice,
-                    voiceChecks,
+                    plan.voiceChecks,
                     "HOST_POSTCONDITION_FAILED"
                 )
                 verifyVocalModeSnapshot(
                     updatedVoice,
-                    expectedVocalModes,
+                    plan.expectedVocalModes,
                     "HOST_POSTCONDITION_FAILED",
-                    allowAdditionalVocalModes
+                    plan.allowAdditionalVocalModes
                 )
             end
 
@@ -10512,20 +10738,20 @@ function handlers.apply_group_tuning(payload)
                 runtimeState.snapshotNoteContent(currentGroup)
             if not runtimeState.noteContentSnapshotsEqual(
                 actualNoteContent,
-                expectedNoteContent
+                plan.expectedNoteContent
             ) then
                 raiseBridgeError(
                     "HOST_POSTCONDITION_FAILED",
                     "SynthV did not retain the complete aggregate note result",
                     {
-                        expectedNoteCount = #expectedNoteContent,
+                        expectedNoteCount = #plan.expectedNoteContent,
                         actualNoteCount = #actualNoteContent
                     }
                 )
             end
 
-            for index = 1, #preparedAutomations do
-                local prepared = preparedAutomations[index]
+            for index = 1, #plan.automationExpectations do
+                local prepared = plan.automationExpectations[index]
                 local currentAutomation, serialized =
                     serializeAutomation(
                         currentGroup,
@@ -10554,21 +10780,21 @@ function handlers.apply_group_tuning(payload)
                 end
             end
 
-            if preparedPitchControls ~= nil then
+            if plan.pitchExpectedContent ~= JSON_NULL then
                 local actualPitchContent =
                     runtimeState.snapshotPitchControlContent(
                         currentGroup
                     )
                 if not runtimeState.noteContentSnapshotsEqual(
                     actualPitchContent,
-                    preparedPitchControls.expectedContent
+                    plan.pitchExpectedContent
                 ) then
                     raiseBridgeError(
                         "HOST_POSTCONDITION_FAILED",
                         "SynthV did not retain the complete Smart Pitch aggregate result",
                         {
                             expectedPitchControlCount =
-                                #preparedPitchControls.expectedContent,
+                                #plan.pitchExpectedContent,
                             actualPitchControlCount =
                                 #actualPitchContent
                         }
@@ -10580,14 +10806,14 @@ function handlers.apply_group_tuning(payload)
                 trackIndex = currentTrackIndex,
                 groupIndex = currentGroupIndex,
                 groupUuid = currentGroup:getUUID(),
-                summary = summary,
-                changedCount = changedCount,
-                voiceChanged = voiceEffective,
-                noteEditedCount = effectiveNoteCount,
+                summary = plan.summary,
+                changedCount = plan.changedCount,
+                voiceChanged = plan.voiceEffective,
+                noteEditedCount = plan.effectiveNoteCount,
                 automationChangedCount =
-                    effectiveAutomationCount,
+                    plan.effectiveAutomationCount,
                 pitchControlChangedCount =
-                    pitchControlChangedCount,
+                    plan.pitchControlChangedCount,
                 undoRecordCount = 1,
                 verified = true
             }

@@ -9,6 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import { loadConfig } from "../dist/src/config.js";
+import { BUILD_IDENTITY } from "../dist/src/build-info.js";
 import { createServer } from "../dist/src/server.js";
 import {
   commandOutcome,
@@ -18,6 +19,7 @@ import {
   V3_PERFORMANCE_BUDGETS,
   percentile95,
   serializedCharacterCount,
+  serializedUtf8ByteCount,
 } from "../dist/src/v3-performance.js";
 import { projectQueryResult } from "../dist/src/v3-query-projector.js";
 
@@ -43,6 +45,7 @@ async function measureToolCatalog() {
     return {
       toolCount: tools.tools.length,
       characters: serializedCharacterCount(tools.tools),
+      bytes: serializedUtf8ByteCount(tools.tools),
       names: tools.tools.map((tool) => tool.name),
     };
   } finally {
@@ -71,7 +74,7 @@ function phraseFixture(noteCount = 64) {
   };
 }
 
-function benchmark(iterations, operation) {
+function benchmark(iterations, operation, measurement) {
   const durations = [];
   let lastValue;
   for (let index = 0; index < iterations; index += 1) {
@@ -79,42 +82,120 @@ function benchmark(iterations, operation) {
     lastValue = operation();
     durations.push(performance.now() - startedAt);
   }
+  const p95Ms = Number(percentile95(durations).toFixed(3));
+  const resultCharacters = serializedCharacterCount(lastValue);
+  const resultBytes = serializedUtf8ByteCount(lastValue);
   return {
     iterations,
-    p95Ms: Number(percentile95(durations).toFixed(3)),
+    p95Ms,
     maximumMs: Number(Math.max(...durations).toFixed(3)),
-    resultCharacters: serializedCharacterCount(lastValue),
+    resultCharacters,
+    resultBytes,
+    measurement: {
+      ...measurement,
+      responseCharacters: resultCharacters,
+      responseBytes: resultBytes,
+      modelFacingCharacters: resultCharacters,
+      modelFacingBytes: resultBytes,
+      timings: {
+        queueMs: "notApplicable",
+        hostReadMs: "notApplicable",
+        preflightMs: "notApplicable",
+        mutationMs: "notApplicable",
+        verificationMs: "notApplicable",
+        projectionP95Ms: p95Ms,
+      },
+      errorCode: null,
+    },
   };
 }
 
-const query = benchmark(ITERATIONS, () =>
-  projectQueryResult(
-    "get_phrase_context",
-    structuredClone(phraseFixture()),
-    {
-      include: ["notes"],
-      dense: "auto",
-      debug: false,
-      explicitlyScoped: false,
-    },
-  ).publicProjection,
+const queryRequest = {
+  tool: "sv_query",
+  action: "get_phrase_context",
+  contextMode: "readOnly",
+  include: ["notes"],
+  dense: "auto",
+  fixtureNoteCount: 64,
+};
+const query = benchmark(
+  ITERATIONS,
+  () =>
+    projectQueryResult(
+      "get_phrase_context",
+      structuredClone(phraseFixture()),
+      {
+        include: ["notes"],
+        dense: "auto",
+        debug: false,
+        explicitlyScoped: false,
+      },
+    ).publicProjection,
+  {
+    action: "get_phrase_context",
+    targetKind: "GroupReference",
+    projection: "notes:dense-auto",
+    include: ["notes"],
+    noteCount: 64,
+    pitchControlCount: 0,
+    automationPointCount: 0,
+    targetCount: 64,
+    cacheStatus: "notUsed",
+    freshnessClass: "syntheticImmutableFixture",
+    outcome: "projected",
+    undoRecords: 0,
+    requestCharacters: serializedCharacterCount(queryRequest),
+    requestBytes: serializedUtf8ByteCount(queryRequest),
+  },
 );
 
 let command;
+const commandRequest = {
+  tool: "sv_command",
+  action: "set_track_mixer",
+  expectedEffect: "mustChange",
+  changedCount: 1,
+};
 await runWithTrace(async () => {
-  command = benchmark(ITERATIONS, () =>
-    commandOutcome("set_track_mixer", {
-      changedCount: 1,
-      undoRecordCount: 1,
-      verified: true,
-    }),
+  command = benchmark(
+    ITERATIONS,
+    () =>
+      commandOutcome("set_track_mixer", {
+        changedCount: 1,
+        undoRecordCount: 1,
+        verified: true,
+      }),
+    {
+      action: "set_track_mixer",
+      targetKind: "TrackShell",
+      projection: "compactCommandAcknowledgement",
+      include: [],
+      noteCount: 0,
+      pitchControlCount: 0,
+      automationPointCount: 0,
+      targetCount: 1,
+      cacheStatus: "notApplicable",
+      freshnessClass: "notApplicable",
+      outcome: "changed",
+      undoRecords: 1,
+      requestCharacters: serializedCharacterCount(commandRequest),
+      requestBytes: serializedUtf8ByteCount(commandRequest),
+    },
   );
 });
 
 const result = {
   benchmark: "v3-synthetic-query-command",
   generatedAt: new Date().toISOString(),
-  node: process.version,
+  environment: {
+    bridgeVersion: BUILD_IDENTITY.version,
+    protocolVersion: BUILD_IDENTITY.protocolVersion,
+    gitCommit: BUILD_IDENTITY.gitCommit,
+    nodeRuntime: process.version,
+    executorBuildId: BUILD_IDENTITY.executor.buildId,
+    sidebarBuildId: BUILD_IDENTITY.sidebar.buildId,
+    synthvHost: "notConnectedSyntheticFixture",
+  },
   budgets: V3_PERFORMANCE_BUDGETS,
   toolCatalog: await measureToolCatalog(),
   query,

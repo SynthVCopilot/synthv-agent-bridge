@@ -1,12 +1,17 @@
 import { isDeepStrictEqual } from "node:util";
 
 import { BridgeError } from "./errors.js";
-import { V3_PERFORMANCE_BUDGETS } from "./v3-performance.js";
+import {
+  V3_PERFORMANCE_BUDGETS,
+  serializedUtf8ByteCount,
+} from "./v3-performance.js";
 
 type JsonRecord = Record<string, unknown>;
 
 export const ORDINARY_QUERY_RESPONSE_BUDGET_CHARACTERS =
   V3_PERFORMANCE_BUDGETS.ordinaryQueryCharacters;
+export const ORDINARY_QUERY_RESPONSE_BUDGET_BYTES =
+  V3_PERFORMANCE_BUDGETS.ordinaryQueryBytes;
 const TRACE_ID_PLACEHOLDER = "tr_0000000000000000";
 
 const QUERY_ENVELOPE_FIELDS = [
@@ -330,6 +335,7 @@ export interface ProjectedQueryResult {
   readonly strategy: QueryProjectionStrategy;
   readonly budgetClass: "ordinary" | "explicitScope";
   readonly responseCharacters: number;
+  readonly responseBytes: number;
   readonly budgetExceeded: boolean;
   readonly shadow?: QueryProjectionShadow;
 }
@@ -351,16 +357,17 @@ export function projectQueryResult(
   const fields = options.fields ?? DEFAULT_READ_FIELDS[action];
   const publicProjection =
     fields === undefined ? root : projectFields(root, fields);
-  const responseCharacters = JSON.stringify(
-    owns(publicProjection, "traceId")
-      ? publicProjection
-      : { traceId: TRACE_ID_PLACEHOLDER, ...publicProjection },
-  ).length;
+  const budgetProjection = owns(publicProjection, "traceId")
+    ? publicProjection
+    : { traceId: TRACE_ID_PLACEHOLDER, ...publicProjection };
+  const responseCharacters = JSON.stringify(budgetProjection).length;
+  const responseBytes = serializedUtf8ByteCount(budgetProjection);
   const budgetClass = options.explicitlyScoped
     ? "explicitScope"
     : "ordinary";
   const budgetExceeded =
-    responseCharacters > ORDINARY_QUERY_RESPONSE_BUDGET_CHARACTERS;
+    responseCharacters > ORDINARY_QUERY_RESPONSE_BUDGET_CHARACTERS ||
+    responseBytes > ORDINARY_QUERY_RESPONSE_BUDGET_BYTES;
   const shadow = shadowQueryProjection(
     action,
     options.shadowSource ?? root,
@@ -372,6 +379,7 @@ export function projectQueryResult(
     strategy: policy.strategy,
     budgetClass,
     responseCharacters,
+    responseBytes,
     budgetExceeded,
     ...(shadow === undefined ? {} : { shadow }),
   };
@@ -391,7 +399,9 @@ export function enforceQueryResponseBudget(
         strategy: policy.strategy,
         budgetClass: result.budgetClass,
         responseCharacters: result.responseCharacters,
+        responseBytes: result.responseBytes,
         budgetCharacters: ORDINARY_QUERY_RESPONSE_BUDGET_CHARACTERS,
+        budgetBytes: ORDINARY_QUERY_RESPONSE_BUDGET_BYTES,
         requiredAction: "request_narrower_query_scope",
         ...(policy.defaultLimit === undefined
           ? {}

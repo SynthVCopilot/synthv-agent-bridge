@@ -159,6 +159,10 @@ test("SAF-008: ignored note deletion fails its postcondition with Undo guidance"
   assertMarker(context, "note-delete-postcondition-failure");
 });
 
+test("SAF-008: note deletion verifies remaining note order", (context) => {
+  assertMarker(context, "note-delete-order-postcondition");
+});
+
 test("CMD-005: rounded identity transform returns alreadySatisfied without Undo", (context) => {
   assertMarker(context, "note-transform-already-satisfied");
 });
@@ -233,6 +237,10 @@ test("Fake Host: aggregate tuning uses one Undo for multiple curves", (context) 
 
 test("AUT-004: aggregate tuning includes Smart Pitch in the same Undo", (context) => {
   assertMarker(context, "aggregate-tuning-smart-pitch");
+});
+
+test("CMD-001: aggregate tuning uses the authoritative command-stage order", (context) => {
+  assertMarker(context, "aggregate-tuning-pipeline-stages");
 });
 
 test("CMD-005: already-satisfied aggregate tuning creates no Undo", (context) => {

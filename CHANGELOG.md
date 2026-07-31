@@ -31,8 +31,10 @@ All notable changes will be documented in this file.
 
 ### Changed
 
-- `set_track_mixer` is the first write migrated through v3 no-op planning,
-  one-Undo mutation, and host readback verification.
+- All live semantic writes are classified by the v3 Command Policy catalog and
+  enter the common Command Dispatcher. High-risk note, clone, aggregate
+  tuning, Automation, Smart Pitch, and dependent-transaction paths add
+  action-specific fresh preflight and postcondition verification.
 - A focused `get_track_mixer` write-intent read now carries a private Track
   guard into a directly reusable `contextId`, avoiding a detour through
   `list_tracks`.
@@ -58,9 +60,11 @@ All notable changes will be documented in this file.
 
 ### Known alpha limits
 
-- Most detailed actions still run through private migration adapters behind the
-  v3 Facade.
-- Real SynthV working-copy acceptance remains required before stable `0.2.0`.
+- The bounded Snapshot cache is intentionally not active; every project Query
+  reaches SynthV because current measurements do not justify stale-read risk.
+- Representative SynthV 2.2.1 standalone working-copy acceptance is recorded,
+  but stable `0.2.0` still requires the release gates outside the Phase 4-6
+  implementation plan.
 
 ## Unreleased
 

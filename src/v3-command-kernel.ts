@@ -2,7 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 
 import { toPublicError, type PublicError } from "./errors.js";
-import { V3_PERFORMANCE_BUDGETS } from "./v3-performance.js";
+import {
+  V3_PERFORMANCE_BUDGETS,
+  serializedUtf8ByteCount,
+} from "./v3-performance.js";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -215,12 +218,19 @@ export function traceDiagnostics(
     options.level === "support"
       ? V3_PERFORMANCE_BUDGETS.supportTraceCharacters
       : V3_PERFORMANCE_BUDGETS.debugTraceCharacters;
+  const byteBudget =
+    options.level === "support"
+      ? V3_PERFORMANCE_BUDGETS.supportTraceBytes
+      : V3_PERFORMANCE_BUDGETS.debugTraceBytes;
+  const exceedsBudget = (value: JsonRecord): boolean =>
+    JSON.stringify(value).length > budget ||
+    serializedUtf8ByteCount(value) > byteBudget;
   let result: JsonRecord = {
     level: options.level,
     traceCount: traces.length,
     traces,
   };
-  while (traces.length > 1 && JSON.stringify(result).length > budget) {
+  while (traces.length > 1 && exceedsBudget(result)) {
     traces = traces.slice(1);
     result = {
       level: options.level,
@@ -229,7 +239,7 @@ export function traceDiagnostics(
       traces,
     };
   }
-  if (JSON.stringify(result).length > budget) {
+  if (exceedsBudget(result)) {
     result = {
       level: options.level,
       traceCount: 0,
@@ -327,7 +337,9 @@ export function commandOutcome(
   }
   if (
     JSON.stringify(projected).length >
-    V3_PERFORMANCE_BUDGETS.commandAcknowledgementCharacters
+      V3_PERFORMANCE_BUDGETS.commandAcknowledgementCharacters ||
+    serializedUtf8ByteCount(projected) >
+      V3_PERFORMANCE_BUDGETS.commandAcknowledgementBytes
   ) {
     projected.warnings = [
       "Additional warnings were omitted to satisfy the public response budget.",
@@ -420,14 +432,35 @@ export function failedOutcome(
   };
   if (
     JSON.stringify(result).length >
-    V3_PERFORMANCE_BUDGETS.publicErrorCharacters
+      V3_PERFORMANCE_BUDGETS.publicErrorCharacters ||
+    serializedUtf8ByteCount(result) >
+      V3_PERFORMANCE_BUDGETS.publicErrorBytes
   ) {
     result.error = {
       code: publicError.code,
-      message: publicError.message,
+      message: "Request failed; details were omitted to satisfy the public response budget.",
       details: {
         redacted: true,
         reason: "public_error_size_budget",
+      },
+    };
+  }
+  if (
+    JSON.stringify(result).length >
+      V3_PERFORMANCE_BUDGETS.publicErrorCharacters ||
+    serializedUtf8ByteCount(result) >
+      V3_PERFORMANCE_BUDGETS.publicErrorBytes
+  ) {
+    return {
+      outcome: "failed",
+      traceId: result.traceId,
+      phase,
+      wrote: result.wrote,
+      undoRequired: result.undoRequired,
+      retry: result.retry,
+      error: {
+        code: publicError.code,
+        message: "Request failed within the bounded public error envelope.",
       },
     };
   }

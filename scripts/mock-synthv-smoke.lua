@@ -176,6 +176,7 @@ end
 
 noteIgnorePitch = false
 noteRemoveNoop = false
+noteRemoveReordersRemaining = false
 pitchControlIgnorePitch = false
 pitchControlAddNoop = false
 pitchControlRemoveNoop = false
@@ -400,7 +401,12 @@ local function makeGroup()
         return indexOf(self.notes,n)
     end
     function g:removeNote(i)
-        if not noteRemoveNoop then table.remove(self.notes,i) end
+        if not noteRemoveNoop then
+            table.remove(self.notes,i)
+            if noteRemoveReordersRemaining and #self.notes >= 2 then
+                self.notes[1], self.notes[2] = self.notes[2], self.notes[1]
+            end
+        end
     end
     function g:getNumPitchControls()
         assert(
@@ -2366,6 +2372,14 @@ local aggregateTensionFingerprint=
 local aggregateUndoBefore=project.undo
 local aggregatePitchCountBefore=
     project.tracks[1].refs[1].group:getNumPitchControls()
+local aggregatePitchRead=call(
+    "get_pitch_controls",
+    '{"trackIndex":1,"groupIndex":1,"offset":0,"limit":1}'
+)
+local aggregatePitchFingerprint=
+    extractJsonString(aggregatePitchRead,"fingerprint")
+local aggregatePitchValue=
+    project.tracks[1].refs[1].group:getPitchControl(1):getPitch()
 local aggregateResult=call(
     "apply_group_tuning",
     '{"trackIndex":1,"groupIndex":1,"summary":"Aggregate success",'..
@@ -2379,13 +2393,27 @@ local aggregateResult=call(
             '{"parameter":"tension","expectedFingerprint":"'..
                 escape(aggregateTensionFingerprint)..'",'..
                 '"clearMode":"all","points":[{"position":0,"value":0.1}]}'..
-        '],"pitchControls":{"add":['..
+        '],"pitchControls":{"edits":[{"pitchControlIndex":1,'..
+            '"fingerprint":"'..escape(aggregatePitchFingerprint)..'",'..
+            '"changes":{"pitch":'..aggregatePitchValue..'}}],"add":['..
             '{"kind":"point","position":1058400000,"pitch":0.2}'..
         ']}}'
 )
 assert(project.undo==aggregateUndoBefore+1,"aggregate tuning must create exactly one undo record")
 assert(aggregateResult:find('"automationChangedCount":2',1,true),"aggregate tuning did not apply both curves")
 assert(aggregateResult:find('"pitchControlChangedCount":1',1,true),"aggregate tuning omitted Smart Pitch")
+assert(aggregateResult:find('"changedCount":4',1,true),"aggregate tuning counted an already-satisfied Smart Pitch edit")
+assert(
+    assert(aggregateResult:find('"stage":"freshRead"',1,true))
+        < assert(aggregateResult:find('"stage":"guarded"',1,true))
+        and assert(aggregateResult:find('"stage":"guarded"',1,true))
+            < assert(aggregateResult:find('"stage":"preflighted"',1,true))
+        and assert(aggregateResult:find('"stage":"preflighted"',1,true))
+            < assert(aggregateResult:find('"stage":"effectPlanned"',1,true))
+        and assert(aggregateResult:find('"stage":"effectPlanned"',1,true))
+            < assert(aggregateResult:find('"stage":"undoOpened"',1,true)),
+    "aggregate tuning did not use the authoritative command-stage order"
+)
 assert(
     project.tracks[1].refs[1].group:getNumPitchControls()
         == aggregatePitchCountBefore+1,
@@ -2393,6 +2421,7 @@ assert(
 )
 print("CASE:aggregate-tuning-single-undo")
 print("CASE:aggregate-tuning-smart-pitch")
+print("CASE:aggregate-tuning-pipeline-stages")
 end
 
 do
@@ -2506,6 +2535,50 @@ failureReference.voice=failureVoiceBefore
 failureAutomation.points=failureAutomationBefore
 end
 
+do
+local orderGroup=project.tracks[1].refs[1].group
+local orderFixture=callWrite(
+    "add_notes",
+    '{"trackIndex":1,"groupIndex":1,"grouping":"target","notes":['..
+        '{"onset":2116800000,"duration":352800000,"pitch":67,"lyrics":"order"}]}'
+)
+local orderNotes=call(
+    "get_track_notes",
+    '{"trackIndex":1,"groupIndex":1,"offset":0,"limit":100}'
+)
+local orderFingerprints={}
+for value in orderNotes:gmatch('"fingerprint":"([^"]+)"') do
+    if value:find("|",1,true) then
+        orderFingerprints[#orderFingerprints+1]=value
+    end
+end
+assert(#orderFingerprints>=3,"order-verification fixture needs three notes")
+local savedOrderNotes={}
+for index,note in ipairs(orderGroup.notes) do
+    savedOrderNotes[index]=note
+end
+local orderUndoBefore=project.undo
+noteRemoveReordersRemaining=true
+local orderFailure=callExpectError(
+    "delete_notes",
+    '{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":2,'..
+        '"fingerprint":"'..escape(orderFingerprints[2])..'"}]}',
+    "HOST_POSTCONDITION_FAILED"
+)
+noteRemoveReordersRemaining=false
+assert(
+    project.undo==orderUndoBefore+1,
+    "reordered delete did not retain one Undo boundary"
+)
+assert(
+    orderFailure:find('"undoRequired":true',1,true),
+    "reordered delete did not require one Undo"
+)
+orderGroup.notes=savedOrderNotes
+for _,note in ipairs(orderGroup.notes) do note.parent=orderGroup end
+print("CASE:note-delete-order-postcondition")
+end
+
 local finalNotes=call("get_track_notes",'{"trackIndex":1,"offset":0,"limit":100}')
 local finalFingerprint=extractJsonString(finalNotes,"fingerprint")
 do
@@ -2597,5 +2670,5 @@ do
 end
 end
 
-assert(project.undo==80,"expected 80 undo records, got "..project.undo)
+assert(project.undo==82,"expected 82 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

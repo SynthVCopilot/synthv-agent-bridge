@@ -277,9 +277,14 @@ test("same-Group tuning is one prevalidated Lua undo record", async () => {
     handlerStart,
   );
   const handler = bridgeSource.slice(handlerStart, handlerEnd);
+  const pipelineStart = handler.indexOf("return executeCommandPipeline");
   assert.ok(handler.indexOf("prepareGroupVoiceUpdate") >= 0);
   assert.ok(handler.indexOf("prepareNoteChanges") >= 0);
   assert.ok(handler.indexOf("definition.range") >= 0);
+  assert.ok(pipelineStart >= 0);
+  assert.doesNotMatch(handler.slice(0, pipelineStart), /resolveGroup\(payload\)/);
+  assert.match(handler, /guard = function\(state\)/);
+  assert.match(handler, /preflight = function\(state\)\s+return preparePlan\(state\)/);
   assert.match(handler, /executeCommandPipeline/);
   assert.match(handler, /snapshotPitchControlContent/);
   assert.doesNotMatch(handler, /createUndoRecord\(project\)/);
@@ -308,7 +313,10 @@ test("deterministic note transforms stay guarded and use one edit undo boundary"
   assert.ok(handlerStart >= 0);
   assert.match(handler, /validateFingerprint/);
   assert.match(handler, /getBlickFromSeconds/);
-  assert.match(handler, /handlers\.edit_notes/);
+  assert.match(handler, /executeCommandPipeline/);
+  assert.match(handler, /guard = function\(state\)/);
+  assert.match(handler, /preflight = function\(state\)/);
+  assert.doesNotMatch(handler, /handlers\.edit_notes/);
   assert.match(handler, /never chooses musical intent or target notes/);
   assert.doesNotMatch(handler, /createUndoRecord\(project\)/);
 

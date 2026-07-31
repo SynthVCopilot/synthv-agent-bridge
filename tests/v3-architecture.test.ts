@@ -209,6 +209,31 @@ test("v3 diagnostics are explicit, bounded, and redact non-telemetry metadata", 
   assert.doesNotMatch(debugText, /private project lyrics|private-fingerprint/u);
   assert.ok(supportText.length <= 8_192);
   assert.ok(debugText.length <= 16_384);
+  assert.ok(Buffer.byteLength(supportText, "utf8") <= 8_192);
+  assert.ok(Buffer.byteLength(debugText, "utf8") <= 16_384);
+});
+
+test("v3 diagnostics enforce UTF-8 and JSON-escaped byte budgets", async () => {
+  const traceIds: string[] = [];
+  for (let traceIndex = 0; traceIndex < 20; traceIndex += 1) {
+    await runWithTrace(async () => {
+      traceIds.push(currentTraceId() ?? "");
+      for (let stageIndex = 0; stageIndex < 64; stageIndex += 1) {
+        traceStage("queryProjected", {
+          action: "\u0000".repeat(100),
+          responseBytes: stageIndex,
+        });
+      }
+    });
+  }
+  const supportText = JSON.stringify(
+    traceDiagnostics({ level: "support", limit: 20 }),
+  );
+  const debugText = JSON.stringify(
+    traceDiagnostics({ level: "debug", limit: 20 }),
+  );
+  assert.ok(Buffer.byteLength(supportText, "utf8") <= 8_192);
+  assert.ok(Buffer.byteLength(debugText, "utf8") <= 16_384);
 });
 
 test("v3 snapshot cache is session/reference/projection scoped and disposable", () => {

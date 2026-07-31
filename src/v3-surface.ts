@@ -1621,6 +1621,7 @@ export function registerV3InternalAdapters(
           action: input.action,
           durationMs: Date.now() - projectionStartedAtMs,
           responseCharacters: projected.responseCharacters,
+          responseBytes: projected.responseBytes,
           budgetExceeded: projected.budgetExceeded,
           budgetClass: projected.budgetClass,
           projectionStrategy: projected.strategy,

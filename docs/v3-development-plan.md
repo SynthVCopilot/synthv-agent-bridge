@@ -1,12 +1,13 @@
 # v3 Incremental Development Plan
 
-Status: active; Phases 0-1 complete, Phases 2-4 have alpha foundations
+Status: implementation Phases 0-8 complete; final alpha release gate active
 
 Date: 2026-07-30
 
-The public v2 surface and protocol have been replaced by v3. Existing proven
-action handlers remain private migration adapters while internal slices move
-behind the v3 Query Projector and Command Kernel.
+The public v2 surface and protocol have been replaced by v3. All live semantic
+writes are classified by the v3 Command Policy catalog and enter the common
+Command Dispatcher. Internal transport adapters use `v3_internal_*` names and
+cannot be confused with public or legacy MCP tools.
 
 ## Global migration rules
 
@@ -54,7 +55,7 @@ Exit criteria:
 - all accident regressions execute as behavior tests;
 - the complete automated repository check passes.
 
-## Phase 2: correlation, build identity, and command-stage telemetry — implementation complete, real-host gate pending
+## Phase 2: correlation, build identity, and command-stage telemetry — implemented
 
 Deliver:
 
@@ -72,8 +73,8 @@ Implemented alpha slice:
 - a strict optional protocol telemetry block containing only numeric Lua stage
   timings;
 - exact fresh-read, Guard, preflight, Undo, mutation, and verification timing
-  for the migrated mixer command, with common coarse lifecycle timing for
-  remaining legacy-adapter commands;
+  for migrated commands, with common coarse lifecycle timing when an official
+  host API cannot expose a finer stage;
 - explicit `sv_status(operation="diagnostics")` support/debug projections,
   bounded to 8 KB/16 KB and absent from ordinary status responses.
 - real SynthV Studio 2 Pro 2.2.1 standalone confirmation of the installed
@@ -81,7 +82,7 @@ Implemented alpha slice:
   tool-side p95 and 77 ms Bridge-internal p95, within the ordinary 300 ms
   operation budget.
 
-Still required before closing the phase:
+Stable-release performance evidence still required:
 
 - a controlled tracing-on/tracing-off comparison against the 5% p95 overhead
   target. The current sample measures the instrumented path, not tracing's
@@ -287,7 +288,8 @@ Final Phase 3 real-host gate:
 
 Exit criteria:
 
-- ordinary default reads are measured and fail closed above 20,000 characters;
+- ordinary default reads are measured and fail closed above 20,000 characters
+  or UTF-8 bytes;
 - explicit pages/ranges retain coverage metadata and Dense reconstruction is
   lossless;
 - no normal error contains a complete fingerprint or rejected Query payload;
@@ -300,7 +302,7 @@ Rollback:
 
 - route the affected action back to the existing projector.
 
-## Phase 4: common command lifecycle — first slice implemented; mixer real-host gate complete
+## Phase 4: common command lifecycle — complete
 
 Deliver:
 
@@ -309,7 +311,7 @@ Deliver:
 - affected-count enforcement;
 - consistent `undoRequired` reporting.
 
-Initial project-write slice:
+Initial project-write slice delivered:
 
 - choose a bounded, already well-tested reference-local or mixer write;
 - do not begin with track cloning or a multi-curve transaction.
@@ -354,7 +356,7 @@ Rollback:
 
 - restore that action's previous handler; the public schema remains unchanged.
 
-## Phase 5: aggregate ownership and safe clone slices
+## Phase 5: aggregate ownership and safe clone slices — complete
 
 Deliver:
 
@@ -426,6 +428,19 @@ Deliver:
 - one Undo record and one independent postcondition read;
 - exact Automation boundary verification.
 
+Implemented:
+
+- guarded note edit/delete and `transform_notes` use fresh typed Contexts,
+  shared-ownership preflight, one lazy Undo boundary, and host readback;
+- `apply_group_tuning` plans Voice/Vocal Modes, note/phoneme edits,
+  Automation, and Smart Pitch as one logical command;
+- Automation removal verifies the intended closed interval point by point;
+- Smart Pitch CRUD and aggregate tuning validate current point/curve
+  fingerprints and verify the resulting object counts and values;
+- independent transaction steps are fully preflighted before Undo, while
+  forward `$result` steps resolve just in time and report exactly one recovery
+  Undo after any earlier mutation.
+
 Exit criteria:
 
 - multi-curve same-Group tuning no longer requires separate logical commands;
@@ -460,9 +475,10 @@ Restrictions:
 
 Exit criteria:
 
-- the six-tool catalog is below 6 KB;
-- the representative 64-note Query is below 20 KB;
-- command acknowledgements and public errors remain below 2 KB and 4 KB;
+- the six-tool catalog is below 6,000 characters and UTF-8 bytes;
+- the representative 64-note Query is below 20,000 characters and UTF-8 bytes;
+- command acknowledgements and public errors remain below 2,048/4,096
+  characters and UTF-8 bytes;
 - raw fingerprints remain absent from normal results;
 - existing real-host p95 remains below the ordinary 300 ms target;
 - cache activation occurs only if measured benefit justifies stale-read and
@@ -478,23 +494,28 @@ Rollback:
 
 - bypass and clear the snapshot proxy; authoritative behavior remains intact.
 
-## Phase 8: migrate remaining actions and remove v2 adapters
+## Phase 8: migrate remaining actions and remove v2 adapters — complete
 
-Deliver:
+Delivered:
 
 - action-by-action migration inventory;
 - old/new parity tests;
 - removal of duplicated per-handler lifecycle code;
 - updated architecture.md describing implemented rather than planned behavior.
 
-Migration priority:
+Completed migration inventory:
 
 1. destructive note and Smart Pitch writes;
 2. Automation and same-Group tuning;
 3. Group/reference/library mutations;
-4. track and time-axis mutations;
-5. transactions;
-6. UI actions where the common trace adds value.
+4. Track and time-axis mutations;
+5. independent and dependent transactions;
+6. Sidebar Apply through the same Command Dispatcher.
+
+All 38 live semantic writes have a machine-checked `V3CommandPolicy`. The six
+public tools are the only registered MCP surface; the old eight-tool names are
+neither public tools nor internal adapter names. Protocol v1 and v2 requests
+are rejected with `PROTOCOL_MISMATCH`.
 
 Exit criteria:
 
@@ -503,7 +524,7 @@ Exit criteria:
 - existing action catalog remains complete;
 - current and v3 documentation no longer disagree.
 
-## Phase 9: stable 0.2.0 release gate and transport decision
+## Phase 9: final alpha release gate and future stable decision — active
 
 Collect:
 
