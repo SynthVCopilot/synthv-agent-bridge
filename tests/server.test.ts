@@ -267,15 +267,9 @@ test("same-Group tuning is one prevalidated Lua undo record", async () => {
   assert.ok(handler.indexOf("prepareGroupVoiceUpdate") >= 0);
   assert.ok(handler.indexOf("prepareNoteChanges") >= 0);
   assert.ok(handler.indexOf("definition.range") >= 0);
-  assert.ok(
-    handler.indexOf("createUndoRecord(project)") >
-      handler.indexOf("definition.range"),
-  );
-  assert.equal(
-    handler.match(/createUndoRecord\(project\)/gu)?.length,
-    1,
-  );
-  assert.match(handler, /raiseUndoRequiredExecutionError/);
+  assert.match(handler, /executeCommandPipeline/);
+  assert.match(handler, /snapshotPitchControlContent/);
+  assert.doesNotMatch(handler, /createUndoRecord\(project\)/);
 });
 
 test("deterministic note transforms stay guarded and use one edit undo boundary", async () => {

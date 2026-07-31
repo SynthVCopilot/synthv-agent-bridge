@@ -199,6 +199,18 @@ test("Fake Host: aggregate tuning uses one Undo for multiple curves", (context) 
   assertMarker(context, "aggregate-tuning-single-undo");
 });
 
+test("AUT-004: aggregate tuning includes Smart Pitch in the same Undo", (context) => {
+  assertMarker(context, "aggregate-tuning-smart-pitch");
+});
+
+test("CMD-005: already-satisfied aggregate tuning creates no Undo", (context) => {
+  assertMarker(context, "aggregate-tuning-already-satisfied");
+});
+
+test("CMD-006: aggregate note postcondition failure requires one Undo", (context) => {
+  assertMarker(context, "aggregate-tuning-postcondition-failure");
+});
+
 test("Fake Host: dependent partial failure reports one Undo recovery", (context) => {
   assertMarker(context, "dependent-partial-write-undo");
 });

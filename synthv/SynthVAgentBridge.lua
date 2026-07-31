@@ -9227,6 +9227,83 @@ function handlers.clear_automation(payload)
     return serialized
 end
 
+runtimeState.expectedAutomationPoints = function(
+    beforePoints,
+    clearMode,
+    rangeBegin,
+    rangeEnd,
+    prepared
+)
+    local values = {}
+    for index = 1, #beforePoints do
+        local point = beforePoints[index]
+        local keep = clearMode ~= "all"
+            and not (
+                clearMode == "range"
+                and point.position >= rangeBegin
+                and point.position <= rangeEnd
+            )
+        if keep then values[point.position] = point.value end
+    end
+    for index = 1, #prepared do
+        values[prepared[index].position] = prepared[index].value
+    end
+    local positions = {}
+    for position, _value in pairs(values) do
+        positions[#positions + 1] = position
+    end
+    table.sort(positions)
+    local result = json.array()
+    for index = 1, #positions do
+        result[#result + 1] = {
+            position = positions[index],
+            value = values[positions[index]]
+        }
+    end
+    return result
+end
+
+runtimeState.snapshotPitchControlContent = function(group)
+    local result = {}
+    for controlIndex = 1, group:getNumPitchControls() do
+        local serialized = serializePitchControl(
+            group,
+            group:getPitchControl(controlIndex),
+            controlIndex
+        )
+        result[#result + 1] = json.encode({
+            kind = serialized.kind,
+            position = serialized.position,
+            pitch = serialized.pitch,
+            points = serialized.points or JSON_NULL
+        })
+    end
+    table.sort(result)
+    return result
+end
+
+runtimeState.groupVoiceChecksSatisfied = function(
+    voice,
+    checks,
+    expectedVocalModes,
+    allowAdditionalVocalModes
+)
+    local ok = pcall(function()
+        verifyGroupVoiceChecks(
+            voice,
+            checks,
+            "HOST_POSTCONDITION_FAILED"
+        )
+        verifyVocalModeSnapshot(
+            voice,
+            expectedVocalModes,
+            "HOST_POSTCONDITION_FAILED",
+            allowAdditionalVocalModes
+        )
+    end)
+    return ok
+end
+
 function handlers.apply_group_tuning(payload)
     payload = requireObject(payload, "payload")
     local project, _track, trackIndex, reference, group, groupIndex =
@@ -9243,6 +9320,7 @@ function handlers.apply_group_tuning(payload)
     local voiceChecks = nil
     local expectedVocalModes = nil
     local allowAdditionalVocalModes = false
+    local voiceEffective = false
     if isProvided(payload.voice) then
         voicePayload = requireObject(payload.voice, "voice")
         validateReferenceFingerprint(
@@ -9257,6 +9335,15 @@ function handlers.apply_group_tuning(payload)
         )
         voiceUpdate, voiceChecks, expectedVocalModes, allowAdditionalVocalModes =
             prepareGroupVoiceUpdate(reference, voicePayload)
+        local currentVoice = safeCall(function()
+            return reference:getVoice()
+        end, nil)
+        voiceEffective = not runtimeState.groupVoiceChecksSatisfied(
+            currentVoice,
+            voiceChecks,
+            expectedVocalModes,
+            allowAdditionalVocalModes
+        )
     elseif isProvided(payload.referenceFingerprint) then
         raiseBridgeError(
             "INVALID_ARGUMENT",
@@ -9265,6 +9352,8 @@ function handlers.apply_group_tuning(payload)
     end
 
     local preparedNotes = {}
+    local expectedNoteContent = runtimeState.snapshotNoteContent(group)
+    local effectiveNoteCount = 0
     if isProvided(payload.noteEdits) then
         local noteEdits = requireArray(payload.noteEdits, "noteEdits", 1, 512)
         local seenNotes = {}
@@ -9316,15 +9405,56 @@ function handlers.apply_group_tuning(payload)
                     path .. " must change note or phoneme data"
                 )
             end
+            local beforeContent =
+                runtimeState.makeNoteContentFingerprint(
+                    group:getUUID(),
+                    note
+                )
+            local expectedNote = note:clone()
+            if noteChanges ~= nil then
+                applyPreparedNoteChanges(
+                    expectedNote,
+                    noteChanges,
+                    path .. ".changes"
+                )
+            end
+            if phonemeChanges ~= nil then
+                applyPreparedNoteChanges(
+                    expectedNote,
+                    phonemeChanges,
+                    path .. ".phonemeChanges"
+                )
+            end
+            local expectedAfter =
+                runtimeState.makeNoteContentFingerprint(
+                    group:getUUID(),
+                    expectedNote
+                )
+            local effective = beforeContent ~= expectedAfter
+            if effective then
+                effectiveNoteCount = effectiveNoteCount + 1
+                for contentIndex = 1, #expectedNoteContent do
+                    if expectedNoteContent[contentIndex]
+                        == beforeContent then
+                        expectedNoteContent[contentIndex] =
+                            expectedAfter
+                        break
+                    end
+                end
+            end
             preparedNotes[#preparedNotes + 1] = {
                 note = note,
+                noteIndex = noteIndex,
                 noteChanges = noteChanges,
                 notePath = path .. ".changes",
                 phonemeChanges = phonemeChanges,
-                phonemePath = path .. ".phonemeChanges"
+                phonemePath = path .. ".phonemeChanges",
+                effective = effective,
+                expectedAfter = expectedAfter
             }
         end
     end
+    table.sort(expectedNoteContent)
 
     local function applyPreparedAutomation(target, update)
         if update.clearMode == "all" then
@@ -9345,6 +9475,7 @@ function handlers.apply_group_tuning(payload)
     end
 
     local preparedAutomations = {}
+    local effectiveAutomationCount = 0
     if isProvided(payload.automations) then
         local automations = requireArray(payload.automations, "automations", 1, 32)
         local seenParameters = {}
@@ -9444,144 +9575,465 @@ function handlers.apply_group_tuning(payload)
                 rangeEnd = rangeEnd,
                 points = points
             }
+            prepared.expectedPoints =
+                runtimeState.expectedAutomationPoints(
+                    before.points,
+                    clearMode,
+                    rangeBegin,
+                    rangeEnd,
+                    points
+                )
+            prepared.effective =
+                json.encode(before.points)
+                ~= json.encode(prepared.expectedPoints)
+            if prepared.effective then
+                effectiveAutomationCount =
+                    effectiveAutomationCount + 1
+            end
             preparedAutomations[#preparedAutomations + 1] = prepared
         end
     end
 
+    local preparedPitchControls = nil
+    if isProvided(payload.pitchControls) then
+        local pitchInput =
+            requireObject(payload.pitchControls, "pitchControls")
+        for key, _value in pairs(pitchInput) do
+            if key ~= "add" and key ~= "edits" and key ~= "deletes" then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "pitchControls contains an unsupported field",
+                    { field = key }
+                )
+            end
+        end
+
+        local candidateOk, candidateGroupOrError = pcall(function()
+            return group:clone()
+        end)
+        if not candidateOk then
+            raiseBridgeError(
+                "UNSUPPORTED_HOST_CAPABILITY",
+                "SynthV could not clone the Group for Smart Pitch preflight",
+                {
+                    capability = "NoteGroup.clone",
+                    cause = tostring(candidateGroupOrError)
+                }
+            )
+        end
+        local candidateGroup = candidateGroupOrError
+        local beforeContent =
+            runtimeState.snapshotPitchControlContent(group)
+        local edits = {}
+        local deletes = {}
+        local adds = {}
+        local seen = {}
+        local operationCount = 0
+
+        if isProvided(pitchInput.edits) then
+            local inputs = requireArray(
+                pitchInput.edits,
+                "pitchControls.edits",
+                1,
+                512
+            )
+            for index = 1, #inputs do
+                local path = "pitchControls.edits[" .. index .. "]"
+                local edit = requireObject(inputs[index], path)
+                local controlIndex = requireInteger(
+                    edit.pitchControlIndex,
+                    path .. ".pitchControlIndex",
+                    1,
+                    group:getNumPitchControls()
+                )
+                if seen[controlIndex] then
+                    raiseBridgeError(
+                        "INVALID_ARGUMENT",
+                        "A Smart Pitch control appears in more than one operation",
+                        { pitchControlIndex = controlIndex }
+                    )
+                end
+                seen[controlIndex] = true
+                local control = group:getPitchControl(controlIndex)
+                local serialized =
+                    serializePitchControl(group, control, controlIndex)
+                validateExpectedFingerprint(
+                    serialized.fingerprint,
+                    requireString(
+                        edit.fingerprint,
+                        path .. ".fingerprint",
+                        false
+                    ),
+                    "STALE_PITCH_CONTROL",
+                    "The pitch control changed after it was read"
+                )
+                local apply = applyPitchControlChanges(
+                    control,
+                    edit.changes,
+                    serialized.kind,
+                    path .. ".changes"
+                )
+                local candidateControl =
+                    candidateGroup:getPitchControl(controlIndex)
+                local candidateApply = applyPitchControlChanges(
+                    candidateControl,
+                    edit.changes,
+                    serialized.kind,
+                    path .. ".changes"
+                )
+                candidateApply(candidateControl)
+                edits[#edits + 1] = {
+                    control = control,
+                    apply = apply
+                }
+                operationCount = operationCount + 1
+            end
+        end
+
+        if isProvided(pitchInput.deletes) then
+            local inputs = requireArray(
+                pitchInput.deletes,
+                "pitchControls.deletes",
+                1,
+                512
+            )
+            for index = 1, #inputs do
+                local path =
+                    "pitchControls.deletes[" .. index .. "]"
+                local target = requireObject(inputs[index], path)
+                local controlIndex = requireInteger(
+                    target.pitchControlIndex,
+                    path .. ".pitchControlIndex",
+                    1,
+                    group:getNumPitchControls()
+                )
+                if seen[controlIndex] then
+                    raiseBridgeError(
+                        "INVALID_ARGUMENT",
+                        "A Smart Pitch control appears in more than one operation",
+                        { pitchControlIndex = controlIndex }
+                    )
+                end
+                seen[controlIndex] = true
+                local serialized = serializePitchControl(
+                    group,
+                    group:getPitchControl(controlIndex),
+                    controlIndex
+                )
+                validateExpectedFingerprint(
+                    serialized.fingerprint,
+                    requireString(
+                        target.fingerprint,
+                        path .. ".fingerprint",
+                        false
+                    ),
+                    "STALE_PITCH_CONTROL",
+                    "The pitch control changed after it was read"
+                )
+                deletes[#deletes + 1] = {
+                    pitchControlIndex = controlIndex
+                }
+                operationCount = operationCount + 1
+            end
+            table.sort(deletes, function(left, right)
+                return left.pitchControlIndex
+                    > right.pitchControlIndex
+            end)
+            for index = 1, #deletes do
+                candidateGroup:removePitchControl(
+                    deletes[index].pitchControlIndex
+                )
+            end
+        end
+
+        if isProvided(pitchInput.add) then
+            local inputs = requireArray(
+                pitchInput.add,
+                "pitchControls.add",
+                1,
+                512
+            )
+            for index = 1, #inputs do
+                local path = "pitchControls.add[" .. index .. "]"
+                local definition =
+                    preparePitchControlInput(inputs[index], path)
+                local actualOk, actualOrError = pcall(function()
+                    return createPitchControl(definition)
+                end)
+                local candidateControlOk, candidateControlOrError =
+                    pcall(function()
+                        return createPitchControl(definition)
+                    end)
+                if not actualOk or not candidateControlOk then
+                    raiseBridgeError(
+                        "INVALID_ARGUMENT",
+                        "SynthV rejected a Smart Pitch definition",
+                        {
+                            index = index,
+                            cause = tostring(
+                                actualOk
+                                    and candidateControlOrError
+                                    or actualOrError
+                            )
+                        }
+                    )
+                end
+                adds[#adds + 1] = actualOrError
+                candidateGroup:addPitchControl(
+                    candidateControlOrError
+                )
+                operationCount = operationCount + 1
+            end
+        end
+
+        if operationCount == 0 then
+            raiseBridgeError(
+                "INVALID_ARGUMENT",
+                "pitchControls must add, edit, or delete at least one control"
+            )
+        end
+        local expectedContent =
+            runtimeState.snapshotPitchControlContent(candidateGroup)
+        preparedPitchControls = {
+            edits = edits,
+            deletes = deletes,
+            adds = adds,
+            operationCount = operationCount,
+            expectedContent = expectedContent,
+            effective = not runtimeState.noteContentSnapshotsEqual(
+                beforeContent,
+                expectedContent
+            )
+        }
+    end
+
     if voiceUpdate == nil
         and #preparedNotes == 0
-        and #preparedAutomations == 0 then
+        and #preparedAutomations == 0
+        and preparedPitchControls == nil then
         raiseBridgeError(
             "INVALID_ARGUMENT",
-            "At least one voice, note, phoneme, or automation change is required"
+            "At least one voice, note, phoneme, automation, or Smart Pitch change is required"
         )
     end
 
-    createUndoRecord(project)
+    local pitchControlChangedCount =
+        preparedPitchControls ~= nil
+        and preparedPitchControls.effective
+        and preparedPitchControls.operationCount
+        or 0
+    local changedCount =
+        (voiceEffective and 1 or 0)
+        + effectiveNoteCount
+        + effectiveAutomationCount
+        + pitchControlChangedCount
 
-    local executed, resultOrError = xpcall(function()
-    if voiceUpdate ~= nil then
-        local applied, applyError = pcall(function()
-            reference:setVoice(voiceUpdate)
-        end)
-        if not applied then
-            raiseBridgeError(
-                "HOST_WRITE_FAILED",
-                "SynthV rejected a prevalidated group voice update",
-                { cause = tostring(applyError) }
-            )
+    return executeCommandPipeline({
+        action = "apply_group_tuning",
+        freshRead = function()
+            local currentProject, _currentTrack, currentTrackIndex,
+                currentReference, currentGroup, currentGroupIndex =
+                resolveGroup(payload)
+            return {
+                project = currentProject,
+                trackIndex = currentTrackIndex,
+                groupIndex = currentGroupIndex,
+                groupUuid = currentGroup:getUUID(),
+                reference = currentReference,
+                group = currentGroup
+            }
+        end,
+        preflight = function(_state)
+            return {
+                changedCount = changedCount
+            }
+        end,
+        alreadySatisfied = function(state, _plan)
+            return {
+                trackIndex = state.trackIndex,
+                groupIndex = state.groupIndex,
+                groupUuid = state.groupUuid,
+                summary = summary,
+                changedCount = 0,
+                voiceChanged = false,
+                noteEditedCount = 0,
+                automationChangedCount = 0,
+                pitchControlChangedCount = 0,
+                undoRecordCount = 0,
+                verified = true
+            }
+        end,
+        mutate = function(_state, _plan)
+            if voiceEffective then
+                local applied, applyError = pcall(function()
+                    reference:setVoice(voiceUpdate)
+                end)
+                if not applied then
+                    raiseBridgeError(
+                        "HOST_WRITE_FAILED",
+                        "SynthV rejected a prevalidated group voice update",
+                        { cause = tostring(applyError) }
+                    )
+                end
+            end
+
+            for index = 1, #preparedNotes do
+                local prepared = preparedNotes[index]
+                if prepared.effective then
+                    if prepared.noteChanges ~= nil then
+                        applyPreparedNoteChanges(
+                            prepared.note,
+                            prepared.noteChanges,
+                            prepared.notePath
+                        )
+                    end
+                    if prepared.phonemeChanges ~= nil then
+                        applyPreparedNoteChanges(
+                            prepared.note,
+                            prepared.phonemeChanges,
+                            prepared.phonemePath
+                        )
+                    end
+                end
+            end
+
+            for index = 1, #preparedAutomations do
+                local prepared = preparedAutomations[index]
+                if prepared.effective then
+                    applyPreparedAutomation(
+                        prepared.automation,
+                        prepared
+                    )
+                end
+            end
+
+            if preparedPitchControls ~= nil
+                and preparedPitchControls.effective then
+                for index = 1, #preparedPitchControls.edits do
+                    local prepared =
+                        preparedPitchControls.edits[index]
+                    prepared.apply(prepared.control)
+                end
+                for index = 1, #preparedPitchControls.deletes do
+                    group:removePitchControl(
+                        preparedPitchControls.deletes[index]
+                            .pitchControlIndex
+                    )
+                end
+                for index = 1, #preparedPitchControls.adds do
+                    group:addPitchControl(
+                        preparedPitchControls.adds[index]
+                    )
+                end
+            end
+        end,
+        verify = function(_state, _plan)
+            local _currentProject, _currentTrack, currentTrackIndex,
+                currentReference, currentGroup, currentGroupIndex =
+                resolveGroup(payload)
+
+            if voiceUpdate ~= nil then
+                local updatedVoice = safeCall(function()
+                    return currentReference:getVoice()
+                end, nil)
+                verifyGroupVoiceChecks(
+                    updatedVoice,
+                    voiceChecks,
+                    "HOST_POSTCONDITION_FAILED"
+                )
+                verifyVocalModeSnapshot(
+                    updatedVoice,
+                    expectedVocalModes,
+                    "HOST_POSTCONDITION_FAILED",
+                    allowAdditionalVocalModes
+                )
+            end
+
+            local actualNoteContent =
+                runtimeState.snapshotNoteContent(currentGroup)
+            if not runtimeState.noteContentSnapshotsEqual(
+                actualNoteContent,
+                expectedNoteContent
+            ) then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not retain the complete aggregate note result",
+                    {
+                        expectedNoteCount = #expectedNoteContent,
+                        actualNoteCount = #actualNoteContent
+                    }
+                )
+            end
+
+            for index = 1, #preparedAutomations do
+                local prepared = preparedAutomations[index]
+                local currentAutomation, serialized =
+                    serializeAutomation(
+                        currentGroup,
+                        prepared.parameter
+                    )
+                verifyPreparedAutomation(
+                    currentAutomation,
+                    prepared.clearMode,
+                    prepared.rangeBegin,
+                    prepared.rangeEnd,
+                    prepared.points
+                )
+                if json.encode(serialized.points)
+                    ~= json.encode(prepared.expectedPoints) then
+                    raiseBridgeError(
+                        "HOST_POSTCONDITION_FAILED",
+                        "SynthV changed Automation outside the requested aggregate effect",
+                        {
+                            parameter = prepared.parameter,
+                            expectedPointCount =
+                                #prepared.expectedPoints,
+                            actualPointCount =
+                                #serialized.points
+                        }
+                    )
+                end
+            end
+
+            if preparedPitchControls ~= nil then
+                local actualPitchContent =
+                    runtimeState.snapshotPitchControlContent(
+                        currentGroup
+                    )
+                if not runtimeState.noteContentSnapshotsEqual(
+                    actualPitchContent,
+                    preparedPitchControls.expectedContent
+                ) then
+                    raiseBridgeError(
+                        "HOST_POSTCONDITION_FAILED",
+                        "SynthV did not retain the complete Smart Pitch aggregate result",
+                        {
+                            expectedPitchControlCount =
+                                #preparedPitchControls.expectedContent,
+                            actualPitchControlCount =
+                                #actualPitchContent
+                        }
+                    )
+                end
+            end
+
+            return {
+                trackIndex = currentTrackIndex,
+                groupIndex = currentGroupIndex,
+                groupUuid = currentGroup:getUUID(),
+                summary = summary,
+                changedCount = changedCount,
+                voiceChanged = voiceEffective,
+                noteEditedCount = effectiveNoteCount,
+                automationChangedCount =
+                    effectiveAutomationCount,
+                pitchControlChangedCount =
+                    pitchControlChangedCount,
+                undoRecordCount = 1,
+                verified = true
+            }
         end
-        local updatedVoice = safeCall(function()
-            return reference:getVoice()
-        end, nil)
-        verifyGroupVoiceChecks(
-            updatedVoice,
-            voiceChecks,
-            "HOST_POSTCONDITION_FAILED"
-        )
-        verifyVocalModeSnapshot(
-            updatedVoice,
-            expectedVocalModes,
-            "HOST_POSTCONDITION_FAILED",
-            allowAdditionalVocalModes
-        )
-    end
-
-    for index = 1, #preparedNotes do
-        local prepared = preparedNotes[index]
-        if prepared.noteChanges ~= nil then
-            applyPreparedNoteChanges(
-                prepared.note,
-                prepared.noteChanges,
-                prepared.notePath
-            )
-        end
-        if prepared.phonemeChanges ~= nil then
-            applyPreparedNoteChanges(
-                prepared.note,
-                prepared.phonemeChanges,
-                prepared.phonemePath
-            )
-            verifyPhonemePostconditions(
-                prepared.note,
-                prepared.phonemeChanges,
-                prepared.phonemePath,
-                "project_write"
-            )
-        end
-    end
-
-    for index = 1, #preparedAutomations do
-        applyPreparedAutomation(
-            preparedAutomations[index].automation,
-            preparedAutomations[index]
-        )
-        verifyPreparedAutomation(
-            preparedAutomations[index].automation,
-            preparedAutomations[index].clearMode,
-            preparedAutomations[index].rangeBegin,
-            preparedAutomations[index].rangeEnd,
-            preparedAutomations[index].points
-        )
-    end
-
-    local notes = json.array()
-    for index = 1, #preparedNotes do
-        local note = preparedNotes[index].note
-        local noteIndex = note:getIndexInParent()
-        notes[#notes + 1] = {
-            noteIndex = noteIndex,
-            fingerprint =
-                makeNoteFingerprint(group:getUUID(), noteIndex, note)
-        }
-    end
-
-    local automationResults = json.array()
-    for index = 1, #preparedAutomations do
-        local prepared = preparedAutomations[index]
-        local _automation, serialized =
-            serializeAutomation(group, prepared.parameter)
-        automationResults[#automationResults + 1] = {
-            parameter = serialized.parameter,
-            interpolation = serialized.interpolation,
-            fingerprint = serialized.fingerprint,
-            pointCount = serialized.pointCount,
-            addedOrUpdatedCount = #prepared.points,
-            clearMode = prepared.clearMode
-        }
-    end
-
-    local voice = JSON_NULL
-    local referenceFingerprint = JSON_NULL
-    if voiceUpdate ~= nil then
-        voice = serializeGroupVoice(reference, trackIndex, groupIndex)
-        referenceFingerprint = makeReferenceFingerprint(reference)
-    end
-    return {
-        trackIndex = trackIndex,
-        groupIndex = groupIndex,
-        groupUuid = group:getUUID(),
-        summary = summary,
-        changedCount =
-            (voiceUpdate ~= nil and 1 or 0)
-            + #preparedNotes
-            + #preparedAutomations,
-        voiceChanged = voiceUpdate ~= nil,
-        noteEditedCount = #preparedNotes,
-        automationChangedCount = #preparedAutomations,
-        undoRecordCount = 1,
-        referenceFingerprint = referenceFingerprint,
-        voice = voice,
-        notes = notes,
-        automation = automationResults
-    }
-    end, function(errorValue)
-        return errorValue
-    end)
-    if not executed then
-        raiseUndoRequiredExecutionError("apply_group_tuning", resultOrError)
-    end
-    return resultOrError
+    })
 end
 
 function handlers.get_editor_view(payload)

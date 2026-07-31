@@ -2174,6 +2174,7 @@ callWrite(
 )
 
 do
+do
 local aggregateVoiceRead=call("get_group_voice",'{"trackIndex":1,"groupIndex":1}')
 local aggregateVoiceFingerprint=extractJsonString(aggregateVoiceRead,"referenceFingerprint")
 local aggregateLoudnessRead=call(
@@ -2189,6 +2190,8 @@ local aggregateTensionRead=call(
 local aggregateTensionFingerprint=
     extractJsonString(aggregateTensionRead,"fingerprint")
 local aggregateUndoBefore=project.undo
+local aggregatePitchCountBefore=
+    project.tracks[1].refs[1].group:getNumPitchControls()
 local aggregateResult=call(
     "apply_group_tuning",
     '{"trackIndex":1,"groupIndex":1,"summary":"Aggregate success",'..
@@ -2202,11 +2205,83 @@ local aggregateResult=call(
             '{"parameter":"tension","expectedFingerprint":"'..
                 escape(aggregateTensionFingerprint)..'",'..
                 '"clearMode":"all","points":[{"position":0,"value":0.1}]}'..
-        ']}'
+        '],"pitchControls":{"add":['..
+            '{"kind":"point","position":1058400000,"pitch":0.2}'..
+        ']}}'
 )
 assert(project.undo==aggregateUndoBefore+1,"aggregate tuning must create exactly one undo record")
 assert(aggregateResult:find('"automationChangedCount":2',1,true),"aggregate tuning did not apply both curves")
+assert(aggregateResult:find('"pitchControlChangedCount":1',1,true),"aggregate tuning omitted Smart Pitch")
+assert(
+    project.tracks[1].refs[1].group:getNumPitchControls()
+        == aggregatePitchCountBefore+1,
+    "aggregate tuning did not add its Smart Pitch control"
+)
 print("CASE:aggregate-tuning-single-undo")
+print("CASE:aggregate-tuning-smart-pitch")
+end
+
+do
+local satisfiedVoiceRead=call("get_group_voice",'{"trackIndex":1,"groupIndex":1}')
+local satisfiedVoiceFingerprint=extractJsonString(satisfiedVoiceRead,"referenceFingerprint")
+local satisfiedLoudnessRead=call(
+    "get_automation",
+    '{"trackIndex":1,"groupIndex":1,"parameter":"loudness"}'
+)
+local satisfiedLoudnessFingerprint=
+    extractJsonString(satisfiedLoudnessRead,"fingerprint")
+local satisfiedTensionRead=call(
+    "get_automation",
+    '{"trackIndex":1,"groupIndex":1,"parameter":"tension"}'
+)
+local satisfiedTensionFingerprint=
+    extractJsonString(satisfiedTensionRead,"fingerprint")
+local satisfiedUndoBefore=project.undo
+local satisfiedTuning=call(
+    "apply_group_tuning",
+    '{"trackIndex":1,"groupIndex":1,"summary":"Already satisfied",'..
+        '"referenceFingerprint":"'..escape(satisfiedVoiceFingerprint)..'",'..
+        '"voice":{"parameters":{"breathiness":0.1}},'..
+        '"automations":['..
+            '{"parameter":"loudness","expectedFingerprint":"'..
+                escape(satisfiedLoudnessFingerprint)..'",'..
+                '"clearMode":"all","points":[{"position":0,"value":-1}]},'..
+            '{"parameter":"tension","expectedFingerprint":"'..
+                escape(satisfiedTensionFingerprint)..'",'..
+                '"clearMode":"all","points":[{"position":0,"value":0.1}]}'..
+        ']}'
+)
+assert(project.undo==satisfiedUndoBefore,"already-satisfied Group tuning created an Undo")
+assert(satisfiedTuning:find('"changedCount":0',1,true),"already-satisfied Group tuning reported changes")
+assert(satisfiedTuning:find('"undoRecordCount":0',1,true),"already-satisfied Group tuning reported an Undo")
+print("CASE:aggregate-tuning-already-satisfied")
+end
+
+do
+local aggregateNotes=call("get_track_notes",'{"trackIndex":1,"offset":0,"limit":100}')
+local aggregateNoteFingerprint=extractJsonString(aggregateNotes,"fingerprint")
+local aggregateNotePitch=project.tracks[1].refs[1].group.notes[1].pitch
+local aggregateNoteFailureUndoBefore=project.undo
+noteIgnorePitch=true
+local aggregateNoteFailure=callExpectError(
+    "apply_group_tuning",
+    '{"trackIndex":1,"groupIndex":1,"summary":"Ignored note fault",'..
+        '"noteEdits":[{"noteIndex":1,"fingerprint":"'..
+            escape(aggregateNoteFingerprint)..'",'..
+            '"changes":{"pitch":'..(aggregateNotePitch+1)..'}}]}',
+    "HOST_POSTCONDITION_FAILED"
+)
+noteIgnorePitch=false
+assert(
+    project.undo==aggregateNoteFailureUndoBefore+1,
+    "ignored aggregate note edit did not retain one Undo boundary"
+)
+assert(
+    aggregateNoteFailure:find('"undoRequired":true',1,true),
+    "ignored aggregate note edit did not require one Undo"
+)
+print("CASE:aggregate-tuning-postcondition-failure")
+end
 
 local failureReference=project.tracks[1].refs[1]
 local failureVoiceBefore=deepCopy(failureReference.voice)
@@ -2348,5 +2423,5 @@ do
 end
 end
 
-assert(project.undo==76,"expected 76 undo records, got "..project.undo)
+assert(project.undo==77,"expected 77 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

@@ -1800,7 +1800,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Apply SynthV Group Tuning Batch",
       description:
-        "Prevalidate and apply one same-Group tuning pass: Group Voice/Vocal Modes, fingerprint-guarded note and phoneme edits, and multiple fingerprint-guarded automation curves. The Lua host validates the complete batch before creating exactly one SynthV undo record; an unexpected execution failure explicitly requires one SynthV Undo.",
+        "Prevalidate and apply one same-Group tuning pass: Group Voice/Vocal Modes, fingerprint-guarded note and phoneme edits, multiple fingerprint-guarded automation curves, and Smart Pitch controls. The Lua host validates the complete batch before creating exactly one SynthV undo record; an unexpected execution failure explicitly requires one SynthV Undo.",
       inputSchema: {
         ...groupLocatorShape,
         summary: z.string().min(1).max(1000),
@@ -1833,6 +1833,46 @@ export function createServer(config: BridgeConfig): McpServer {
           .array(groupTuningAutomationSchema)
           .min(1)
           .max(32)
+          .optional(),
+        pitchControls: z
+          .object({
+            add: z
+              .array(pitchControlCreateSchema)
+              .min(1)
+              .max(512)
+              .optional(),
+            edits: z
+              .array(
+                z.object({
+                  pitchControlIndex: indexSchema,
+                  fingerprint: fingerprintSchema,
+                  changes: pitchControlChangesSchema,
+                }),
+              )
+              .min(1)
+              .max(512)
+              .optional(),
+            deletes: z
+              .array(
+                z.object({
+                  pitchControlIndex: indexSchema,
+                  fingerprint: fingerprintSchema,
+                }),
+              )
+              .min(1)
+              .max(512)
+              .optional(),
+          })
+          .refine(
+            (value) =>
+              value.add !== undefined ||
+              value.edits !== undefined ||
+              value.deletes !== undefined,
+            {
+              message:
+                "Smart Pitch tuning must add, edit, or delete at least one control.",
+            },
+          )
           .optional(),
       },
       annotations: {

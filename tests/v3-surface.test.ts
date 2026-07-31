@@ -82,7 +82,10 @@ test("v3 context expands one same-Group tuning batch", () => {
     groupUuid: GROUP_UUID,
     referenceFingerprint: "reference",
     noteFingerprints: new Map([[7, "note-7"]]),
-    pitchControlFingerprints: new Map(),
+    pitchControlFingerprints: new Map([
+      [4, "pitch-4"],
+      [5, "pitch-5"],
+    ]),
     automationFingerprints: new Map([
       ["loudness", "loudness-guard"],
       ["tension", "tension-guard"],
@@ -106,6 +109,14 @@ test("v3 context expands one same-Group tuning batch", () => {
         { parameter: "loudness", clearMode: "none", points: [] },
         { parameter: "tension", clearMode: "none", points: [] },
       ],
+      pitchControls: {
+        edits: [
+          { index: 4, changes: { pitch: 0.25 } },
+        ],
+        deletes: [
+          { index: 5 },
+        ],
+      },
     },
     contextId,
     contexts,
@@ -138,6 +149,21 @@ test("v3 context expands one same-Group tuning batch", () => {
       points: [],
     },
   ]);
+  assert.deepEqual(expanded.pitchControls, {
+    edits: [
+      {
+        pitchControlIndex: 4,
+        fingerprint: "pitch-4",
+        changes: { pitch: 0.25 },
+      },
+    ],
+    deletes: [
+      {
+        pitchControlIndex: 5,
+        fingerprint: "pitch-5",
+      },
+    ],
+  });
 });
 
 test("v3 expands every guarded context note for one deterministic transform", () => {

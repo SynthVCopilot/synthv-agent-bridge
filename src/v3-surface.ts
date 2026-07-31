@@ -1067,6 +1067,24 @@ function expandContext(
       }
     }
   }
+  if (action === "apply_group_tuning") {
+    const pitchControls = optionalRecord(
+      result.pitchControls,
+      "pitchControls",
+    );
+    if (pitchControls !== undefined) {
+      for (const field of ["edits", "deletes"] as const) {
+        if (Array.isArray(pitchControls[field])) {
+          expandGuardedArray(
+            pitchControls,
+            field,
+            "pitchControlIndex",
+            context.pitchControlFingerprints,
+          );
+        }
+      }
+    }
+  }
   return result;
 }
 
