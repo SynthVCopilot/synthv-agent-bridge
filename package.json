@@ -27,6 +27,7 @@
     "test": "npm run build && node scripts/run-tests.mjs",
     "check": "npm run typecheck && npm test",
     "benchmark:v3": "npm run build && node scripts/benchmark-v3.mjs",
+    "check:api-coverage": "npm run build && node scripts/check-api-coverage.mjs",
     "start": "node dist/src/cli.js",
     "inspector": "npm run build && npx @modelcontextprotocol/inspector node dist/src/cli.js",
     "install:synthv": "node scripts/install-synthv-bridge.mjs",

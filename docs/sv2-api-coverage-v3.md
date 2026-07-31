@@ -13,6 +13,216 @@ capability still awaiting a supported action or real-host certification.
 This matrix records intended coverage, not a claim that every alpha action has
 completed real SynthV acceptance.
 
+## Machine-checkable inventory
+
+The JSON block below freezes every class and method listed by the official
+index generated on 2025-10-09. Methods are grouped as `semantic`, `internal`,
+or `intentionallyUnexposed`. API omissions are capabilities rather than
+methods, so they are listed separately. The coverage checker joins every
+semantic write to its live `V3CommandPolicy` and rejects missing/duplicate
+methods, missing Actions, aggregate mismatches, blank evidence, or unknown
+real-host status.
+
+<!-- SV2_API_INVENTORY_START -->
+```json
+{
+  "officialBaseline": "https://resource.dreamtonics.com/scripting/index.html (generated 2025-10-09)",
+  "classes": [
+    {
+      "name": "ArrangementSelectionState",
+      "semantic": ["clearAll", "clearGroups", "getSelectedGroups", "hasSelectedContent", "hasSelectedGroups", "hasUnfinishedEdits", "selectGroup", "unselectGroup"],
+      "internal": ["getIndexInParent", "getParent", "isMemoryManaged", "registerClearCallback", "registerSelectionCallback"],
+      "intentionallyUnexposed": []
+    },
+    {
+      "name": "ArrangementView",
+      "semantic": ["getNavigation", "getSelection"],
+      "internal": ["getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": []
+    },
+    {
+      "name": "Automation",
+      "semantic": ["add", "get", "getAllPoints", "getDefinition", "getInterpolationMethod", "getLinear", "getPoints", "getType", "remove", "removeAll", "simplify"],
+      "internal": ["clone", "getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": ["clearScriptData", "getScriptData", "getScriptDataKeys", "hasScriptData", "removeScriptData", "setScriptData"]
+    },
+    {
+      "name": "CoordinateSystem",
+      "semantic": ["getTimePxPerUnit", "getTimeViewRange", "getValuePxPerUnit", "getValueViewRange", "setTimeLeft", "setTimeRight", "setTimeScale", "setValueCenter", "snap", "t2x", "v2y", "x2t", "y2v"],
+      "internal": ["getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": []
+    },
+    {
+      "name": "GroupSelection",
+      "semantic": ["clearGroups", "getSelectedGroups", "hasSelectedGroups", "selectGroup", "unselectGroup"],
+      "internal": [],
+      "intentionallyUnexposed": []
+    },
+    {
+      "name": "MainEditorView",
+      "semantic": ["getCurrentGroup", "getCurrentTrack", "getNavigation", "getSelection"],
+      "internal": ["getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": []
+    },
+    {
+      "name": "NestedObject",
+      "semantic": [],
+      "internal": ["getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": []
+    },
+    {
+      "name": "Note",
+      "semantic": ["getAttributes", "getDetune", "getDuration", "getEnd", "getLanguageOverride", "getLyrics", "getMusicalType", "getOnset", "getPhonemes", "getPitch", "getPitchAutoMode", "getRapAccent", "getRetakes", "setAttributes", "setDetune", "setDuration", "setLanguageOverride", "setLyrics", "setMusicalType", "setOnset", "setPhonemes", "setPitch", "setPitchAutoMode", "setRapAccent", "setTimeRange"],
+      "internal": ["clone", "getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": ["clearScriptData", "getScriptData", "getScriptDataKeys", "hasScriptData", "removeScriptData", "setScriptData"]
+    },
+    {
+      "name": "NoteGroup",
+      "semantic": ["addNote", "addPitchControl", "getName", "getNote", "getNumNotes", "getNumPitchControls", "getParameter", "getPitchControl", "getUUID", "removeNote", "removePitchControl", "setName"],
+      "internal": ["clone", "getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": ["clearScriptData", "getScriptData", "getScriptDataKeys", "hasScriptData", "removeScriptData", "setScriptData"]
+    },
+    {
+      "name": "NoteGroupReference",
+      "semantic": ["getDuration", "getEnd", "getOnset", "getPitchOffset", "getTarget", "getTimeOffset", "getVoice", "isInstrumental", "isMain", "isMuted", "setMuted", "setPitchOffset", "setTarget", "setTimeOffset", "setTimeRange", "setVoice"],
+      "internal": ["clone", "getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": ["clearScriptData", "getScriptData", "getScriptDataKeys", "hasScriptData", "removeScriptData", "setScriptData"]
+    },
+    {
+      "name": "PitchControlCurve",
+      "semantic": ["getPitch", "getPoints", "getPosition", "getValueAt", "setPitch", "setPoints", "setPosition"],
+      "internal": ["clone", "getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": ["clearScriptData", "getScriptData", "getScriptDataKeys", "hasScriptData", "removeScriptData", "setScriptData"]
+    },
+    {
+      "name": "PitchControlPoint",
+      "semantic": ["getPitch", "getPosition", "setPitch", "setPosition"],
+      "internal": ["clone", "getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": ["clearScriptData", "getScriptData", "getScriptDataKeys", "hasScriptData", "removeScriptData", "setScriptData"]
+    },
+    {
+      "name": "PlaybackControl",
+      "semantic": ["getPlayhead", "getStatus", "loop", "pause", "play", "seek", "stop"],
+      "internal": ["getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": []
+    },
+    {
+      "name": "Project",
+      "semantic": ["addNoteGroup", "addTrack", "getDuration", "getFileName", "getNoteGroup", "getNumNoteGroupsInLibrary", "getNumTracks", "getTimeAxis", "getTrack", "removeNoteGroup", "removeTrack"],
+      "internal": ["getIndexInParent", "getParent", "isMemoryManaged", "newUndoRecord"],
+      "intentionallyUnexposed": ["clearScriptData", "getScriptData", "getScriptDataKeys", "hasScriptData", "removeScriptData", "setScriptData"]
+    },
+    {
+      "name": "RetakeList",
+      "semantic": ["deleteTake", "generateTake", "getNumTakes", "setActiveTake"],
+      "internal": ["getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": ["clearScriptData", "getScriptData", "getScriptDataKeys", "hasScriptData", "removeScriptData", "setScriptData"]
+    },
+    {
+      "name": "SV",
+      "semantic": ["blackKey", "blick2Quarter", "blick2Seconds", "blickRoundDiv", "blickRoundTo", "freq2Pitch", "getArrangement", "getComputedAttributesForGroup", "getComputedPitchForGroup", "getHostClipboard", "getHostInfo", "getMainEditor", "getPhonemesForGroup", "getPlayback", "getProject", "pitch2freq", "quarter2Blick", "seconds2Blick", "setHostClipboard", "showCustomDialog", "showCustomDialogAsync", "showInputBox", "showInputBoxAsync", "showMessageBox", "showMessageBoxAsync", "showOkCancelBox", "showOkCancelBoxAsync", "showYesNoCancelBox", "showYesNoCancelBoxAsync"],
+      "internal": ["T", "create", "finish", "print", "refreshSidePanel", "setTimeout"],
+      "intentionallyUnexposed": []
+    },
+    {
+      "name": "ScriptableNestedObject",
+      "semantic": [],
+      "internal": ["getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": ["clearScriptData", "getScriptData", "getScriptDataKeys", "hasScriptData", "removeScriptData", "setScriptData"]
+    },
+    {
+      "name": "SelectionStateBase",
+      "semantic": ["clearAll", "hasSelectedContent", "hasUnfinishedEdits"],
+      "internal": ["registerClearCallback", "registerSelectionCallback"],
+      "intentionallyUnexposed": []
+    },
+    {
+      "name": "TimeAxis",
+      "semantic": ["addMeasureMark", "addTempoMark", "getAllMeasureMarks", "getAllTempoMarks", "getBlickFromSeconds", "getMeasureAt", "getMeasureMarkAt", "getMeasureMarkAtBlick", "getSecondsFromBlick", "getTempoMarkAt", "removeMeasureMark", "removeTempoMark"],
+      "internal": ["clone", "getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": ["clearScriptData", "getScriptData", "getScriptDataKeys", "hasScriptData", "removeScriptData", "setScriptData"]
+    },
+    {
+      "name": "Track",
+      "semantic": ["addGroupReference", "getDisplayColor", "getDisplayOrder", "getDuration", "getGroupReference", "getMixer", "getName", "getNumGroups", "isBounced", "removeGroupReference", "setBounced", "setDisplayColor", "setName"],
+      "internal": ["clone", "getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": ["clearScriptData", "getScriptData", "getScriptDataKeys", "hasScriptData", "removeScriptData", "setScriptData"]
+    },
+    {
+      "name": "TrackInnerSelectionState",
+      "semantic": ["clearAll", "clearGroups", "clearNotes", "clearPitchControls", "getSelectedGroups", "getSelectedNotes", "getSelectedPitchControls", "getSelectedPoints", "hasSelectedContent", "hasSelectedGroups", "hasSelectedNotes", "hasSelectedPitchControls", "hasUnfinishedEdits", "selectGroup", "selectNote", "selectPitchControls", "selectPoints", "unselectGroup", "unselectNote", "unselectPitchControls", "unselectPoints"],
+      "internal": ["getIndexInParent", "getParent", "isMemoryManaged", "registerClearCallback", "registerSelectionCallback"],
+      "intentionallyUnexposed": []
+    },
+    {
+      "name": "TrackMixer",
+      "semantic": ["getGainDecibel", "getPan", "isMuted", "isSolo", "setGainDecibel", "setMuted", "setPan", "setSolo"],
+      "internal": ["getIndexInParent", "getParent", "isMemoryManaged"],
+      "intentionallyUnexposed": ["clearScriptData", "getScriptData", "getScriptDataKeys", "hasScriptData", "removeScriptData", "setScriptData"]
+    },
+    {
+      "name": "WidgetValue",
+      "semantic": [],
+      "internal": ["getEnabled", "getValue", "setEnabled", "setValue", "setValueChangeCallback"],
+      "intentionallyUnexposed": []
+    }
+  ],
+  "unavailableCapabilities": [
+    "current Vocal display name or database identity",
+    "enumeration of untouched default Vocal Mode names",
+    "active Retake getter and Take content enumeration",
+    "Track effect-chain objects and parameters",
+    "instrumental source file path",
+    "project save and audio render/export"
+  ],
+  "actionGroups": {
+    "verifiedReads": ["convert_pitch", "get_project_info", "inspect_score_file", "get_time_axis", "convert_time", "list_tracks", "list_note_groups", "get_track_notes", "get_group_voice", "get_note_phoneme_data", "get_phrase_context", "get_computed_group_data", "get_note_retakes", "get_pitch_controls", "get_automation", "sample_automation", "get_track_mixer"],
+    "sampledUi": ["host_clipboard", "show_dialog", "get_selection", "set_selection", "get_editor_view", "set_editor_view", "snap_position", "convert_editor_coordinates", "playback"],
+    "writes": [
+      {"action":"set_time_axis","aggregates":["ProjectTimeline"],"preflight":"fresh time-axis Guard and complete mark validation","postcondition":"hostReadback","automated":"policy, protocol and Fake Host","realHost":"pending"},
+      {"action":"create_note_group","aggregates":["GroupContent"],"preflight":"complete note/control payload and host capability validation","postcondition":"hostReadback","automated":"schema and Fake Host","realHost":"sampled"},
+      {"action":"clone_note_group","aggregates":["GroupContent"],"preflight":"fresh source snapshot and clone capability validation","postcondition":"hostReadback","automated":"clone ownership Fake Host","realHost":"sampled"},
+      {"action":"delete_note_group","aggregates":["GroupContent"],"preflight":"fresh library Guard and shared-reference policy","postcondition":"hostReadback","automated":"policy and Fake Host","realHost":"pending"},
+      {"action":"add_group_reference","aggregates":["GroupReference"],"preflight":"fresh Track and library Group guards","postcondition":"hostReadback","automated":"policy and Fake Host","realHost":"sampled"},
+      {"action":"clone_group_reference","aggregates":["GroupContent","GroupReference"],"preflight":"explicit linked or isolated intent and source snapshot","postcondition":"hostReadback","automated":"CLN Fake Host matrix","realHost":"verified"},
+      {"action":"add_track","aggregates":["TrackShell"],"preflight":"complete Track payload","postcondition":"hostReadback","automated":"schema and Fake Host","realHost":"sampled"},
+      {"action":"update_track","aggregates":["TrackShell"],"preflight":"fresh Track Guard","postcondition":"hostReadback","automated":"policy and Fake Host","realHost":"sampled"},
+      {"action":"clone_track","aggregates":["GroupContent","GroupReference","TrackShell"],"preflight":"fresh Track Guard, explicit isolated policy and source snapshots","postcondition":"hostReadback","automated":"CLN Fake Host matrix","realHost":"verified"},
+      {"action":"clone_track_shell","aggregates":["TrackShell"],"preflight":"fresh Track Guard and empty-shell plan","postcondition":"hostReadback","automated":"CLN Fake Host matrix","realHost":"verified"},
+      {"action":"delete_track","aggregates":["TrackShell"],"preflight":"fresh Track Guard and final-Track refusal","postcondition":"hostReadback","automated":"policy and Fake Host","realHost":"verified"},
+      {"action":"update_group","aggregates":["GroupContent","GroupReference"],"preflight":"fresh content/reference guards and sharing policy","postcondition":"hostReadback","automated":"policy and Fake Host","realHost":"sampled"},
+      {"action":"set_group_voice","aggregates":["GroupReference"],"preflight":"fresh Reference Guard and dynamic range validation","postcondition":"hostReadback","automated":"range and Fake Host","realHost":"sampled"},
+      {"action":"apply_group_tuning","aggregates":["GroupContent","GroupReference"],"preflight":"one complete Voice/note/Automation/Smart Pitch effect plan","postcondition":"hostReadback","automated":"aggregate Fake Host matrix","realHost":"verified"},
+      {"action":"delete_group_reference","aggregates":["GroupReference"],"preflight":"fresh Reference Guard","postcondition":"hostReadback","automated":"policy and Fake Host","realHost":"pending"},
+      {"action":"import_monophonic_score","aggregates":["GroupContent"],"preflight":"bounded local snapshot, rights confirmation and shared policy","postcondition":"hostReadback","automated":"score import contracts and Fake Host","realHost":"pending"},
+      {"action":"add_notes","aggregates":["GroupContent"],"preflight":"complete bounded note plan and shared policy","postcondition":"hostReadback","automated":"note Fake Host matrix","realHost":"verified"},
+      {"action":"edit_notes","aggregates":["GroupContent"],"preflight":"fresh per-note Guards and shared policy","postcondition":"hostReadback","automated":"guarded note Fake Host matrix","realHost":"verified"},
+      {"action":"transform_notes","aggregates":["GroupContent"],"preflight":"fresh scoped note Guards, time axis and geometry validation","postcondition":"hostReadback","automated":"transform Fake Host matrix","realHost":"verified"},
+      {"action":"set_note_phoneme_properties","aggregates":["GroupContent"],"preflight":"fresh per-note Guards and phoneme ranges","postcondition":"hostReadback","automated":"phoneme contract and Fake Host","realHost":"pending"},
+      {"action":"generate_note_retake","aggregates":["GroupContent"],"preflight":"fresh note/Retake Guard and host capability","postcondition":"hostReadback","automated":"Retake contracts and Fake Host","realHost":"pending"},
+      {"action":"activate_note_retake","aggregates":["GroupContent"],"preflight":"fresh note/Retake Guard and Take bounds","postcondition":"hostReadback","automated":"Retake contracts and Fake Host","realHost":"pending"},
+      {"action":"add_pitch_controls","aggregates":["GroupContent"],"preflight":"fresh shared policy and complete bounded controls","postcondition":"hostReadback","automated":"Smart Pitch Fake Host matrix","realHost":"verified"},
+      {"action":"edit_pitch_controls","aggregates":["GroupContent"],"preflight":"fresh per-control Guards and shared policy","postcondition":"hostReadback","automated":"Smart Pitch Fake Host matrix","realHost":"verified"},
+      {"action":"simplify_automation","aggregates":["GroupContent"],"preflight":"fresh curve Guard, host definition range and shared policy","postcondition":"hostReadback","automated":"Automation Fake Host matrix","realHost":"verified"},
+      {"action":"set_automation_points","aggregates":["GroupContent"],"preflight":"fresh curve Guard, host definition range and complete point plan","postcondition":"hostReadback","automated":"Automation Fake Host matrix","realHost":"verified"},
+      {"action":"script_data","aggregates":["Metadata"],"preflight":"fresh target resolution and explicit metadata operation","postcondition":"hostReadback","automated":"schema and Fake Host","realHost":"pending"},
+      {"action":"set_track_mixer","aggregates":["TrackShell"],"preflight":"fresh Track Guard and mixer ranges","postcondition":"hostReadback","automated":"Command Kernel and Fake Host","realHost":"verified"},
+      {"action":"create_harmony_track","aggregates":["TrackShell"],"preflight":"fresh source Track and bounded harmony plan","postcondition":"hostReadback","automated":"schema and Fake Host","realHost":"pending"},
+      {"action":"humanize_notes","aggregates":["GroupContent"],"preflight":"fresh note Guards and deterministic bounded transform","postcondition":"hostReadback","automated":"schema and Fake Host","realHost":"pending"},
+      {"action":"apply_expression_preset","aggregates":["GroupContent"],"preflight":"fresh note/curve Guards and host ranges","postcondition":"hostReadback","automated":"schema and Fake Host","realHost":"pending"},
+      {"action":"fit_lyrics","aggregates":["GroupContent"],"preflight":"fresh note Guards and exact lyric count","postcondition":"hostReadback","automated":"schema and Fake Host","realHost":"pending"},
+      {"action":"delete_notes","aggregates":["GroupContent"],"preflight":"fresh per-note Guards and shared policy","postcondition":"hostReadback","automated":"guarded delete Fake Host matrix","realHost":"verified"},
+      {"action":"delete_note_retake","aggregates":["GroupContent"],"preflight":"fresh note/Retake Guard and Take bounds","postcondition":"hostReadback","automated":"Retake contracts and Fake Host","realHost":"pending"},
+      {"action":"delete_pitch_controls","aggregates":["GroupContent"],"preflight":"fresh per-control Guards and shared policy","postcondition":"hostReadback","automated":"Smart Pitch Fake Host matrix","realHost":"verified"},
+      {"action":"clear_automation","aggregates":["GroupContent"],"preflight":"fresh curve Guard, closed range and shared policy","postcondition":"hostReadback","automated":"Automation endpoint Fake Host matrix","realHost":"verified"},
+      {"action":"apply_transaction","aggregates":["Transaction"],"preflight":"all independent steps before Undo and dependent steps just in time","postcondition":"transactionSummary","automated":"transaction Fake Host matrix","realHost":"pending"},
+      {"action":"rollback_transaction","aggregates":["Transaction"],"preflight":"stored reverse plan with fresh per-step guards","postcondition":"transactionSummary","automated":"transaction Fake Host matrix","realHost":"pending"}
+    ]
+  }
+}
+```
+<!-- SV2_API_INVENTORY_END -->
+
 ## v3 Query action coverage
 
 The Query policy registry is checked against the live `sv_describe` read
