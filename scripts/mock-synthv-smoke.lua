@@ -42,6 +42,27 @@ trackClonePitchGetterFailure = false
 trackCloneAutomationGetterFailure = false
 trackShellPostconditionPitchGetterFailure = false
 trackShellPostconditionAutomationGetterFailure = false
+local crashProbeMode = os.getenv("SYNTHV_AGENT_CRASH_PROBE")
+local crashProbeArmed = false
+local crashProbeCloneCommand = false
+local crashProbeVoiceReadsAfterArm = 0
+staleLinkedGroupContentReadGuard =
+    os.getenv("SYNTHV_AGENT_STALE_PROXY_GUARD")
+        == "clone_group_reference"
+staleIsolatedGroupContentReadGuard =
+    os.getenv("SYNTHV_AGENT_STALE_PROXY_GUARD")
+        == "clone_group_reference"
+cloneReferenceMutationUnderTest = false
+staleTargetTrackProxyGuard =
+    os.getenv("SYNTHV_AGENT_STALE_TRACK_PROXY_GUARD")
+        == "clone_group_reference"
+hostTrackProxyGeneration = 0
+isolatedCloneMutationUnderTest = false
+isolatedCloneContentReadsUnsafe = false
+isolatedCloneReadGuardArmed = false
+nilInsertionIndexGuard =
+    os.getenv("SYNTHV_AGENT_NIL_INSERTION_INDEX_GUARD")
+        == "clone_group_reference"
 
 -- SynthV may return distinct Lua proxy values for the same native object.
 -- Delegate every member while intentionally preserving distinct identity.
@@ -54,8 +75,14 @@ end
 
 local function proxyObject(target)
     target=unwrapProxy(target)
+    local trackProxyGeneration=hostTrackProxyGeneration
     return setmetatable({__target=target}, {
         __index=function(_,key)
+            if staleTargetTrackProxyGuard
+                and target.__hostKind=="track"
+                and trackProxyGeneration~=hostTrackProxyGeneration then
+                error("stale Track proxy after Note Group library insertion")
+            end
             local value=target[key]
             if type(value)=="function" then
                 return function(_,...)
@@ -227,6 +254,18 @@ local function makeAutomation(name)
     function a:getType() return self.name end
     function a:getInterpolationMethod() return "Linear" end
     function a:getAllPoints()
+        if crashProbeArmed
+            and crashProbeMode
+                == "clone_group_reference.verifySourceAutomation"
+            and self.name == "loudness" then
+            os.exit(87)
+        end
+        if crashProbeArmed
+            and crashProbeMode
+                == "clone_group_reference.verifyVocalModeAutomation"
+            and self.name == "vocalMode_SensitiveStyleName" then
+            os.exit(89)
+        end
         if self.ownerGroup and self.ownerGroup.failAutomationPointsRead then
             error("forced Automation point read failure")
         end
@@ -311,10 +350,29 @@ local function makeGroup()
     function g:getUUID() return self.uuid end
     function g:getIndexInParent() return self.parent and indexOf(self.parent.groups,self) or nil end
     function g:getParent() return self.parent end
-    function g:getName() return self.name end
+    function g:getName()
+        assert(
+            not self.rejectContentReadAfterLinkedClone
+                and not isolatedCloneContentReadsUnsafe,
+            "GroupContent name read after linked Reference insertion"
+        )
+        return self.name
+    end
     function g:setName(v) self.name=v end
-    function g:getNumNotes() return #self.notes end
+    function g:getNumNotes()
+        assert(
+            not self.rejectContentReadAfterLinkedClone
+                and not isolatedCloneContentReadsUnsafe,
+            "GroupContent note-count read after linked Reference insertion"
+        )
+        return #self.notes
+    end
     function g:getNote(i)
+        assert(
+            not self.rejectContentReadAfterLinkedClone
+                and not isolatedCloneContentReadsUnsafe,
+            "GroupContent note read after linked Reference insertion"
+        )
         groupGetNoteCalls=groupGetNoteCalls+1
         return self.notes[i]
     end
@@ -325,12 +383,24 @@ local function makeGroup()
     end
     function g:removeNote(i) table.remove(self.notes,i) end
     function g:getNumPitchControls()
+        assert(
+            not self.rejectContentReadAfterLinkedClone
+                and not isolatedCloneContentReadsUnsafe,
+            "GroupContent Pitch Control read after linked Reference insertion"
+        )
         if self.failPitchControlRead then
             error("forced Smart Pitch count read failure")
         end
         return #self.pitchControls
     end
-    function g:getPitchControl(i) return self.pitchControls[i] end
+    function g:getPitchControl(i)
+        assert(
+            not self.rejectContentReadAfterLinkedClone
+                and not isolatedCloneContentReadsUnsafe,
+            "GroupContent Pitch Control read after linked Reference insertion"
+        )
+        return self.pitchControls[i]
+    end
     function g:addPitchControl(control)
         control.parent=self
         self.pitchControls[#self.pitchControls+1]=control
@@ -339,6 +409,12 @@ local function makeGroup()
     end
     function g:removePitchControl(i) table.remove(self.pitchControls,i) end
     function g:getParameter(name)
+        if self.rejectContentReadAfterLinkedClone
+            or isolatedCloneContentReadsUnsafe then
+            error(
+                "GroupContent Automation read after linked Reference insertion"
+            )
+        end
         self.params[name]=self.params[name] or makeAutomation(name)
         self.params[name].ownerGroup=self
         return self.params[name]
@@ -392,6 +468,10 @@ local function makeReference(group, main)
             }
         }
     })
+    if crashProbeMode
+            == "clone_group_reference.verifyVocalModeAutomation" then
+        r.supportedVocalModes.SensitiveStyleName=true
+    end
     function r:isInstrumental() return self.instrumental end
     function r:isMain() return self.main end
     function r:isMuted() return self.muted end
@@ -403,6 +483,15 @@ local function makeReference(group, main)
     function r:getTarget() return proxyObject(self.group) end
     function r:setTarget(v) assert(self.group==nil,"target already set"); self.group=unwrapProxy(v) end
     function r:getVoice()
+        if crashProbeArmed
+            and crashProbeMode
+                == "clone_group_reference.verifyReferenceFingerprint" then
+            crashProbeVoiceReadsAfterArm =
+                crashProbeVoiceReadsAfterArm + 1
+            if crashProbeVoiceReadsAfterArm == 1 then
+                os.exit(88)
+            end
+        end
         if self.failVoiceRead then
             error("forced Group Voice read failure")
         end
@@ -456,8 +545,22 @@ local function makeReference(group, main)
             end
         end
     end
-    function r:getOnset() if #self.group.notes==0 then return self.timeOffset end return self.group.notes[1]:getOnset()+self.timeOffset end
-    function r:getEnd() if #self.group.notes==0 then return self.timeOffset end return self.group.notes[#self.group.notes]:getEnd()+self.timeOffset end
+    function r:getOnset()
+        assert(
+            not self.group.rejectContentReadAfterLinkedClone,
+            "Reference onset read after linked Reference insertion"
+        )
+        if #self.group.notes==0 then return self.timeOffset end
+        return self.group.notes[1]:getOnset()+self.timeOffset
+    end
+    function r:getEnd()
+        assert(
+            not self.group.rejectContentReadAfterLinkedClone,
+            "Reference end read after linked Reference insertion"
+        )
+        if #self.group.notes==0 then return self.timeOffset end
+        return self.group.notes[#self.group.notes]:getEnd()+self.timeOffset
+    end
     function r:getDuration() return self:getEnd()-self:getOnset() end
     function r:getParent() return self.parent end
     function r:getIndexInParent() return indexOf(self.parent.refs,self) end
@@ -499,7 +602,7 @@ local project
 local function makeTrack()
     local group=makeGroup()
     local ref=makeReference(group,true)
-    local t=attachScriptData({name="Track",color="ff808080",refs={ref},mixer=makeMixer(),bounced=false})
+    local t=attachScriptData({__hostKind="track",name="Track",color="ff808080",refs={ref},mixer=makeMixer(),bounced=false})
     ref.parent=t
     function t:getName() return self.name end
     function t:setName(v) self.name=v end
@@ -512,7 +615,33 @@ local function makeTrack()
     function t:getDuration() local x=0 for _,r in ipairs(self.refs) do if r:getEnd()>x then x=r:getEnd() end end return x end
     function t:getNumGroups() return #self.refs end
     function t:getGroupReference(i) return self.refs[i] end
-    function t:addGroupReference(reference) reference.parent=self; self.refs[#self.refs+1]=reference; return #self.refs end
+    function t:addGroupReference(reference)
+        if crashProbeArmed
+            and crashProbeMode == "clone_group_reference.addGroupReference" then
+            os.exit(86)
+        end
+        reference.parent=self
+        self.refs[#self.refs+1]=reference
+        if staleLinkedGroupContentReadGuard
+            and cloneReferenceMutationUnderTest then
+            reference.group.rejectContentReadAfterLinkedClone = true
+        end
+        if crashProbeCloneCommand
+            and (crashProbeMode
+                == "clone_group_reference.verifySourceAutomation"
+            or crashProbeMode
+                == "clone_group_reference.verifyVocalModeAutomation"
+            or crashProbeMode
+                == "clone_group_reference.verifyReferenceFingerprint") then
+            crashProbeArmed = true
+        end
+        if nilInsertionIndexGuard
+            and (cloneReferenceMutationUnderTest
+                or isolatedCloneMutationUnderTest) then
+            return nil
+        end
+        return #self.refs
+    end
     function t:removeGroupReference(i) table.remove(self.refs,i) end
     function t:getMixer() return self.mixer end
     function t:isBounced() return self.bounced end
@@ -660,7 +789,12 @@ project=attachScriptData({tracks={},groups={},undo=0})
 function project:getFileName() return "mock.svp" end
 function project:getDuration() local x=0 for _,t in ipairs(self.tracks) do if t:getDuration()>x then x=t:getDuration() end end return x end
 function project:getNumTracks() return #self.tracks end
-function project:getTrack(i) return self.tracks[i] end
+function project:getTrack(i)
+    if staleTargetTrackProxyGuard then
+        return proxyObject(self.tracks[i])
+    end
+    return self.tracks[i]
+end
 function project:addTrack(t)
     self.tracks[#self.tracks+1]=t
     if trackShellPostconditionPitchGetterFailure then
@@ -687,6 +821,23 @@ function project:addNoteGroup(group,suggestedIndex)
     local index=suggestedIndex or (#self.groups+1)
     table.insert(self.groups,index,group)
     group.parent=self
+    if staleIsolatedGroupContentReadGuard
+        and isolatedCloneReadGuardArmed then
+        isolatedCloneContentReadsUnsafe = true
+        for _,existingGroup in ipairs(self.groups) do
+            if existingGroup ~= group then
+                existingGroup.rejectContentReadAfterLinkedClone = true
+            end
+        end
+    end
+    if staleTargetTrackProxyGuard
+        and isolatedCloneMutationUnderTest then
+        hostTrackProxyGeneration=hostTrackProxyGeneration+1
+    end
+    if nilInsertionIndexGuard
+        and isolatedCloneMutationUnderTest then
+        return nil
+    end
     return index
 end
 function project:removeNoteGroup(index)
@@ -1574,11 +1725,33 @@ call("list_note_groups","{}")
 callWrite("add_group_reference",'{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","targetGroupUuid":"'..libraryUuid..'","timeOffset":1411200000}')
 assert(project.tracks[1]:getNumGroups()==2,"library reference was not added")
 local linkedCloneUndoBefore=project.undo
+if crashProbeMode == "clone_group_reference.addGroupReference" then
+    crashProbeArmed = true
+elseif crashProbeMode
+        == "clone_group_reference.verifyReferenceFingerprint" then
+    crashProbeCloneCommand = true
+end
+if staleLinkedGroupContentReadGuard then
+    cloneReferenceMutationUnderTest = true
+end
+expectedLinkedTargetGroupIndex=#project.tracks[2].refs+1
 local linkedClone=callWrite("clone_group_reference",'{"cloneIntent":"linked","sourceTrackIndex":1,"sourceGroupIndex":2,"sourceGroupUuid":"'..libraryUuid..'","targetTrackIndex":2,"targetTrackFingerprint":"'..track2Fingerprint..'"}')
+cloneReferenceMutationUnderTest = false
+librarySource.rejectContentReadAfterLinkedClone = false
 assert(project.undo==linkedCloneUndoBefore+1,"linked Reference clone must create one undo record")
 assert(project.tracks[2]:getNumGroups()==2,"linked group reference was not cloned")
 assert(project.tracks[2].refs[2].group.uuid==libraryUuid,"linked Reference clone changed the Group UUID")
 assert(linkedClone:find('"targetReferenceCount":2',1,true),"linked Reference clone did not verify the incremented reference count")
+if nilInsertionIndexGuard then
+    assert(
+        linkedClone:find(
+            '"targetGroupIndex":'..expectedLinkedTargetGroupIndex,
+            1,
+            true
+        ),
+        "linked clone did not report its fallback target Group index"
+    )
+end
 print("CASE:cln-001-linked-reference")
 do
 local groupPage=call("get_track_notes",'{"trackIndex":2,"groupOffset":1,"groupLimit":1,"offset":0,"limit":1}')
@@ -1595,11 +1768,56 @@ local sourcePitchControlCountBeforeIsolation=librarySource:getNumPitchControls()
 local sourcePitchControlPitchBeforeIsolation=librarySource:getPitchControl(1):getPitch()
 local sourceAutomationBeforeIsolation=librarySource:getParameter("loudness"):getAllPoints()
 local isolatedCloneUndoBefore=project.undo
+if crashProbeMode
+        == "clone_group_reference.verifyVocalModeAutomation" then
+    project.tracks[1].refs[2].supportedVocalModes.SensitiveStyleName=true
+    project.tracks[1].refs[2].voice.vocalModeParams.SensitiveStyleName={
+        pitch=0,
+        timbre=0,
+        pronunciation=0
+    }
+end
+if crashProbeMode
+        == "clone_group_reference.verifySourceAutomation"
+    or crashProbeMode
+        == "clone_group_reference.verifyVocalModeAutomation" then
+    crashProbeArmed = true
+end
+if staleTargetTrackProxyGuard then
+    isolatedCloneMutationUnderTest = true
+end
+isolatedCloneReadGuardArmed = true
+expectedIsolatedLibraryIndex=#project.groups+1
+expectedIsolatedTargetGroupIndex=#project.tracks[2].refs+1
 local isolatedClone=callWrite("clone_group_reference",'{"cloneIntent":"isolated","sourceTrackIndex":1,"sourceGroupIndex":2,"sourceGroupUuid":"'..libraryUuid..'","targetTrackIndex":2,"targetTrackFingerprint":"'..track2Fingerprint..'","name":"Reusable Chorus Isolated"}')
+isolatedCloneMutationUnderTest = false
+isolatedCloneReadGuardArmed = false
+isolatedCloneContentReadsUnsafe = false
+for _,existingGroup in ipairs(project.groups) do
+    existingGroup.rejectContentReadAfterLinkedClone = false
+end
 assert(project.undo==isolatedCloneUndoBefore+1,"isolated Reference clone must create one undo record")
 local isolatedUuid=assert(isolatedClone:match('"targetGroupUuid":"([^"]+)"'))
 assert(isolatedUuid~=libraryUuid,"isolated Reference clone retained the source UUID")
 assert(project.tracks[2].refs[3].group.uuid==isolatedUuid,"isolated Reference clone did not target the cloned Group")
+if nilInsertionIndexGuard then
+    assert(
+        isolatedClone:find(
+            '"libraryIndex":'..expectedIsolatedLibraryIndex,
+            1,
+            true
+        ),
+        "isolated clone did not report its fallback library index"
+    )
+    assert(
+        isolatedClone:find(
+            '"targetGroupIndex":'..expectedIsolatedTargetGroupIndex,
+            1,
+            true
+        ),
+        "isolated clone did not report its fallback target Group index"
+    )
+end
 assert(isolatedClone:find('"targetReferenceCount":1',1,true),"isolated Reference clone did not verify reference count one")
 print("CASE:cln-002-isolated-reference")
 local isolatedNotes=call("get_track_notes",'{"trackIndex":2,"groupIndex":3,"offset":0,"limit":1}')

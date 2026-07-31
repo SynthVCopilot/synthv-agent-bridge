@@ -23,8 +23,9 @@ retains a SynthV object reference across commands.
 ## Clone vocabulary
 
 - `linked`: new Reference, same Note Group UUID.
-- `isolated`: cloned Note Group, distinct UUID, reference count `1`, unchanged
-  source snapshot, verified target association.
+- `isolated`: cloned Note Group, distinct UUID, reference count `1`, verified
+  target association, and an unchanged source snapshot confirmed by a separate
+  fresh host read.
 - `shell`: one empty track shell with host-owned main context.
 
 Ambiguous clone intent fails. A `deepCopy` boolean is not part of v3.
@@ -37,10 +38,12 @@ The command registry declares the allowed intent for each clone action:
 | `clone_track` | `isolated` | Clone the `TrackShell` and isolate every vocal `GroupContent` target |
 | `clone_track_shell` | `shell` | Clone the host-owned main context, then remove notes, Smart Pitch, Automation, and non-main References |
 
-Success is based on a fresh host reread. Linked success preserves the source
-UUID and verifies the incremented reference count. Isolated success verifies
-distinct UUIDs, intended target associations and reference counts, plus
-unchanged source note, Automation, Smart Pitch, Track, and Reference snapshots.
+Success is based on fresh host state. Linked success preserves the source UUID
+and verifies the incremented reference count. Isolated success verifies
+distinct UUIDs, intended target associations and reference counts in the
+mutation callback. Source note, Automation, Smart Pitch, Track, and Reference
+snapshots are confirmed by a separate fresh host read because SynthV 2.2.1 can
+terminate on a same-callback GroupContent read after library insertion.
 Shell success verifies one Reference and no notes, Bridge-supported Automation
 points, or Smart Pitch controls.
 

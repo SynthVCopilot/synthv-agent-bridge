@@ -176,7 +176,8 @@ Clone intent is one of:
 
 - `linked`: intentionally share the target Note Group;
 - `isolated`: clone the Note Group and verify distinct UUID, reference count,
-  target association, and unchanged source;
+  and target association; confirm the unchanged source through a separate
+  fresh host read;
 - `shell`: create a verified-empty track shell.
 
 No `deepCopy` boolean exists in v3.

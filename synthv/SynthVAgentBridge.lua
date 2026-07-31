@@ -503,6 +503,18 @@ local function writeJsonAtomically(filePath, value)
     return writeFileAtomically(filePath, encoded .. "\n")
 end
 
+runtimeState.writeCrashBreadcrumb = function(action, checkpoint)
+    writeJsonAtomically(PREFIX .. ".crash-breadcrumb.json", {
+        schemaVersion = 1,
+        traceId = runtimeState.currentRequestTraceId or "unknown-trace",
+        action = action,
+        checkpoint = checkpoint,
+        executorBuildId = EXECUTOR_BUILD_ID,
+        sessionToken = SESSION_TOKEN,
+        updatedAtEpochMs = os.time() * 1000
+    })
+end
+
 local function readJson(filePath)
     local content, readError = readFile(filePath)
     if content == nil then
@@ -2089,10 +2101,22 @@ local function prepareGroupVoiceUpdate(reference, payload)
     return voiceUpdate, checks, expectedVocalModes, allowAdditionalVocalModes
 end
 
-local function serializeAutomation(group, parameterName)
+local function serializeAutomation(group, parameterName, breadcrumbPrefix)
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".getParameter.before"
+        )
+    end
     local ok, automationOrError = pcall(function()
         return group:getParameter(parameterName)
     end)
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".getParameter.after"
+        )
+    end
     if not ok or not automationOrError then
         raiseBridgeError("PARAMETER_NOT_FOUND", "SynthV does not expose this automation parameter", {
             parameter = parameterName,
@@ -2101,8 +2125,30 @@ local function serializeAutomation(group, parameterName)
     end
 
     local automation = automationOrError
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".getDefinition.before"
+        )
+    end
     local definition = automation:getDefinition()
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".getDefinition.after"
+        )
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".getAllPoints.before"
+        )
+    end
     local rawPoints = automation:getAllPoints()
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".getAllPoints.after"
+        )
+    end
     local points = json.array()
     for index = 1, #rawPoints do
         local point = rawPoints[index]
@@ -2112,10 +2158,43 @@ local function serializeAutomation(group, parameterName)
         }
     end
 
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".getType.before"
+        )
+    end
     local parameterType = automation:getType()
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".getType.after"
+        )
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".getInterpolationMethod.before"
+        )
+    end
     local interpolation = automation:getInterpolationMethod()
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".getInterpolationMethod.after"
+        )
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".groupUuid.before"
+        )
+    end
+    local groupUuid = group:getUUID()
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".groupUuid.after"
+        )
+    end
     local fingerprint = table.concat({
-        group:getUUID(),
+        groupUuid,
         parameterType,
         interpolation,
         json.encode(points)
@@ -2219,7 +2298,47 @@ function CLONE_STATE.referenceFingerprint(reference)
     }, "|")
 end
 
-local function snapshotCloneSourceGroup(group, reference)
+runtimeState.cloneReferenceLocalFingerprint = function(reference)
+    local instrumental = CLONE_STATE.requireState(function()
+        return reference:isInstrumental()
+    end, "NoteGroupReference.isInstrumental")
+    local targetUuid = ""
+    local voice = {}
+    if not instrumental then
+        local target = CLONE_STATE.requireState(function()
+            return reference:getTarget()
+        end, "NoteGroupReference.getTarget")
+        targetUuid = target:getUUID()
+        voice = CLONE_STATE.requireState(function()
+            return reference:getVoice()
+        end, "NoteGroupReference.getVoice")
+    end
+    return table.concat({
+        instrumental and "instrumental" or "vocal",
+        targetUuid,
+        tostring(CLONE_STATE.requireState(function()
+            return reference:isMain()
+        end, "NoteGroupReference.isMain")),
+        tostring(CLONE_STATE.requireState(function()
+            return reference:isMuted()
+        end, "NoteGroupReference.isMuted")),
+        tostring(CLONE_STATE.requireState(function()
+            return reference:getTimeOffset()
+        end, "NoteGroupReference.getTimeOffset")),
+        tostring(CLONE_STATE.requireState(function()
+            return reference:getPitchOffset()
+        end, "NoteGroupReference.getPitchOffset")),
+        json.encode(sanitizeForJson(voice))
+    }, "|")
+end
+
+local function snapshotCloneSourceGroup(group, reference, breadcrumbPrefix)
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".notes.before"
+        )
+    end
     local notes = json.array()
     for noteIndex = 1, group:getNumNotes() do
         notes[#notes + 1] =
@@ -2228,6 +2347,12 @@ local function snapshotCloneSourceGroup(group, reference)
                 noteIndex,
                 group:getNote(noteIndex)
             )
+    end
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".notes.after"
+        )
     end
     local automationNames = {}
     local seenAutomationNames = {}
@@ -2240,9 +2365,21 @@ local function snapshotCloneSourceGroup(group, reference)
     for index = 1, #CLONE_STATE.automationParameters do
         addAutomationName(CLONE_STATE.automationParameters[index])
     end
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".voice.before"
+        )
+    end
     local voice = CLONE_STATE.requireState(function()
         return reference:getVoice()
     end, "NoteGroupReference.getVoice")
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".voice.after"
+        )
+    end
     if type(voice.vocalModeParams) == "table" then
         for vocalModeName, _value in pairs(voice.vocalModeParams) do
             addAutomationName("vocalMode_" .. tostring(vocalModeName))
@@ -2251,8 +2388,34 @@ local function snapshotCloneSourceGroup(group, reference)
     table.sort(automationNames)
     local automations = json.array()
     for index = 1, #automationNames do
+        local checkpointParameter =
+            automationNames[index]:match("^vocalMode_")
+                and "vocalMode"
+                or automationNames[index]
+        local automationBreadcrumbPrefix =
+            breadcrumbPrefix
+                and breadcrumbPrefix
+                    .. ".automation."
+                    .. checkpointParameter
+                or nil
+        if breadcrumbPrefix then
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                automationBreadcrumbPrefix .. ".before"
+            )
+        end
         local _automation, serialized =
-            serializeAutomation(group, automationNames[index])
+            serializeAutomation(
+                group,
+                automationNames[index],
+                automationBreadcrumbPrefix
+            )
+        if breadcrumbPrefix then
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                automationBreadcrumbPrefix .. ".after"
+            )
+        end
         automations[#automations + 1] = {
             parameter = serialized.parameter,
             interpolation = serialized.interpolation,
@@ -2260,11 +2423,24 @@ local function snapshotCloneSourceGroup(group, reference)
             points = serialized.points
         }
     end
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".pitchControls.before"
+        )
+    end
+    local pitchControls = CLONE_STATE.pitchControls(group)
+    if breadcrumbPrefix then
+        runtimeState.writeCrashBreadcrumb(
+            "clone_group_reference",
+            breadcrumbPrefix .. ".pitchControls.after"
+        )
+    end
     return json.encode({
         groupUuid = group:getUUID(),
         notes = notes,
         automations = automations,
-        pitchControls = CLONE_STATE.pitchControls(group)
+        pitchControls = pitchControls
     })
 end
 
@@ -4227,6 +4403,10 @@ function handlers.clone_group_reference(payload)
     return executeCommandPipeline({
         action = "clone_group_reference",
         freshRead = function()
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                "freshRead.begin"
+            )
             if isProvided(payload.deepCopy) then
                 raiseBridgeError(
                     "INVALID_ARGUMENT",
@@ -4248,6 +4428,10 @@ function handlers.clone_group_reference(payload)
                     groupIndex = payload.sourceGroupIndex,
                     groupUuid = payload.sourceGroupUuid
                 })
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                "freshRead.sourceResolved"
+            )
             validateReferenceFingerprint(
                 sourceReference,
                 optionalString(
@@ -4261,6 +4445,10 @@ function handlers.clone_group_reference(payload)
             local _sameProject, targetTrack, targetTrackIndex = resolveTrack({
                 trackIndex = payload.targetTrackIndex
             })
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                "freshRead.targetResolved"
+            )
             validateTrackFingerprint(
                 targetTrack,
                 optionalString(
@@ -4270,37 +4458,82 @@ function handlers.clone_group_reference(payload)
                 ),
                 targetTrackIndex
             )
+            local sourceSnapshot = nil
+            if cloneIntent == "isolated" then
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "freshRead.sourceSnapshot.before"
+                )
+                sourceSnapshot =
+                    snapshotCloneSourceGroup(
+                        sourceGroup,
+                        sourceReference,
+                        "freshRead.sourceSnapshot"
+                    )
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "freshRead.sourceSnapshot.after"
+                )
+            end
             return {
                 project = project,
                 sourceTrackIndex = sourceTrackIndex,
                 sourceReference = sourceReference,
-                sourceReferenceFingerprint =
-                    makeReferenceFingerprint(sourceReference),
+                sourceReferenceLocalFingerprint =
+                    runtimeState.cloneReferenceLocalFingerprint(
+                        sourceReference
+                    ),
                 sourceGroup = sourceGroup,
+                sourceGroupUuid = sourceGroup:getUUID(),
                 sourceGroupIndex = sourceGroupIndex,
                 sourceReferenceCount = countGroupReferences(project, sourceGroup),
-                sourceSnapshot =
-                    snapshotCloneSourceGroup(sourceGroup, sourceReference),
+                sourceSnapshot = sourceSnapshot,
                 targetTrack = targetTrack,
                 targetTrackIndex = targetTrackIndex,
+                targetGroupCountBefore = targetTrack:getNumGroups(),
+                libraryCountBefore = project:getNumNoteGroupsInLibrary(),
                 cloneIntent = cloneIntent
             }
         end,
         guard = function(state)
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                "guard.begin"
+            )
             if state.cloneIntent == "linked" and state.sourceReference:isMain() then
                 raiseBridgeError(
                     "INVALID_ARGUMENT",
                     "A track main Group cannot be linked directly; use cloneIntent=isolated"
                 )
             end
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                "guard.after"
+            )
         end,
         preflight = function(state)
             local targetGroup = state.sourceGroup
             local reference
             if state.cloneIntent == "linked" then
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "preflight.referenceClone.before"
+                )
                 reference = state.sourceReference:clone()
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "preflight.referenceClone.after"
+                )
             else
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "preflight.groupClone.before"
+                )
                 targetGroup = state.sourceGroup:clone()
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "preflight.groupClone.after"
+                )
                 if targetGroup:getUUID() == state.sourceGroup:getUUID() then
                     raiseBridgeError(
                         "SHARED_GROUP_CLONE",
@@ -4323,6 +4556,10 @@ function handlers.clone_group_reference(payload)
                     )
                 end
             end
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                "preflight.after"
+            )
             return {
                 changedCount = 1,
                 targetGroup = targetGroup,
@@ -4337,51 +4574,183 @@ function handlers.clone_group_reference(payload)
             )
         end,
         mutate = function(state, plan)
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                "mutate.begin"
+            )
             if state.cloneIntent == "isolated" then
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "mutate.addNoteGroup.before"
+                )
                 plan.libraryIndex = state.project:addNoteGroup(plan.targetGroup)
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "mutate.addNoteGroup.after"
+                )
                 if type(plan.libraryIndex) ~= "number" then
-                    plan.libraryIndex = plan.targetGroup:getIndexInParent()
+                    plan.libraryIndex = state.libraryCountBefore + 1
                 end
             end
+            local targetTrackForInsertion = state.targetTrack
+            if state.cloneIntent == "isolated" then
+                local _project, freshTargetTrack =
+                    resolveTrack({ trackIndex = state.targetTrackIndex })
+                targetTrackForInsertion = freshTargetTrack
+            end
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                "mutate.addGroupReference.before"
+            )
             plan.targetGroupIndex =
-                state.targetTrack:addGroupReference(plan.reference)
+                targetTrackForInsertion:addGroupReference(plan.reference)
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                "mutate.addGroupReference.after"
+            )
             if type(plan.targetGroupIndex) ~= "number" then
-                plan.targetGroupIndex = plan.reference:getIndexInParent()
+                plan.targetGroupIndex = state.targetGroupCountBefore + 1
             end
         end,
         verify = function(state, plan)
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                "verify.freshResolve.before"
+            )
+            local verifiedProject, _verifiedSourceTrack,
+                _verifiedSourceTrackIndex, verifiedSourceReference,
+                verifiedSourceGroup =
+                resolveGroup({
+                    trackIndex = state.sourceTrackIndex,
+                    groupIndex = state.sourceGroupIndex,
+                    groupUuid = state.sourceGroupUuid
+                })
+            local _sameProject, verifiedTargetTrack =
+                resolveTrack({ trackIndex = state.targetTrackIndex })
             local inserted =
-                state.targetTrack:getGroupReference(plan.targetGroupIndex)
+                verifiedTargetTrack:getGroupReference(plan.targetGroupIndex)
             local insertedGroup =
                 inserted and not inserted:isInstrumental()
                     and inserted:getTarget()
                     or nil
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                "verify.freshResolve.after"
+            )
             local expectedSourceReferenceCount =
                 state.sourceReferenceCount
                 + (state.cloneIntent == "linked" and 1 or 0)
             local targetReferenceCount =
                 insertedGroup
-                    and countGroupReferences(state.project, insertedGroup)
+                    and countGroupReferences(verifiedProject, insertedGroup)
                     or 0
             local expectedTargetReferenceCount =
                 state.cloneIntent == "linked"
                     and expectedSourceReferenceCount
                     or 1
-            if insertedGroup == nil
-                or insertedGroup:getUUID() ~= plan.targetGroupUuid
-                or countGroupReferences(state.project, state.sourceGroup)
-                    ~= expectedSourceReferenceCount
-                or targetReferenceCount ~= expectedTargetReferenceCount
-                or snapshotCloneSourceGroup(
-                    state.sourceGroup,
-                    state.sourceReference
-                ) ~= state.sourceSnapshot
-                or makeReferenceFingerprint(state.sourceReference)
-                    ~= state.sourceReferenceFingerprint
-                or (state.cloneIntent == "linked"
-                    and insertedGroup:getUUID() ~= state.sourceGroup:getUUID())
-                or (state.cloneIntent == "isolated"
-                    and insertedGroup:getUUID() == state.sourceGroup:getUUID()) then
+            local verifiedLibraryIndex = nil
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                "verify.postconditions.before"
+            )
+            local postconditionFailed = insertedGroup == nil
+            if not postconditionFailed then
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "verify.targetAssociation.before"
+                )
+                postconditionFailed =
+                    insertedGroup:getUUID() ~= plan.targetGroupUuid
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "verify.targetAssociation.after"
+                )
+            end
+            if not postconditionFailed then
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "verify.sourceReferenceCount.before"
+                )
+                postconditionFailed =
+                    countGroupReferences(
+                        verifiedProject,
+                        verifiedSourceGroup
+                    )
+                        ~= expectedSourceReferenceCount
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "verify.sourceReferenceCount.after"
+                )
+            end
+            if not postconditionFailed then
+                postconditionFailed =
+                    targetReferenceCount ~= expectedTargetReferenceCount
+            end
+            if not postconditionFailed then
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "verify.referenceFingerprint.before"
+                )
+                postconditionFailed =
+                    runtimeState.cloneReferenceLocalFingerprint(
+                        verifiedSourceReference
+                    ) ~= state.sourceReferenceLocalFingerprint
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "verify.referenceFingerprint.after"
+                )
+            end
+            if not postconditionFailed
+                and state.cloneIntent == "linked" then
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "verify.linkedOwnership.before"
+                )
+                postconditionFailed =
+                    insertedGroup:getUUID() ~= state.sourceGroupUuid
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "verify.linkedOwnership.after"
+                )
+            end
+            if not postconditionFailed
+                and state.cloneIntent == "isolated" then
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "verify.isolatedOwnership.before"
+                )
+                postconditionFailed =
+                    insertedGroup:getUUID() == state.sourceGroupUuid
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "verify.isolatedOwnership.after"
+                )
+            end
+            if not postconditionFailed
+                and state.cloneIntent == "isolated" then
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "verify.libraryAssociation.before"
+                )
+                for libraryIndex = 1,
+                        verifiedProject:getNumNoteGroupsInLibrary() do
+                    local libraryGroup =
+                        verifiedProject:getNoteGroup(libraryIndex)
+                    if libraryGroup
+                        and libraryGroup:getUUID() == plan.targetGroupUuid then
+                        verifiedLibraryIndex = libraryIndex
+                        break
+                    end
+                end
+                postconditionFailed =
+                    verifiedLibraryIndex == nil
+                    or verifiedLibraryIndex ~= plan.libraryIndex
+                runtimeState.writeCrashBreadcrumb(
+                    "clone_group_reference",
+                    "verify.libraryAssociation.after"
+                )
+            end
+            if postconditionFailed then
                 raiseBridgeError(
                     "HOST_POSTCONDITION_FAILED",
                     "SynthV did not preserve the requested clone ownership",
@@ -4393,27 +4762,40 @@ function handlers.clone_group_reference(payload)
                     }
                 )
             end
+            runtimeState.writeCrashBreadcrumb(
+                "clone_group_reference",
+                "verify.postconditions.after"
+            )
             return {
                 cloneIntent = state.cloneIntent,
                 linked = state.cloneIntent == "linked",
                 sourceTrackIndex = state.sourceTrackIndex,
                 sourceGroupIndex = state.sourceGroupIndex,
-                sourceGroupUuid = state.sourceGroup:getUUID(),
+                sourceGroupUuid = state.sourceGroupUuid,
                 sourceReferenceCount = expectedSourceReferenceCount,
                 targetTrackIndex = state.targetTrackIndex,
+                targetGroupIndex = plan.targetGroupIndex,
                 targetGroupUuid = insertedGroup:getUUID(),
                 targetReferenceCount = targetReferenceCount,
                 targetAssociationVerified = true,
-                sourceSnapshotVerified = true,
+                sourceSnapshotCaptured =
+                    state.cloneIntent == "isolated",
+                sourceSnapshotVerified = false,
+                sourceIsolationVerified =
+                    state.cloneIntent == "isolated",
+                sourceContentPostcondition =
+                    state.cloneIntent == "isolated"
+                        and "deferredToFreshRead"
+                        or JSON_NULL,
+                sourceContentReadAfterLink =
+                    false,
                 ownershipVerified = true,
-                libraryIndex = plan.libraryIndex or JSON_NULL,
-                group =
-                    serializeGroup(
-                        inserted,
-                        plan.targetGroupIndex,
-                        0,
-                        0
-                    )
+                libraryIndex = verifiedLibraryIndex or JSON_NULL,
+                group = {
+                    groupIndex = plan.targetGroupIndex,
+                    groupUuid = insertedGroup:getUUID(),
+                    contentProjection = "deferred"
+                }
             }
         end
     })
@@ -9932,6 +10314,7 @@ local function processRequestFile()
         recordLuaStage("schema")
         requestId = validatedRequestId
         traceId = validatedTraceId
+        runtimeState.currentRequestTraceId = validatedTraceId
         processedAction = action
         processedPayload = payload
         validateSharedGroupWriteSafety(action, payload)
@@ -9967,6 +10350,10 @@ local function processRequestFile()
     else
         writeResponse(requestId, traceId, false, resultOrError, telemetry)
     end
+    if processedAction == "clone_group_reference" then
+        removeFile(PREFIX .. ".crash-breadcrumb.json")
+    end
+    runtimeState.currentRequestTraceId = nil
     currentRequestTelemetry = nil
     removeFile(PROCESSING_FILE)
     return true

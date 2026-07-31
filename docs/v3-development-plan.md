@@ -380,14 +380,29 @@ Automated clone slice implemented on 2026-07-30:
 - `cloneIntent` is required and constrained by the authoritative command
   policy. The v3 description omits legacy clone booleans and rejects
   `deepCopy`.
-- postconditions reread UUID association and reference counts, then compare
-  source notes, Automation, Smart Pitch, Track metadata, and ordered Reference
-  snapshots.
+- same-callback postconditions reread UUID association, reference counts,
+  target association, Track metadata, and reference-local state. Source notes,
+  Automation, and Smart Pitch are captured before Undo and confirmed by a
+  separate fresh host read because SynthV 2.2.1 can terminate on an immediate
+  post-library-insertion GroupContent read.
 - fake-host cases CLN-001 through CLN-007 cover linked reference ownership,
   isolated Group mutation, ambiguous Track rejection, empty shells, and the
   detached Vocal manual-review warning.
-- real SynthV linked/isolated/shell acceptance remains pending; installation
-  and host mutation are intentionally deferred to the controller's checkpoint.
+- real SynthV 2.2.1 Pro standalone acceptance passed on the disposable
+  `test.svp` working copy:
+  - linked trace `tr_fy8hnWX24j9vZ8SY` preserved the source UUID, increased
+    the shared reference count, and one Edit-menu Undo restored Track 2 from
+    three Groups/84 notes to two Groups/42 notes while Track 1 stayed at
+    42 notes;
+  - isolated trace `tr_mCtgKI_LkSBFEIix` created UUID
+    `c9f0e34a-7999-4ab0-92fd-edb7acc0b836` distinct from source UUID
+    `dede7f4c-8061-40dd-b8b5-fdaf8dd878ed`, with one reference and one Undo;
+    fresh reads showed Track 1 unchanged at 42 notes and the new library Group
+    at 42 notes/reference count 1, then one Undo removed it and restored the
+    two-Group baseline;
+  - the Track-shell test created one verified-empty temporary Track, and one
+    Undo removed only that Track while the source and prior isolated test Track
+    remained unchanged.
 
 Exit criteria:
 

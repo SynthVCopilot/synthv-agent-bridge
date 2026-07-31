@@ -303,9 +303,16 @@ The public intent must be explicit:
 
 - every cloned content target has a different Group UUID from its source;
 - each expected new Group has the intended fresh reference count;
-- source note, Automation, and Smart Pitch summaries are unchanged;
+- the source note, Automation, and Smart Pitch summary is captured before
+  Undo and confirmed unchanged through a separate fresh host read;
 - a postcondition proves that references point to the intended targets;
 - non-main Vocal identity limitations are reported and require manual review.
+
+Do not reread GroupContent through a proxy in the same Lua callback after
+inserting a cloned Note Group into the library. SynthV 2.2.1 can terminate the
+host on an immediate post-mutation Automation access. Same-callback
+postconditions are therefore structural and reference-local; source-content
+preservation is verified by the next authoritative read.
 
 No boolean named only `deepCopy` is sufficient to represent these semantics.
 
