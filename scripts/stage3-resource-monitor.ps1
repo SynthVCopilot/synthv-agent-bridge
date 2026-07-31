@@ -20,7 +20,8 @@ param(
         [IO.Path]::GetTempPath(),
         "synthv-agent-stage3-resource-monitor-result.json"
     ),
-    [switch]$Resume
+    [switch]$Resume,
+    [switch]$SelfTestFileAge
 )
 
 $ErrorActionPreference = "Stop"
@@ -43,6 +44,40 @@ function Write-JsonLine {
     Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value (
         $Value | ConvertTo-Json -Compress -Depth 8
     )
+}
+
+function Get-SaneFileAgeMilliseconds {
+    param(
+        [string]$Path,
+        [int]$Attempts = 5,
+        [int]$RetryMilliseconds = 20
+    )
+
+    for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                $nowUtc = [DateTime]::UtcNow
+                $lastWriteUtc = [IO.File]::GetLastWriteTimeUtc($Path)
+                if (
+                    $lastWriteUtc.Year -ge 2000 -and
+                    $lastWriteUtc -le $nowUtc.AddMinutes(1)
+                ) {
+                    return [Math]::Max(
+                        [double]0,
+                        [Math]::Round(($nowUtc - $lastWriteUtc).TotalMilliseconds, 3)
+                    )
+                }
+            }
+        } catch {
+            if ($attempt -eq $Attempts) {
+                return $null
+            }
+        }
+        if ($attempt -lt $Attempts -and $RetryMilliseconds -gt 0) {
+            Start-Sleep -Milliseconds $RetryMilliseconds
+        }
+    }
+    return $null
 }
 
 function Get-SoakProgress {
@@ -79,30 +114,16 @@ function Get-ResourceSample {
     $nodeProcesses = @(Get-Process -Name "node" -ErrorAction SilentlyContinue)
     $heartbeatAgeMs = $null
     if (Test-Path -LiteralPath $statusFile) {
-        $heartbeatAgeMs = [Math]::Max(
-            0,
-            [Math]::Round(
-                ([DateTimeOffset]::UtcNow -
-                    (Get-Item -LiteralPath $statusFile).LastWriteTimeUtc).TotalMilliseconds,
-                3
-            )
-        )
+        $heartbeatAgeMs = Get-SaneFileAgeMilliseconds $statusFile
     }
 
     $residuals = @()
     foreach ($suffix in $residualSuffixes) {
         $path = "$ipcPrefix$suffix"
         if (Test-Path -LiteralPath $path) {
-            $item = Get-Item -LiteralPath $path
             $residuals += [pscustomobject]@{
-                name = $item.Name
-                ageMs = [Math]::Max(
-                    0,
-                    [Math]::Round(
-                        ([DateTimeOffset]::UtcNow - $item.LastWriteTimeUtc).TotalMilliseconds,
-                        3
-                    )
-                )
+                name = [IO.Path]::GetFileName($path)
+                ageMs = Get-SaneFileAgeMilliseconds $path
             }
         }
     }
@@ -160,6 +181,36 @@ function Test-MonotonicGrowth {
 function Get-CompletedBatchIndex {
     param([int]$CycleIndex)
     return [int]([Math]::Floor($CycleIndex / 20) * 20)
+}
+
+if ($SelfTestFileAge) {
+    $probePath = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        "synthv-stage3-file-age-$([Guid]::NewGuid().ToString('N')).tmp"
+    )
+    try {
+        Set-Content -LiteralPath $probePath -Value "probe" -Encoding UTF8
+        $freshAgeMs = Get-SaneFileAgeMilliseconds $probePath
+        [IO.File]::SetLastWriteTimeUtc(
+            $probePath,
+            [DateTime]::SpecifyKind([DateTime]::new(1980, 1, 1), [DateTimeKind]::Utc)
+        )
+        $invalidAgeMs = Get-SaneFileAgeMilliseconds $probePath 1 0
+        if ($null -eq $freshAgeMs -or $freshAgeMs -gt 5000) {
+            throw "Fresh file age was not reported as a bounded double."
+        }
+        if ($null -ne $invalidAgeMs) {
+            throw "A transient invalid file timestamp was accepted as a real age."
+        }
+        [pscustomobject]@{
+            outcome = "passed"
+            freshAgeMs = $freshAgeMs
+            invalidAgeMs = $invalidAgeMs
+        } | ConvertTo-Json -Compress
+        exit 0
+    } finally {
+        Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 if ($SampleSeconds -lt 5) {

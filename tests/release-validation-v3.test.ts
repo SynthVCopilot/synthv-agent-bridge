@@ -133,6 +133,10 @@ test("Stage 3 resource monitor samples settled and post-batch host state", () =>
   assert.match(source, /\[switch\]\$Resume/u);
   assert.match(source, /advanced beyond resource checkpoint/u);
   assert.match(source, /refusing to fabricate a historical settled sample/u);
+  assert.match(source, /Get-SaneFileAgeMilliseconds/u);
+  assert.match(source, /\[double\]0/u);
+  assert.match(source, /\$lastWriteUtc\.Year -ge 2000/u);
+  assert.match(source, /\[switch\]\$SelfTestFileAge/u);
 });
 
 test("Stage 3 resource quiescence regression rejects samples crossed by later writes", () => {
