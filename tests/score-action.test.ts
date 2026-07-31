@@ -116,7 +116,7 @@ test("local score actions inspect in Node and import through one guarded add_not
     preferredProtocolVersion: 3,
     state: "running",
     updatedAtEpochMs: Date.now(),
-    bridgeVersion: "0.2.0-alpha.1",
+    bridgeVersion: "0.2.0",
     executorBuildId: EXECUTOR_BUILD_ID,
     host: { osType: "Windows" },
     projectFile: "test.svp",

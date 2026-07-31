@@ -1,6 +1,6 @@
 {
   "name": "synthv-agent-bridge",
-  "version": "0.2.0-alpha.1",
+  "version": "0.2.0",
   "description": "A reliable MCP bridge for controlling Synthesizer V Studio through its scripting API.",
   "private": true,
   "type": "module",

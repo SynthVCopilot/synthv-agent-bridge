@@ -285,7 +285,7 @@ async function runLive(options) {
     stderr: "pipe",
   });
   const client = new Client(
-    { name: "synthv-agent-release-validation", version: "0.2.0-alpha.1" },
+    { name: "synthv-agent-release-validation", version: "0.2.0" },
     { capabilities: {} },
   );
   const durations = [];

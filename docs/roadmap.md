@@ -85,20 +85,22 @@ The native side panel remains an optional compact review console. Future work
 is limited to stability, compatibility, and interaction fixes; it is not a
 performance roadmap or a second SynthV editing interface.
 
-## Current — v3 alpha stabilization
+## Current — v0.2.0 reduced-stable maintenance
 
 - Keep the completed six-tool migration and 64/64 Action coverage checks from
-  drifting while release evidence is collected.
+  drifting after the reduced-stable release.
 - Preserve the completed Vocal onboarding, 31 verified write Actions, and
   passed human listening result for the integrated tuning scenario.
 - Keep the seven native-risk clone/transaction/harmony paths explicitly
   experimental and disabled until a future repetition matrix proves them safe.
 - Preserve the completed Stage 3 read/reload/concurrency, reduced-capability,
-  tracing A/B, write/Undo, and listening evidence; pass the user-approved
-  one-hour synchronized soak and settled-resource gates.
+  tracing A/B, write/Undo, listening, and one-hour functional-soak evidence.
+- Re-run the fixed settled-resource monitor as follow-up hardening; the user
+  explicitly waived it for v0.2.0, so no resource PASS is claimed.
 - Keep Snapshot LRU disabled until traces prove repeated read projection is a
   significant cost.
-- Make the evidence-based full stable, reduced stable, or remain-Alpha decision.
+- Revisit the seven experimental paths only with new host versions and a fresh
+  crash-safe repetition matrix.
 
 See [v3 development plan](v3-development-plan.md).
 

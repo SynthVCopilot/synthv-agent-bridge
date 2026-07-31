@@ -4,6 +4,11 @@ Status: enforced budgets with measured Phase 6 baseline
 
 Date: 2026-07-31
 
+Release note: v0.2.0 retains these budgets. The one-hour functional Stage 3
+gate passed; the post-fix settled-resource rerun was explicitly waived and is
+not represented as a resource PASS. Historical build IDs below identify the
+measurements that produced each baseline.
+
 These targets prioritize correctness. A budget failure blocks optimization
 claims but never permits dropping required Guards, preflight, or
 postconditions.

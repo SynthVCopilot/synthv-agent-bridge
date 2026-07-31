@@ -1,10 +1,10 @@
 # v3 Test Matrix
 
-Status: enforced Alpha baseline; current release decision remains Alpha
+Status: v0.2.0 reduced-stable baseline; seven native-risk writes remain experimental
 
 Date: 2026-07-31
 
-Current automated baseline: 249 passing tests. Fresh real-host acceptance uses
+Current automated baseline: 250 passing tests. Fresh real-host acceptance uses
 SynthV Studio 2 Pro 2.2.1 standalone and the saved disposable
 `D:\Projects\sv\test.svp` project. The current build has 17/17 Query and 9/9
 UI actions exercised, plus the ordinary writes listed below. Four reproducible
@@ -15,16 +15,20 @@ complete. Stage 3 read, concurrency, reduced-capability, reload, trace A/B,
 200 ordinary write/Undo, and 30 linked-clone/Undo gates have passed. At the
 user-approved one-hour deadline, the dense continuation also completed 200
 writes, 3,400 reads, and 10 reloads with the prepared digest restored. The
-original four-hour duration was not run, and the resource gate failed in its
-declared final sampling window, so this matrix does not support a stable claim.
+original four-hour duration was not run. The first resource gate failed in its
+declared final sampling window; a synchronized rerun exposed and fixed a
+resource-monitor sampling bug, after which the user explicitly waived another
+one-hour rerun. That resource gate is therefore recorded as waived/not passed.
+The release decision is reduced stable because all seven host-risk paths are
+disabled before IPC, not because the resource evidence was reclassified.
 
 The executable Stage 3 harness now covers the read, concurrent-request,
 Bridge-reload/Session-invalidation, reduced-capability fail-closed and trace
 A/B slices. Sub-threshold real-host development smoke has passed for each new
 stability slice. The formal read, concurrency, fail-closed, reload, trace A/B,
 ordinary write/Undo and linked-clone/Undo counts now also pass. The one-hour
-functional soak passes, while the four-hour duration and settled-resource gate
-remain unmet release evidence.
+functional soak passes. The four-hour duration was replaced by explicit user
+direction, and the post-fix settled-resource rerun is an acknowledged follow-up.
 
 All 38 live semantic writes are joined to the machine-readable official API
 inventory, Command Policy catalog, and live capability-stability registry.
@@ -174,7 +178,7 @@ Fixtures contain synthetic lyrics only and are not `.svp` files.
 
 ## Real SynthV acceptance matrix
 
-Fresh `0.2.0-alpha.1` evidence from the current installed build:
+Fresh v3 real-host evidence used for the `0.2.0` release decision:
 
 | Area | Environment and result |
 |---|---|
@@ -189,7 +193,7 @@ Fresh `0.2.0-alpha.1` evidence from the current installed build:
 | Tuning tail | Voice/Vocal Modes, phoneme, Retake, Smart Pitch, Automation, humanization, expression, lyrics, and integrated tuning passed authoritative readback and visible Undo recovery; human listening confirmation passed |
 | Visible Undo focus recovery | A transient foreground race caused fail-closed before Undo; one actual Edit-menu Undo restored the complete digest. A deterministic injected-focus regression changed from red with one attempt to green with three bounded attempts, and window coordinates are reread after movement |
 | Stage 3 repetition | 200/200 ordinary writes covered all 31 verified actions; every write changed state, created one Undo Record, and one visible Undo restored the identical full-project digest. The user-approved one-hour dense continuation also passed 200 writes, 3,400 reads and 10 reloads on the same timeline; the original four-hour duration was not run |
-| Stage 3 resources | `FAIL` under the declared gate: warm baseline working set/private bytes `320,593,920 / 352,129,024 B`; final-window ratios `2.471113 / 2.338203` exceeded `1.2`, and only 9/10 batch samples were captured. A read-only sample about 148 seconds later recovered to `1.040935 / 1.009957`, but does not replace the declared final sample or missing batch |
+| Stage 3 resources | `WAIVED / NOT PASS`: the first declared gate ended with ratios `2.471113 / 2.338203` and 9/10 batch samples; a later sample recovered. A synchronized repeat completed all 200 writes/3,400 reads/10 reloads, but its monitor crashed at the final checkpoint because a PowerShell overload selected `Int32` and a transient invalid file timestamp escaped validation. Commit `b8e39b4` fixed both defects and added a file-age self-test; the user canceled and explicitly waived the next one-hour repeat. No resource PASS is claimed. |
 
 The authoritative per-action status is the machine-readable `actionGroups`
 inventory in `docs/sv2-api-coverage-v3.md`. Current totals are 17 verified

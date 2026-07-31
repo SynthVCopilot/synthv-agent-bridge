@@ -218,7 +218,7 @@ test("core-only installation omits the optional sidebar without deleting one", a
   ) as Record<string, unknown>;
   assert.equal(installManifest.schemaVersion, 2);
   assert.equal(installManifest.protocolVersion, 3);
-  assert.equal(installManifest.packageVersion, "0.2.0-alpha.1");
+  assert.equal(installManifest.packageVersion, "0.2.0");
   assert.equal(
     installManifest.executorBuildId,
     EXECUTOR_BUILD_ID,

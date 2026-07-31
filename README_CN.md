@@ -35,14 +35,14 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 > 的完整唱法面板，或重新输入它的全部唱法名称，不能沿用上一个 Vocal 的
 > 列表。
 
-> 状态：**v0.2.0-alpha.1／协议 v3**。六工具语义入口、类型化 Query
+> 状态：**v0.2.0／协议 v3（收缩后的稳定能力面）**。六工具语义入口、类型化 Query
 > Context、紧凑 Command 结果、组件构建一致性检查、统一命令内核和全部
-> 私有操作迁移已经完成。当前正在执行 Alpha 发布验证：17/17 Query、9/9 UI
+> 私有操作迁移已经完成。发布验证已有 17/17 Query、9/9 UI
 > 和 31/38 写 Action 已有当前构建真机证据；7 条发生原生宿主风险的
 > clone/transaction/harmony 路径已标记 experimental 并在工程 IPC 前禁用，
-> 已无 pending 写 Action，人工听感和 Stage 3 功能写入/Undo 矩阵已通过；
-> stable `0.2.0` 前仍须通过用户批准的一小时同步长稳与 settled-resource 门禁。
-> 工程写入只能在已保存的工作副本上测试。
+> 已无 pending 写 Action；人工听感、Stage 3 功能写入/Undo 矩阵，以及用户批准的
+> 一小时长稳（200 writes、3,400 reads、10 reloads）均已通过。用户明确豁免了修复后
+> 资源监控重跑；该项作为后续风险记录，不记为通过。工程写入只能在已保存的工作副本上测试。
 
 参阅 [v3 架构](docs/architecture-v3.md)、
 [开发计划](docs/v3-development-plan.md)和
@@ -63,7 +63,7 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 | 安全编辑 | 使用最新指纹、带类型/作用域的 `contextId` 和 Guard Token 保护写入；完整预检独立事务步骤，按需解析正向依赖；创建一个 SynthV 撤销记录，并可选保留受保护回滚计划。 |
 | 审核与本地隐私 | 在可选原生侧边栏中审核、应用、放弃或取消受保护预览。文件 IPC 保持本地：Bridge 不解析 `.svp` 文件、不打开网络端口，也不调用 AI API。 |
 
-> 当前 Alpha 为避免已复现的 SynthV 2.2.1 原生崩溃，在工程 IPC 前禁用
+> 当前稳定能力面为避免已复现的 SynthV 2.2.1 原生崩溃，在工程 IPC 前禁用
 > isolated Group clone、Note Group/Track/Track-shell clone、和声轨以及
 > transaction apply/rollback；上表描述完整设计能力，不表示这些实验路径在
 > 当前构建可用。linked Group reference clone 仍可用。

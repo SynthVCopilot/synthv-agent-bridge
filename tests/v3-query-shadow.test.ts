@@ -40,7 +40,7 @@ async function writeStatus(config: BridgeConfig): Promise<void> {
     preferredProtocolVersion: 3,
     state: "running",
     updatedAtEpochMs: Date.now(),
-    bridgeVersion: "0.2.0-alpha.1",
+    bridgeVersion: "0.2.0",
     executorBuildId: EXECUTOR_BUILD_ID,
     host: { osType: "Windows" },
     projectFile: "query-shadow-test.svp",

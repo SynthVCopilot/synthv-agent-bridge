@@ -12,7 +12,7 @@ if debug and debug.getinfo then
 end
 
 local SCRIPT_NAME = "Start SynthV Agent Bridge"
-local BRIDGE_VERSION = "0.2.0-alpha.1"
+local BRIDGE_VERSION = "0.2.0"
 local PROTOCOL_VERSION = 3
 local EXECUTOR_BUILD_ID = "__SYNTHV_AGENT_EXECUTOR_BUILD_ID__"
 local MIN_EDITOR_VERSION = 131330 -- Synthesizer V Studio 2.1.2

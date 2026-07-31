@@ -22,7 +22,7 @@ local now = os.time() * 1000
 writeFile(
     prefix .. ".status.json",
     string.format(
-        '{"state":"running","updatedAtEpochMs":%d,"bridgeVersion":"0.2.0-alpha.1","executorBuildId":"sv3-lua-0.2.0-alpha.1-6"}\n',
+        '{"state":"running","updatedAtEpochMs":%d,"bridgeVersion":"0.2.0","executorBuildId":"sv3-lua-0.2.0-6"}\n',
         now
     )
 )
@@ -31,7 +31,7 @@ writeFile(
     table.concat({
         "synthv-agent-bridge-sidebar-client-status-v1",
         "state=running",
-        "version=0.2.0-alpha.1",
+        "version=0.2.0",
         "updatedAtEpochMs=" .. tostring(now),
         ""
     }, "\n")
@@ -210,15 +210,15 @@ assert(clientInfo.type == "SidePanelSection", "side panel client type was not re
 assert(clientInfo.versionNumber == 7, "side panel version number was not updated")
 
 local state = getSidePanelSectionState()
-assert(state.title:find("0.2.0-alpha.1", 1, true), "side panel title has no version")
+assert(state.title:find("0.2.0", 1, true), "side panel title has no version")
 assert(#state.rows == 4, "side panel did not start in compact mode")
 
 local bridgeStatusWidget = state.rows[2].columns[1].value
 local clientStatusWidget = state.rows[2].columns[2].value
 local taskStateWidget = state.rows[3].columns[1].value
 local diagnosticsWidget = state.rows[3].columns[2].value
-assert(bridgeStatusWidget.value:find("B 0.2.0-alpha.1", 1, true), "Bridge heartbeat was not displayed")
-assert(clientStatusWidget.value:find("M 0.2.0-alpha.1", 1, true), "MCP heartbeat was not displayed")
+assert(bridgeStatusWidget.value:find("B 0.2.0", 1, true), "Bridge heartbeat was not displayed")
+assert(clientStatusWidget.value:find("M 0.2.0", 1, true), "MCP heartbeat was not displayed")
 assert(taskStateWidget.value:find("Idle", 1, true), "task state was not displayed")
 diagnosticsWidget.callback()
 assert(lastMessage and lastMessage:find("IPC:", 1, true), "diagnostics did not show the IPC path")

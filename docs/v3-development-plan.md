@@ -1,6 +1,6 @@
 # v3 Incremental Development Plan
 
-Status: implementation Phases 0-8 complete; final alpha release gate active
+Status: Phases 0-9 complete; v0.2.0 released with a reduced-stable surface
 
 Date: 2026-07-31
 
@@ -546,7 +546,7 @@ Exit criteria:
 - existing action catalog remains complete;
 - current and v3 documentation no longer disagree.
 
-## Phase 9: final alpha release gate and future stable decision — active
+## Phase 9: final release gate and stable decision — complete
 
 Collect:
 
@@ -561,7 +561,7 @@ Only if file IPC remains the dominant measured cost should a new ADR evaluate a
 named pipe or another local transport. Any future transport must retain local,
 network-free defaults and the versioned protocol semantics.
 
-Fresh 2026-07-31 validation keeps Phase 9 active. Isolated Group-reference
+Fresh 2026-07-31 validation closed Phase 9. Isolated Group-reference
 clone followed by Undo reproduced the same SynthV `0xc0000005` crash three
 times, and Track-shell creation reproduced one `0xc0000409` crash. The public
 boundary now classifies isolated Group clone, Note Group/Track/Track-shell
@@ -574,15 +574,16 @@ The current build has 17/17 Query and 9/9 UI actions verified, plus 31/38
 writes verified, 7/38 experimental, and 0/38 pending. Vocal onboarding, the
 machine-verifiable tuning surface, and human listening are complete. Stage 3
 ordinary write/Undo and linked-clone/Undo repetition are complete. The
-user-approved one-hour dense functional soak also completed, while the original
-four-hour duration and declared resource gate remain unmet. An executable
+user-approved one-hour dense functional soak also completed. The original
+four-hour duration was replaced by explicit user direction, and the post-fix
+resource rerun is recorded as waived/not passed. An executable
 read-matrix driver now generates the exact 1,000
 call/17-Action schedule, enforces project/Session/executor and response-budget
 stop conditions, and refuses a full live run without explicit Stage 2
 completion. Its 17-call current-host development smoke passed, but is not
-classified as Stage 3 evidence. Publishing the diagnostic Alpha branch remains
-possible, but neither full nor reduced `0.2.0` stable is supported by the
-current evidence.
+classified as Stage 3 evidence. The final decision is reduced-stable `0.2.0`:
+the 31 verified writes are supported, while all seven native-risk paths remain
+experimental and fail before project IPC.
 
 The stability driver now also provides executable dry-run and live slices for
 200-request concurrency, 30 Bridge reload/Session invalidation cycles, the
@@ -622,8 +623,10 @@ working-set/private-byte baseline was `320,593,920 / 352,129,024 B`, while the
 final ratios were `2.471113 / 2.338203`, and only 9 of 10 batch samples were
 captured. A later read-only diagnostic sample recovered to ratios
 `1.040935 / 1.009957`, but cannot replace the declared final sample or missing
-batch. Therefore the functional one-hour run passes, but it neither satisfies
-the original four-hour duration nor supports a stable release.
+batch. Therefore the functional one-hour run passes. The user explicitly
+replaced the four-hour requirement with one hour and waived a further post-fix
+resource repeat. The resource gate remains `WAIVED / NOT PASS`; this does not
+widen the reduced-stable surface or reclassify the seven experimental paths.
 
 The stability dry-run freezes the exact completed write distribution:
 200 ordinary calls over all 31 verified Actions (7 each for the first 14 and 6

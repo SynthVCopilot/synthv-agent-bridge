@@ -34,17 +34,18 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 > changing Vocals, capture the new Vocal's complete panel or type all of its
 > singing-style names again; do not reuse the previous Vocal's list.
 
-> Status: **v0.2.0-alpha.1 / protocol v3**. The six-tool semantic Facade,
+> Status: **v0.2.0 / protocol v3 (reduced-stable surface)**. The six-tool semantic Facade,
 > typed Query Contexts, compact Command outcomes, component build-coherence
 > checks, Query Projector, common Command Kernel, semantic write-policy
 > catalog, aggregate tuning, and dependent transaction recovery are
-> implemented. Alpha validation currently has fresh evidence for 17/17 Query,
+> implemented. Release validation has fresh evidence for 17/17 Query,
 > 9/9 UI, and 31/38 write Actions. Seven clone/transaction/harmony paths with
 > native-host risk are marked experimental and disabled before project IPC;
-> no write Action remains pending. Human listening and the Stage 3 functional
-> write/Undo matrix have passed. The user-approved one-hour synchronized soak
-> must still pass its settled-resource gate before stable `0.2.0`. Test writes
-> only on saved working copies.
+> no write Action remains pending. Human listening, the Stage 3 functional
+> write/Undo matrix, and the user-approved one-hour soak (200 writes, 3,400
+> reads, 10 reloads) passed. The post-fix resource-monitor rerun was explicitly
+> waived for this release and remains documented as follow-up risk rather than
+> being represented as a pass. Test writes only on saved working copies.
 
 See the [v3 architecture](docs/architecture-v3.md),
 [development plan](docs/v3-development-plan.md), and
@@ -65,7 +66,7 @@ See the [v3 architecture](docs/architecture-v3.md),
 | Safe editing | Protect writes with fresh fingerprints, typed/scope-bound `contextId` values, and Guard Tokens; fully preflight independent transaction steps, resolve forward dependencies just in time, create one SynthV undo record, and optionally retain a guarded rollback plan. |
 | Review and local privacy | Review, apply, dismiss, or cancel guarded previews in the optional native side panel. File IPC stays local: the Bridge does not parse `.svp` files, open a network port, or call an AI API. |
 
-> To avoid reproducible SynthV 2.2.1 native crashes, the current Alpha rejects
+> To avoid reproducible SynthV 2.2.1 native crashes, the current stable surface rejects
 > isolated Group clone, Note Group/Track/Track-shell clone, harmony Track, and
 > transaction apply/rollback before project IPC. The table describes the full
 > design surface, not current availability of those experimental paths. Linked

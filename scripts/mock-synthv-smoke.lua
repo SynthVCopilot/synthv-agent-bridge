@@ -1146,7 +1146,7 @@ do
 end
 
 local pingResponse=call("ping","{}")
-assert(pingResponse:find('"bridgeVersion":"0.2.0-alpha.1"',1,true),"expected Bridge version 0.2.0-alpha.1")
+assert(pingResponse:find('"bridgeVersion":"0.2.0"',1,true),"expected Bridge version 0.2.0")
 local initialSessionToken=extractJsonString(pingResponse,"sessionToken")
 local reloadResponse=call("reload_bridge","{}")
 assert(reloadResponse:find('"reloading":true',1,true),"hot reload was not acknowledged")

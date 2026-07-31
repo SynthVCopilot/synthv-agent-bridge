@@ -1,5 +1,10 @@
 # SynthV Agent Bridge 当前分支综合交接报告
 
+> **已被最终发布记录取代：** 本文保留为 `7383b1c` 时点的历史交接快照。
+> 2026-07-31 的最终状态、资源重测豁免与 v0.2.0 决策以
+> [`v3-test-evidence-2026-07-31-1510.zh-CN.md`](v3-test-evidence-2026-07-31-1510.zh-CN.md)
+> 和 [`v3-test-matrix.md`](v3-test-matrix.md) 为准。
+
 > - 面向：在另一台 PC 上接手开发、自动化测试和 Synthesizer V 真机验证的 Agent
 > - 快照日期：2026-07-31（Europe/Berlin）
 > - 快照分支：`codex/v3-implementation`

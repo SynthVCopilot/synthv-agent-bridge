@@ -2,6 +2,10 @@
 
 All notable changes will be documented in this file.
 
+## Unreleased
+
+- No unreleased changes.
+
 ## 0.2.0-alpha.1 - 2026-07-30
 
 ### Breaking
@@ -66,7 +70,13 @@ All notable changes will be documented in this file.
   but stable `0.2.0` still requires the release gates outside the Phase 4-6
   implementation plan.
 
-## Unreleased
+## 0.2.0 - 2026-07-31
+
+This release promotes the verified 31-write v3 surface to a reduced-stable
+baseline. Seven native-risk clone/transaction/harmony paths remain
+experimental and fail before project IPC. The one-hour functional Stage 3
+soak passed; the user explicitly waived the post-fix resource-monitor rerun,
+which remains a documented follow-up risk and is not claimed as a pass.
 
 ### Added
 
