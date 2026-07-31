@@ -358,6 +358,14 @@ Errors are classified by phase and recovery:
 Large raw Guard values are never included in a normal error. Support telemetry
 uses hashes, counts, target kinds, and phase information.
 
+High-risk clone and transaction paths additionally maintain one bounded local
+crash breadcrumb while the host call is in flight. It contains only the
+`traceId`, action, last stage, build identity, Session token, and timestamp; it
+contains no lyrics, notes, curves, raw fingerprints, or request payloads.
+Successful completion and handled failures remove the breadcrumb. Its purpose
+is to identify the last native-host boundary after a process crash, not to
+provide recovery, retry, or proof that no mutation occurred.
+
 ## Implemented internal seams
 
 The v3 runtime uses these seams:

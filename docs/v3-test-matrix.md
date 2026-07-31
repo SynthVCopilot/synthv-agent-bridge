@@ -4,13 +4,15 @@ Status: enforced alpha baseline
 
 Date: 2026-07-30
 
-Current automated baseline: 215 passing tests. Recorded real-host acceptance
+Current automated baseline: 216 passing tests. Recorded real-host acceptance
 uses SynthV Studio 2 Pro 2.2.1 standalone and a saved disposable test project.
 It currently covers the Mixer command/no-op path, Session invalidation,
 Sidebar Apply/Undo, isolated clone/source preservation, and closed-range
-Automation/Undo scenarios, plus the first Mixer Query Projector shadow-parity
-slice and the compact/explicit Group Voice Query Projector slice; it does not
-certify every Semantic action. Collection acceptance additionally covers
+Automation/Undo scenarios, a guarded note transform, and representative
+successful/dependent-failure transaction recovery, plus the first Mixer Query
+Projector shadow-parity slice and the compact/explicit Group Voice Query
+Projector slice; it does not certify every Semantic action. Collection
+acceptance additionally covers
 `list_tracks` order, optional public fields, nested read-only Contexts, private
 fingerprint isolation, and count-only projection. Automated collection
 coverage also includes `list_note_groups` order, shared ownership summaries,
@@ -184,9 +186,20 @@ Recorded `0.2.0-alpha.1` evidence:
 | Isolated clone | New UUID differed, reference count was one, deleting/restoring the clone's final note never changed the 42-note source |
 | Track shell/delete | A verified-empty Track shell was removed by one Undo boundary while the source Track and isolated clone Track remained |
 | Automation | A gender curve was visibly applied to the test Group and one Undo restored the prior flat curve |
+| Note transform | The selected Group's first note changed from MIDI pitch 60 to 61 with one Undo record and verified readback; one Edit-menu Undo restored pitch 60 while all 42 notes remained |
+| Transaction success | A one-step Track creation and a two-step dependent create/update both completed with one Undo record; the two-step result reported two changes, and one Edit-menu Undo removed the created Track |
+| Transaction recovery | A dependent stale-Track preflight failed after Track creation with `wrote=true` and `undoRequired=true`; one Edit-menu Undo removed the created Track and restored the original two 42-note Tracks |
 
 These are bounded representative host checks, not a claim that every official
 API method has been manually exercised.
+
+One initial two-step transaction attempt caused a SynthV native
+`0xc0000005` APPCRASH before a response was written. The same one-step,
+two-step-success, and dependent-failure cases then completed without recurrence
+after diagnostic crash breadcrumbs were installed. Transaction real-host
+coverage therefore remains `sampled`, not fully verified. The breadcrumb
+records only trace, action, stage, build, and Session identifiers; successful
+and handled-failure paths remove it.
 
 At minimum, each release candidate records:
 

@@ -525,7 +525,7 @@ Actions, aggregate mismatches, blank evidence, or unknown real-host status.
       {"action":"import_monophonic_score","aggregates":["GroupContent"],"preflight":"bounded local snapshot, rights confirmation and shared policy","postcondition":"hostReadback","automated":"score import contracts and Fake Host","realHost":"pending"},
       {"action":"add_notes","aggregates":["GroupContent"],"preflight":"complete bounded note plan and shared policy","postcondition":"hostReadback","automated":"note Fake Host matrix","realHost":"verified"},
       {"action":"edit_notes","aggregates":["GroupContent"],"preflight":"fresh per-note Guards and shared policy","postcondition":"hostReadback","automated":"guarded note Fake Host matrix","realHost":"verified"},
-      {"action":"transform_notes","aggregates":["GroupContent"],"preflight":"fresh scoped note Guards, time axis and geometry validation","postcondition":"hostReadback","automated":"transform Fake Host matrix","realHost":"sampled"},
+      {"action":"transform_notes","aggregates":["GroupContent"],"preflight":"fresh scoped note Guards, time axis and geometry validation","postcondition":"hostReadback","automated":"transform Fake Host matrix","realHost":"verified"},
       {"action":"set_note_phoneme_properties","aggregates":["GroupContent"],"preflight":"fresh per-note Guards and phoneme ranges","postcondition":"hostReadback","automated":"phoneme contract and Fake Host","realHost":"pending"},
       {"action":"generate_note_retake","aggregates":["GroupContent"],"preflight":"fresh note/Retake Guard and host capability","postcondition":"hostReadback","automated":"Retake contracts and Fake Host","realHost":"pending"},
       {"action":"activate_note_retake","aggregates":["GroupContent"],"preflight":"fresh note/Retake Guard and Take bounds","postcondition":"hostReadback","automated":"Retake contracts and Fake Host","realHost":"pending"},
@@ -543,7 +543,7 @@ Actions, aggregate mismatches, blank evidence, or unknown real-host status.
       {"action":"delete_note_retake","aggregates":["GroupContent"],"preflight":"fresh note/Retake Guard and Take bounds","postcondition":"hostReadback","automated":"Retake contracts and Fake Host","realHost":"pending"},
       {"action":"delete_pitch_controls","aggregates":["GroupContent"],"preflight":"fresh per-control Guards and shared policy","postcondition":"hostReadback","automated":"Smart Pitch Fake Host matrix","realHost":"sampled"},
       {"action":"clear_automation","aggregates":["GroupContent"],"preflight":"fresh curve Guard, closed range and shared policy","postcondition":"hostReadback","automated":"Automation endpoint Fake Host matrix","realHost":"verified"},
-      {"action":"apply_transaction","aggregates":["Transaction"],"preflight":"all independent steps before Undo and dependent steps just in time","postcondition":"transactionSummary","automated":"transaction Fake Host matrix","realHost":"pending"},
+      {"action":"apply_transaction","aggregates":["Transaction"],"preflight":"all independent steps before Undo and dependent steps just in time","postcondition":"transactionSummary","automated":"transaction Fake Host matrix plus redacted crash breadcrumbs","realHost":"sampled"},
       {"action":"rollback_transaction","aggregates":["Transaction"],"preflight":"stored reverse plan with fresh per-step guards","postcondition":"transactionSummary","automated":"transaction Fake Host matrix","realHost":"pending"}
     ]
   }

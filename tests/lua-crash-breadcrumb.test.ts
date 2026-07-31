@@ -12,24 +12,34 @@ import test from "node:test";
 
 const probes = [
   {
+    mode: "apply_transaction.addTrack",
+    exitCode: 90,
+    action: "apply_transaction",
+    checkpoint: "execute.step.1.before",
+  },
+  {
     mode: "clone_group_reference.addGroupReference",
     exitCode: 86,
+    action: "clone_group_reference",
     checkpoint: "mutate.addGroupReference.before",
   },
   {
     mode: "clone_group_reference.verifySourceAutomation",
     exitCode: 87,
+    action: "clone_group_reference",
     checkpoint:
       "freshRead.sourceSnapshot.automation.loudness.getAllPoints.before",
   },
   {
     mode: "clone_group_reference.verifyReferenceFingerprint",
     exitCode: 88,
+    action: "clone_group_reference",
     checkpoint: "verify.referenceFingerprint.before",
   },
   {
     mode: "clone_group_reference.verifyVocalModeAutomation",
     exitCode: 89,
+    action: "clone_group_reference",
     checkpoint:
       "freshRead.sourceSnapshot.automation.vocalMode.getAllPoints.before",
     forbiddenText: "SensitiveStyleName",
@@ -103,7 +113,7 @@ for (const probe of probes) {
           "updatedAtEpochMs",
         ]);
         assert.equal(breadcrumb.schemaVersion, 1);
-        assert.equal(breadcrumb.action, "clone_group_reference");
+        assert.equal(breadcrumb.action, probe.action);
         assert.equal(breadcrumb.checkpoint, probe.checkpoint);
         assert.match(String(breadcrumb.traceId), /^trace-\d{12}$/u);
         if ("forbiddenText" in probe) {

@@ -441,6 +441,29 @@ Implemented:
   forward `$result` steps resolve just in time and report exactly one recovery
   Undo after any earlier mutation.
 
+### Note and transaction real-host acceptance (2026-07-31)
+
+- Environment: SynthV Studio 2 Pro 2.2.1 standalone on Windows 11 using the
+  saved disposable `test.svp` working copy.
+- Diagnostic build: base commit
+  `b3cd283e41026fb1d8e196010e57d54a1e0ac659`, executor source ID
+  `sv3-lua-0.2.0-alpha.1-8aa5b80cad6618e5040dec2a7b55a1554a83f45a4402e874efcedae5b1b7108b`.
+- `transform_notes` changed the selected Group's first note from MIDI pitch 60
+  to 61 with one Undo and verified readback. One Edit-menu Undo restored pitch
+  60; the 42-note Group remained structurally unchanged.
+- A one-step transaction created one Track with one Undo. A two-step dependent
+  transaction created and renamed one Track, reported two changes and one
+  Undo, and one Edit-menu Undo removed that Track.
+- A deliberately stale dependent step failed in `dependentPreflight` after the
+  first step wrote. The result reported `wrote=true`, `undoRequired=true`, and
+  `TRANSACTION_EXECUTION_FAILED`; one Edit-menu Undo restored the original two
+  42-note Tracks.
+- The first two-step attempt produced a SynthV native `0xc0000005` APPCRASH and
+  no response. After adding redacted transaction-stage crash breadcrumbs, the
+  one-step, two-step-success, and dependent-failure cases did not reproduce the
+  crash. `apply_transaction` remains real-host `sampled` until broader repeated
+  certification; this alpha does not claim the native crash is fixed.
+
 Exit criteria:
 
 - multi-curve same-Group tuning no longer requires separate logical commands;
@@ -538,6 +561,10 @@ Collect:
 Only if file IPC remains the dominant measured cost should a new ADR evaluate a
 named pipe or another local transport. Any future transport must retain local,
 network-free defaults and the versioned protocol semantics.
+
+The intermittent transaction APPCRASH above keeps Phase 9 active. It does not
+block publishing the diagnostic alpha branch, but it blocks declaring
+`0.2.0` stable or `apply_transaction` fully verified.
 
 ## Per-slice work template
 

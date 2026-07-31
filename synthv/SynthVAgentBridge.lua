@@ -11504,6 +11504,10 @@ local function executeTransactionSteps(steps)
             local willMutate = rawStep.preflightWillMutate == true
             if rawStep.dependencyCount > 0 then
                 failurePhase = "resolveDependencies"
+                runtimeState.writeCrashBreadcrumb(
+                    "apply_transaction",
+                    "resolveDependencies.step." .. tostring(index) .. ".before"
+                )
                 step = {
                     action = rawStep.action,
                     payload = resolveResultReferences(
@@ -11515,8 +11519,16 @@ local function executeTransactionSteps(steps)
                     dependencyCount = rawStep.dependencyCount
                 }
                 failurePhase = "dependentPreflight"
+                runtimeState.writeCrashBreadcrumb(
+                    "apply_transaction",
+                    "dependentPreflight.step." .. tostring(index) .. ".before"
+                )
                 willMutate =
                     validateTransactionStepAtUndoBoundary(step, index)
+                runtimeState.writeCrashBreadcrumb(
+                    "apply_transaction",
+                    "dependentPreflight.step." .. tostring(index) .. ".after"
+                )
             end
             if willMutate and not undoOpened then
                 transactionMode = nil
@@ -11525,8 +11537,16 @@ local function executeTransactionSteps(steps)
             end
             failurePhase = "execute"
             transactionMode = "execute"
+            runtimeState.writeCrashBreadcrumb(
+                "apply_transaction",
+                "execute.step." .. tostring(index) .. ".before"
+            )
             local stepResult =
                 invokeActionHandler(step.action, step.payload)
+            runtimeState.writeCrashBreadcrumb(
+                "apply_transaction",
+                "execute.step." .. tostring(index) .. ".after"
+            )
             if type(stepResult) == "table" then
                 stepResult.undoRecordCount = 0
             end
@@ -11864,7 +11884,9 @@ local function processRequestFile()
     else
         writeResponse(requestId, traceId, false, resultOrError, telemetry)
     end
-    if processedAction == "clone_group_reference" then
+    if processedAction == "clone_group_reference"
+        or processedAction == "apply_transaction"
+        or processedAction == "rollback_transaction" then
         removeFile(PREFIX .. ".crash-breadcrumb.json")
     end
     runtimeState.currentRequestTraceId = nil

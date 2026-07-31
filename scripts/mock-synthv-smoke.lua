@@ -833,6 +833,10 @@ function project:getTrack(i)
     return self.tracks[i]
 end
 function project:addTrack(t)
+    if crashProbeArmed
+        and crashProbeMode == "apply_transaction.addTrack" then
+        os.exit(90)
+    end
     self.tracks[#self.tracks+1]=t
     if trackShellPostconditionPitchGetterFailure then
         trackShellPostconditionPitchGetterFailure=false
@@ -2219,6 +2223,9 @@ end
 
 local dependentTransactionUndoBefore=project.undo
 local dependentTransactionTrackCountBefore=#project.tracks
+if crashProbeMode == "apply_transaction.addTrack" then
+    crashProbeArmed = true
+end
 local dependentTransactionResponse=call(
     "apply_transaction",
     '{"summary":"Create and name a track from the prior result","steps":['..
