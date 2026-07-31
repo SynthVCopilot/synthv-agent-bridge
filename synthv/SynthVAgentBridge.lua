@@ -1495,7 +1495,9 @@ local function actionMutatesGroupContent(action, payload, reference)
             return false
         end
         if action == "apply_group_tuning" then
-            return isProvided(payload.noteEdits) or isProvided(payload.automations)
+            return isProvided(payload.noteEdits)
+                or isProvided(payload.automations)
+                or isProvided(payload.pitchControls)
         end
         return true
     end
@@ -8822,144 +8824,422 @@ end
 
 function handlers.add_pitch_controls(payload)
     payload = requireObject(payload, "payload")
-    local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
-    local inputs = requireArray(payload.pitchControls, "pitchControls", 1, 512)
-    local prepared = {}
-    for index = 1, #inputs do
-        local definition = preparePitchControlInput(inputs[index], "pitchControls[" .. index .. "]")
-        local ok, controlOrError = pcall(function()
-            return createPitchControl(definition)
-        end)
-        if not ok then
-            raiseBridgeError("INVALID_ARGUMENT", "SynthV rejected a pitch-control definition", {
-                index = index,
-                cause = tostring(controlOrError)
-            })
+    return executeCommandPipeline({
+        action = "add_pitch_controls",
+        freshRead = function()
+            local project, _track, trackIndex, _reference, group, groupIndex =
+                resolveGroup(payload)
+            local inputs =
+                requireArray(payload.pitchControls, "pitchControls", 1, 512)
+            local candidateOk, candidateOrError = pcall(function()
+                return group:clone()
+            end)
+            if not candidateOk then
+                raiseBridgeError(
+                    "UNSUPPORTED_HOST_CAPABILITY",
+                    "SynthV could not clone the Group for Smart Pitch preflight",
+                    {
+                        capability = "NoteGroup.clone",
+                        cause = tostring(candidateOrError)
+                    }
+                )
+            end
+            local candidate = candidateOrError
+            local prepared = {}
+            for index = 1, #inputs do
+                local path = "pitchControls[" .. index .. "]"
+                local definition =
+                    preparePitchControlInput(inputs[index], path)
+                local actualOk, actualOrError = pcall(function()
+                    return createPitchControl(definition)
+                end)
+                local candidateControlOk, candidateControlOrError =
+                    pcall(function()
+                        return createPitchControl(definition)
+                    end)
+                if not actualOk or not candidateControlOk then
+                    raiseBridgeError(
+                        "INVALID_ARGUMENT",
+                        "SynthV rejected a pitch-control definition",
+                        {
+                            index = index,
+                            cause = tostring(
+                                actualOk
+                                    and candidateControlOrError
+                                    or actualOrError
+                            )
+                        }
+                    )
+                end
+                prepared[#prepared + 1] = actualOrError
+                candidate:addPitchControl(candidateControlOrError)
+            end
+            return {
+                project = project,
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = group:getUUID(),
+                group = group,
+                prepared = prepared,
+                expectedContent =
+                    runtimeState.snapshotPitchControlContent(candidate)
+            }
+        end,
+        preflight = function(state)
+            return { changedCount = #state.prepared }
+        end,
+        alreadySatisfied = function(state, _plan)
+            return {
+                trackIndex = state.trackIndex,
+                groupIndex = state.groupIndex,
+                groupUuid = state.groupUuid,
+                addedCount = 0,
+                changedCount = 0,
+                pitchControls = json.array(),
+                verified = true,
+                undoRecordCount = 0
+            }
+        end,
+        mutate = function(state, _plan)
+            for index = 1, #state.prepared do
+                state.group:addPitchControl(state.prepared[index])
+            end
+        end,
+        verify = function(state, plan)
+            local _project, _track, trackIndex, _reference, group, groupIndex =
+                resolveGroup(payload)
+            local actualContent =
+                runtimeState.snapshotPitchControlContent(group)
+            if not runtimeState.noteContentSnapshotsEqual(
+                actualContent,
+                state.expectedContent
+            ) then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not retain the requested Smart Pitch additions",
+                    {
+                        trackIndex = trackIndex,
+                        groupIndex = groupIndex,
+                        expectedPitchControlCount = #state.expectedContent,
+                        actualPitchControlCount = #actualContent
+                    }
+                )
+            end
+            return {
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = group:getUUID(),
+                addedCount = plan.changedCount,
+                changedCount = plan.changedCount,
+                pitchControls = serializePitchControls(group),
+                verified = true,
+                undoRecordCount = 1
+            }
         end
-        prepared[#prepared + 1] = controlOrError
-    end
-
-    createUndoRecord(project)
-    for index = 1, #prepared do
-        group:addPitchControl(prepared[index])
-    end
-    local controls = json.array()
-    for index = 1, #prepared do
-        local control = prepared[index]
-        controls[#controls + 1] =
-            serializePitchControl(group, control, control:getIndexInParent())
-    end
-    return {
-        trackIndex = trackIndex,
-        groupIndex = groupIndex,
-        groupUuid = group:getUUID(),
-        addedCount = #controls,
-        pitchControls = controls
-    }
+    })
 end
 
 function handlers.edit_pitch_controls(payload)
     payload = requireObject(payload, "payload")
-    local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
-    local edits = requireArray(payload.edits, "edits", 1, 512)
-    local prepared = {}
-    local seen = {}
-    for index = 1, #edits do
-        local edit = requireObject(edits[index], "edits[" .. index .. "]")
-        local controlIndex = requireInteger(
-            edit.pitchControlIndex,
-            "edits[" .. index .. "].pitchControlIndex",
-            1,
-            group:getNumPitchControls()
-        )
-        if seen[controlIndex] then
-            raiseBridgeError("INVALID_ARGUMENT", "The same pitchControlIndex appears more than once", {
-                pitchControlIndex = controlIndex
-            })
+    return executeCommandPipeline({
+        action = "edit_pitch_controls",
+        freshRead = function()
+            local project, _track, trackIndex, _reference, group, groupIndex =
+                resolveGroup(payload)
+            local edits = requireArray(payload.edits, "edits", 1, 512)
+            local candidateOk, candidateOrError = pcall(function()
+                return group:clone()
+            end)
+            if not candidateOk then
+                raiseBridgeError(
+                    "UNSUPPORTED_HOST_CAPABILITY",
+                    "SynthV could not clone the Group for Smart Pitch preflight",
+                    {
+                        capability = "NoteGroup.clone",
+                        cause = tostring(candidateOrError)
+                    }
+                )
+            end
+            local candidate = candidateOrError
+            local prepared = {}
+            local seen = {}
+            local effectiveCount = 0
+            for index = 1, #edits do
+                local path = "edits[" .. index .. "]"
+                local edit = requireObject(edits[index], path)
+                local controlIndex = requireInteger(
+                    edit.pitchControlIndex,
+                    path .. ".pitchControlIndex",
+                    1,
+                    group:getNumPitchControls()
+                )
+                if seen[controlIndex] then
+                    raiseBridgeError(
+                        "INVALID_ARGUMENT",
+                        "The same pitchControlIndex appears more than once",
+                        { pitchControlIndex = controlIndex }
+                    )
+                end
+                seen[controlIndex] = true
+                local control = group:getPitchControl(controlIndex)
+                local before =
+                    serializePitchControl(group, control, controlIndex)
+                validateExpectedFingerprint(
+                    before.fingerprint,
+                    requireString(
+                        edit.fingerprint,
+                        path .. ".fingerprint",
+                        false
+                    ),
+                    "STALE_PITCH_CONTROL",
+                    "The pitch control changed after it was read"
+                )
+                local apply = applyPitchControlChanges(
+                    control,
+                    edit.changes,
+                    before.kind,
+                    path .. ".changes"
+                )
+                local candidateControl =
+                    candidate:getPitchControl(controlIndex)
+                local candidateApply = applyPitchControlChanges(
+                    candidateControl,
+                    edit.changes,
+                    before.kind,
+                    path .. ".changes"
+                )
+                candidateApply(candidateControl)
+                local after = serializePitchControl(
+                    candidate,
+                    candidateControl,
+                    controlIndex
+                )
+                local effective =
+                    runtimeState.pitchControlContentValue(before)
+                    ~= runtimeState.pitchControlContentValue(after)
+                if effective then
+                    effectiveCount = effectiveCount + 1
+                end
+                prepared[#prepared + 1] = {
+                    control = control,
+                    apply = apply,
+                    effective = effective
+                }
+            end
+            return {
+                project = project,
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = group:getUUID(),
+                group = group,
+                prepared = prepared,
+                effectiveCount = effectiveCount,
+                expectedContent =
+                    runtimeState.snapshotPitchControlContent(candidate)
+            }
+        end,
+        preflight = function(state)
+            return { changedCount = state.effectiveCount }
+        end,
+        alreadySatisfied = function(state, _plan)
+            return {
+                trackIndex = state.trackIndex,
+                groupIndex = state.groupIndex,
+                groupUuid = state.groupUuid,
+                editedCount = 0,
+                changedCount = 0,
+                pitchControls = serializePitchControls(state.group),
+                verified = true,
+                undoRecordCount = 0
+            }
+        end,
+        mutate = function(state, _plan)
+            for index = 1, #state.prepared do
+                local prepared = state.prepared[index]
+                if prepared.effective then
+                    prepared.apply(prepared.control)
+                end
+            end
+        end,
+        verify = function(state, plan)
+            local _project, _track, trackIndex, _reference, group, groupIndex =
+                resolveGroup(payload)
+            local actualContent =
+                runtimeState.snapshotPitchControlContent(group)
+            if not runtimeState.noteContentSnapshotsEqual(
+                actualContent,
+                state.expectedContent
+            ) then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not retain the requested Smart Pitch edits",
+                    {
+                        trackIndex = trackIndex,
+                        groupIndex = groupIndex,
+                        expectedPitchControlCount = #state.expectedContent,
+                        actualPitchControlCount = #actualContent
+                    }
+                )
+            end
+            return {
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = group:getUUID(),
+                editedCount = plan.changedCount,
+                changedCount = plan.changedCount,
+                pitchControls = serializePitchControls(group),
+                verified = true,
+                undoRecordCount = 1
+            }
         end
-        seen[controlIndex] = true
-        local control = group:getPitchControl(controlIndex)
-        local serialized = serializePitchControl(group, control, controlIndex)
-        validateExpectedFingerprint(
-            serialized.fingerprint,
-            requireString(edit.fingerprint, "edits[" .. index .. "].fingerprint", false),
-            "STALE_PITCH_CONTROL",
-            "The pitch control changed after it was read"
-        )
-        prepared[#prepared + 1] = {
-            control = control,
-            apply = applyPitchControlChanges(
-                control,
-                edit.changes,
-                serialized.kind,
-                "edits[" .. index .. "].changes"
-            )
-        }
-    end
-
-    createUndoRecord(project)
-    for index = 1, #prepared do
-        prepared[index].apply(prepared[index].control)
-    end
-    return {
-        trackIndex = trackIndex,
-        groupIndex = groupIndex,
-        groupUuid = group:getUUID(),
-        editedCount = #prepared,
-        pitchControls = serializePitchControls(group)
-    }
+    })
 end
 
 function handlers.delete_pitch_controls(payload)
     payload = requireObject(payload, "payload")
-    local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
-    local targets = requireArray(payload.pitchControls, "pitchControls", 1, 512)
-    local prepared = {}
-    local seen = {}
-    for index = 1, #targets do
-        local target = requireObject(targets[index], "pitchControls[" .. index .. "]")
-        local controlIndex = requireInteger(
-            target.pitchControlIndex,
-            "pitchControls[" .. index .. "].pitchControlIndex",
-            1,
-            group:getNumPitchControls()
-        )
-        if seen[controlIndex] then
-            raiseBridgeError("INVALID_ARGUMENT", "The same pitchControlIndex appears more than once", {
-                pitchControlIndex = controlIndex
-            })
+    return executeCommandPipeline({
+        action = "delete_pitch_controls",
+        freshRead = function()
+            local project, _track, trackIndex, _reference, group, groupIndex =
+                resolveGroup(payload)
+            local targets = requireArray(
+                payload.pitchControls,
+                "pitchControls",
+                1,
+                512
+            )
+            local candidateOk, candidateOrError = pcall(function()
+                return group:clone()
+            end)
+            if not candidateOk then
+                raiseBridgeError(
+                    "UNSUPPORTED_HOST_CAPABILITY",
+                    "SynthV could not clone the Group for Smart Pitch preflight",
+                    {
+                        capability = "NoteGroup.clone",
+                        cause = tostring(candidateOrError)
+                    }
+                )
+            end
+            local candidate = candidateOrError
+            local prepared = {}
+            local seen = {}
+            for index = 1, #targets do
+                local path = "pitchControls[" .. index .. "]"
+                local target = requireObject(targets[index], path)
+                local controlIndex = requireInteger(
+                    target.pitchControlIndex,
+                    path .. ".pitchControlIndex",
+                    1,
+                    group:getNumPitchControls()
+                )
+                if seen[controlIndex] then
+                    raiseBridgeError(
+                        "INVALID_ARGUMENT",
+                        "The same pitchControlIndex appears more than once",
+                        { pitchControlIndex = controlIndex }
+                    )
+                end
+                seen[controlIndex] = true
+                local serialized = serializePitchControl(
+                    group,
+                    group:getPitchControl(controlIndex),
+                    controlIndex
+                )
+                validateExpectedFingerprint(
+                    serialized.fingerprint,
+                    requireString(
+                        target.fingerprint,
+                        path .. ".fingerprint",
+                        false
+                    ),
+                    "STALE_PITCH_CONTROL",
+                    "The pitch control changed after it was read"
+                )
+                prepared[#prepared + 1] = {
+                    pitchControlIndex = controlIndex,
+                    pitchControl = serialized
+                }
+            end
+            table.sort(prepared, function(left, right)
+                return left.pitchControlIndex
+                    > right.pitchControlIndex
+            end)
+            for index = 1, #prepared do
+                candidate:removePitchControl(
+                    prepared[index].pitchControlIndex
+                )
+            end
+            return {
+                project = project,
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = group:getUUID(),
+                group = group,
+                prepared = prepared,
+                expectedContent =
+                    runtimeState.snapshotPitchControlContent(candidate)
+            }
+        end,
+        preflight = function(state)
+            return { changedCount = #state.prepared }
+        end,
+        alreadySatisfied = function(state, _plan)
+            return {
+                trackIndex = state.trackIndex,
+                groupIndex = state.groupIndex,
+                groupUuid = state.groupUuid,
+                deletedCount = 0,
+                changedCount = 0,
+                deletedPitchControls = json.array(),
+                verified = true,
+                undoRecordCount = 0
+            }
+        end,
+        mutate = function(state, _plan)
+            for index = 1, #state.prepared do
+                state.group:removePitchControl(
+                    state.prepared[index].pitchControlIndex
+                )
+            end
+        end,
+        verify = function(state, plan)
+            local _project, _track, trackIndex, _reference, group, groupIndex =
+                resolveGroup(payload)
+            local actualContent =
+                runtimeState.snapshotPitchControlContent(group)
+            if not runtimeState.noteContentSnapshotsEqual(
+                actualContent,
+                state.expectedContent
+            ) then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not retain the requested Smart Pitch deletions",
+                    {
+                        trackIndex = trackIndex,
+                        groupIndex = groupIndex,
+                        expectedPitchControlCount = #state.expectedContent,
+                        actualPitchControlCount = #actualContent
+                    }
+                )
+            end
+            local deleted = json.array()
+            for index = #state.prepared, 1, -1 do
+                deleted[#deleted + 1] =
+                    state.prepared[index].pitchControl
+            end
+            return {
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = group:getUUID(),
+                deletedCount = plan.changedCount,
+                changedCount = plan.changedCount,
+                deletedPitchControls = deleted,
+                verified = true,
+                undoRecordCount = 1
+            }
         end
-        seen[controlIndex] = true
-        local serialized = serializePitchControl(group, group:getPitchControl(controlIndex), controlIndex)
-        validateExpectedFingerprint(
-            serialized.fingerprint,
-            requireString(target.fingerprint, "pitchControls[" .. index .. "].fingerprint", false),
-            "STALE_PITCH_CONTROL",
-            "The pitch control changed after it was read"
-        )
-        prepared[#prepared + 1] = {
-            pitchControlIndex = controlIndex,
-            pitchControl = serialized
-        }
-    end
-    table.sort(prepared, function(left, right)
-        return left.pitchControlIndex > right.pitchControlIndex
-    end)
-    createUndoRecord(project)
-    for index = 1, #prepared do
-        group:removePitchControl(prepared[index].pitchControlIndex)
-    end
-    local deleted = json.array()
-    for index = #prepared, 1, -1 do
-        deleted[#deleted + 1] = prepared[index].pitchControl
-    end
-    return {
-        trackIndex = trackIndex,
-        groupIndex = groupIndex,
-        groupUuid = group:getUUID(),
-        deletedCount = #deleted,
-        deletedPitchControls = deleted
-    }
+    })
 end
 
 function handlers.get_automation(payload)
@@ -9032,199 +9312,461 @@ end
 
 function handlers.simplify_automation(payload)
     payload = requireObject(payload, "payload")
-    local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
-    local parameterName = requireString(payload.parameter, "parameter", false)
-    local automation, before = serializeAutomation(group, parameterName)
-    validateExpectedFingerprint(
-        before.fingerprint,
-        optionalString(payload.expectedFingerprint, "expectedFingerprint", false),
-        "STALE_AUTOMATION",
-        "The automation curve changed after it was read"
-    )
-    local beginPosition = requireInteger(payload.beginPosition, "beginPosition", 0)
-    local endPosition = requireInteger(payload.endPosition, "endPosition", beginPosition)
-    local threshold = optionalNumber(payload.threshold, "threshold", 0)
-    local candidate = automation:clone()
-    local valid, validationError = pcall(function()
-        if threshold == nil then
-            candidate:simplify(beginPosition, endPosition)
-        else
-            candidate:simplify(beginPosition, endPosition, threshold)
+    return executeCommandPipeline({
+        action = "simplify_automation",
+        freshRead = function()
+            local project, _track, trackIndex, _reference, group, groupIndex =
+                resolveGroup(payload)
+            local parameterName =
+                requireString(payload.parameter, "parameter", false)
+            local automation, before =
+                serializeAutomation(group, parameterName)
+            validateExpectedFingerprint(
+                before.fingerprint,
+                optionalString(
+                    payload.expectedFingerprint,
+                    "expectedFingerprint",
+                    false
+                ),
+                "STALE_AUTOMATION",
+                "The automation curve changed after it was read"
+            )
+            local beginPosition =
+                requireInteger(payload.beginPosition, "beginPosition", 0)
+            local endPosition = requireInteger(
+                payload.endPosition,
+                "endPosition",
+                beginPosition
+            )
+            local threshold =
+                optionalNumber(payload.threshold, "threshold", 0)
+            local candidate = automation:clone()
+            local valid, validationError = pcall(function()
+                if threshold == nil then
+                    candidate:simplify(beginPosition, endPosition)
+                else
+                    candidate:simplify(
+                        beginPosition,
+                        endPosition,
+                        threshold
+                    )
+                end
+            end)
+            if not valid then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "SynthV rejected the automation simplification",
+                    { cause = tostring(validationError) }
+                )
+            end
+            local expectedPoints =
+                runtimeState.serializeAutomationPoints(candidate)
+            local changed =
+                json.encode(before.points) ~= json.encode(expectedPoints)
+            local removedPointCount =
+                before.pointCount - #expectedPoints
+            return {
+                project = project,
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = group:getUUID(),
+                group = group,
+                automation = automation,
+                parameterName = parameterName,
+                before = before,
+                beginPosition = beginPosition,
+                endPosition = endPosition,
+                threshold = threshold,
+                expectedPoints = expectedPoints,
+                removedPointCount = removedPointCount,
+                changed = changed
+            }
+        end,
+        preflight = function(state)
+            return {
+                changedCount = state.changed
+                    and math.max(1, state.removedPointCount)
+                    or 0
+            }
+        end,
+        alreadySatisfied = function(state, _plan)
+            local result = state.before
+            result.trackIndex = state.trackIndex
+            result.groupIndex = state.groupIndex
+            result.groupUuid = state.groupUuid
+            result.changed = false
+            result.changedCount = 0
+            result.removedPointCount = 0
+            result.simplifiedRange = {
+                beginPosition = state.beginPosition,
+                endPosition = state.endPosition
+            }
+            result.threshold = state.threshold or 0.002
+            result.verified = true
+            result.undoRecordCount = 0
+            return result
+        end,
+        mutate = function(state, _plan)
+            if state.threshold == nil then
+                state.automation:simplify(
+                    state.beginPosition,
+                    state.endPosition
+                )
+            else
+                state.automation:simplify(
+                    state.beginPosition,
+                    state.endPosition,
+                    state.threshold
+                )
+            end
+        end,
+        verify = function(state, plan)
+            local _project, _track, trackIndex, _reference, group, groupIndex =
+                resolveGroup(payload)
+            local _automation, after =
+                serializeAutomation(group, state.parameterName)
+            if json.encode(after.points)
+                ~= json.encode(state.expectedPoints) then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not retain the requested Automation simplification",
+                    {
+                        trackIndex = trackIndex,
+                        groupIndex = groupIndex,
+                        parameter = state.parameterName,
+                        expectedPointCount = #state.expectedPoints,
+                        actualPointCount = after.pointCount
+                    }
+                )
+            end
+            after.trackIndex = trackIndex
+            after.groupIndex = groupIndex
+            after.groupUuid = group:getUUID()
+            after.changed = true
+            after.changedCount = plan.changedCount
+            after.removedPointCount = state.removedPointCount
+            after.simplifiedRange = {
+                beginPosition = state.beginPosition,
+                endPosition = state.endPosition
+            }
+            after.threshold = state.threshold or 0.002
+            after.verified = true
+            after.undoRecordCount = 1
+            return after
         end
-    end)
-    if not valid then
-        raiseBridgeError("INVALID_ARGUMENT", "SynthV rejected the automation simplification", {
-            cause = tostring(validationError)
-        })
-    end
-
-    createUndoRecord(project)
-    local changed
-    if threshold == nil then
-        changed = automation:simplify(beginPosition, endPosition)
-    else
-        changed = automation:simplify(beginPosition, endPosition, threshold)
-    end
-    local _sameAutomation, after = serializeAutomation(group, parameterName)
-    after.trackIndex = trackIndex
-    after.groupIndex = groupIndex
-    after.groupUuid = group:getUUID()
-    after.changed = changed
-    after.removedPointCount = before.pointCount - after.pointCount
-    after.simplifiedRange = {
-        beginPosition = beginPosition,
-        endPosition = endPosition
-    }
-    after.threshold = threshold or 0.002
-    return after
+    })
 end
 
 function handlers.set_automation_points(payload)
     payload = requireObject(payload, "payload")
-    local mode = responseMode(payload)
-    local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
-    local parameterName = requireString(payload.parameter, "parameter", false)
-    local automation, serializedBefore = serializeAutomation(group, parameterName)
-    validateExpectedFingerprint(
-        serializedBefore.fingerprint,
-        optionalString(payload.expectedFingerprint, "expectedFingerprint", false),
-        "STALE_AUTOMATION",
-        "The automation curve changed after it was read"
-    )
-    local points = requireArray(payload.points, "points", 1, 10000)
-    local clearMode = optionalString(payload.clearMode, "clearMode", false) or "none"
-    if clearMode ~= "none" and clearMode ~= "all" and clearMode ~= "range" then
-        raiseBridgeError("INVALID_ARGUMENT", "clearMode must be one of none, all, or range")
-    end
-
-    local rangeBegin = nil
-    local rangeEnd = nil
-    if clearMode == "range" then
-        rangeBegin = requireInteger(payload.rangeBegin, "rangeBegin", 0)
-        rangeEnd = requireInteger(payload.rangeEnd, "rangeEnd", rangeBegin)
-    elseif isProvided(payload.rangeBegin) or isProvided(payload.rangeEnd) then
-        raiseBridgeError("INVALID_ARGUMENT", "rangeBegin/rangeEnd are only valid when clearMode is range")
-    end
-
-    local minimum = nil
-    local maximum = nil
-    if #points > 0 then
-        minimum, maximum = requireAutomationDefinitionRange(
-            serializedBefore.definition,
-            "definition.range",
-            parameterName
-        )
-    end
-    local prepared = {}
-    for index = 1, #points do
-        local point = requireObject(points[index], "points[" .. index .. "]")
-        prepared[#prepared + 1] = {
-            position = requireInteger(point.position, "points[" .. index .. "].position", 0),
-            value = requireFiniteNumber(point.value, "points[" .. index .. "].value", minimum, maximum)
-        }
-    end
-
-    createUndoRecord(project)
-    if clearMode == "all" then
-        automation:removeAll()
-    elseif clearMode == "range" then
-        removeAutomationClosedRange(automation, rangeBegin, rangeEnd)
-    end
-    for index = 1, #prepared do
-        automation:add(prepared[index].position, prepared[index].value)
-    end
-    local verified, verificationError = xpcall(function()
-        verifyPreparedAutomation(
-            automation,
-            clearMode,
-            rangeBegin,
-            rangeEnd,
-            prepared
-        )
-    end, function(errorValue)
-        return errorValue
-    end)
-    if not verified then
-        raiseUndoRequiredExecutionError(
-            "set_automation_points",
-            verificationError
-        )
-    end
-
-    local _sameAutomation, serialized = serializeAutomation(group, parameterName)
-    serialized.trackIndex = trackIndex
-    serialized.groupIndex = groupIndex
-    serialized.groupUuid = group:getUUID()
-    serialized.addedOrUpdatedCount = #prepared
-    serialized.clearMode = clearMode
-    if mode == "compact" then
-        return {
-            trackIndex = trackIndex,
-            groupIndex = groupIndex,
-            groupUuid = group:getUUID(),
-            parameter = serialized.parameter,
-            interpolation = serialized.interpolation,
-            fingerprint = serialized.fingerprint,
-            pointCount = serialized.pointCount,
-            addedOrUpdatedCount = #prepared,
-            clearMode = clearMode,
-            responseMode = mode
-        }
-    end
-    return serialized
+    return executeCommandPipeline({
+        action = "set_automation_points",
+        freshRead = function()
+            local mode = responseMode(payload)
+            local project, _track, trackIndex, _reference, group, groupIndex =
+                resolveGroup(payload)
+            local parameterName =
+                requireString(payload.parameter, "parameter", false)
+            local automation, before =
+                serializeAutomation(group, parameterName)
+            validateExpectedFingerprint(
+                before.fingerprint,
+                optionalString(
+                    payload.expectedFingerprint,
+                    "expectedFingerprint",
+                    false
+                ),
+                "STALE_AUTOMATION",
+                "The automation curve changed after it was read"
+            )
+            local points =
+                requireArray(payload.points, "points", 1, 10000)
+            local clearMode =
+                optionalString(payload.clearMode, "clearMode", false)
+                    or "none"
+            if clearMode ~= "none"
+                and clearMode ~= "all"
+                and clearMode ~= "range" then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "clearMode must be one of none, all, or range"
+                )
+            end
+            local rangeBegin = nil
+            local rangeEnd = nil
+            if clearMode == "range" then
+                rangeBegin =
+                    requireInteger(payload.rangeBegin, "rangeBegin", 0)
+                rangeEnd = requireInteger(
+                    payload.rangeEnd,
+                    "rangeEnd",
+                    rangeBegin
+                )
+            elseif isProvided(payload.rangeBegin)
+                or isProvided(payload.rangeEnd) then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "rangeBegin/rangeEnd are only valid when clearMode is range"
+                )
+            end
+            local minimum, maximum =
+                requireAutomationDefinitionRange(
+                    before.definition,
+                    "definition.range",
+                    parameterName
+                )
+            local prepared = {}
+            for index = 1, #points do
+                local path = "points[" .. index .. "]"
+                local point = requireObject(points[index], path)
+                prepared[#prepared + 1] = {
+                    position = requireInteger(
+                        point.position,
+                        path .. ".position",
+                        0
+                    ),
+                    value = requireFiniteNumber(
+                        point.value,
+                        path .. ".value",
+                        minimum,
+                        maximum
+                    )
+                }
+            end
+            local expectedPoints =
+                runtimeState.expectedAutomationPoints(
+                    before.points,
+                    clearMode,
+                    rangeBegin,
+                    rangeEnd,
+                    prepared
+                )
+            return {
+                project = project,
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = group:getUUID(),
+                group = group,
+                automation = automation,
+                parameterName = parameterName,
+                mode = mode,
+                before = before,
+                prepared = prepared,
+                clearMode = clearMode,
+                rangeBegin = rangeBegin,
+                rangeEnd = rangeEnd,
+                expectedPoints = expectedPoints,
+                changed =
+                    json.encode(before.points)
+                    ~= json.encode(expectedPoints)
+            }
+        end,
+        preflight = function(state)
+            return { changedCount = state.changed and 1 or 0 }
+        end,
+        alreadySatisfied = function(state, _plan)
+            return {
+                trackIndex = state.trackIndex,
+                groupIndex = state.groupIndex,
+                groupUuid = state.groupUuid,
+                parameter = state.before.parameter,
+                interpolation = state.before.interpolation,
+                fingerprint = state.before.fingerprint,
+                pointCount = state.before.pointCount,
+                addedOrUpdatedCount = 0,
+                changedCount = 0,
+                clearMode = state.clearMode,
+                responseMode = state.mode,
+                verified = true,
+                undoRecordCount = 0
+            }
+        end,
+        mutate = function(state, _plan)
+            if state.clearMode == "all" then
+                state.automation:removeAll()
+            elseif state.clearMode == "range" then
+                removeAutomationClosedRange(
+                    state.automation,
+                    state.rangeBegin,
+                    state.rangeEnd
+                )
+            end
+            for index = 1, #state.prepared do
+                state.automation:add(
+                    state.prepared[index].position,
+                    state.prepared[index].value
+                )
+            end
+        end,
+        verify = function(state, plan)
+            local _project, _track, trackIndex, _reference, group, groupIndex =
+                resolveGroup(payload)
+            local _automation, serialized =
+                serializeAutomation(group, state.parameterName)
+            if json.encode(serialized.points)
+                ~= json.encode(state.expectedPoints) then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not retain the complete requested Automation curve",
+                    {
+                        trackIndex = trackIndex,
+                        groupIndex = groupIndex,
+                        parameter = state.parameterName,
+                        expectedPointCount = #state.expectedPoints,
+                        actualPointCount = serialized.pointCount
+                    }
+                )
+            end
+            serialized.trackIndex = trackIndex
+            serialized.groupIndex = groupIndex
+            serialized.groupUuid = group:getUUID()
+            serialized.addedOrUpdatedCount = #state.prepared
+            serialized.changedCount = plan.changedCount
+            serialized.clearMode = state.clearMode
+            serialized.responseMode = state.mode
+            serialized.verified = true
+            serialized.undoRecordCount = 1
+            if state.mode == "compact" then
+                serialized.points = nil
+                serialized.definition = nil
+            end
+            return serialized
+        end
+    })
 end
 
 function handlers.clear_automation(payload)
     payload = requireObject(payload, "payload")
-    local project, _track, trackIndex, _reference, group, groupIndex = resolveGroup(payload)
-    local parameterName = requireString(payload.parameter, "parameter", false)
-    local automation, serializedBefore = serializeAutomation(group, parameterName)
-    validateExpectedFingerprint(
-        serializedBefore.fingerprint,
-        optionalString(payload.expectedFingerprint, "expectedFingerprint", false),
-        "STALE_AUTOMATION",
-        "The automation curve changed after it was read"
-    )
-    local hasBegin = isProvided(payload.rangeBegin)
-    local hasEnd = isProvided(payload.rangeEnd)
-    if hasBegin ~= hasEnd then
-        raiseBridgeError("INVALID_ARGUMENT", "rangeBegin and rangeEnd must be supplied together")
-    end
-
-    local rangeBegin = nil
-    local rangeEnd = nil
-    if hasBegin then
-        rangeBegin = requireInteger(payload.rangeBegin, "rangeBegin", 0)
-        rangeEnd = requireInteger(payload.rangeEnd, "rangeEnd", rangeBegin)
-    end
-
-    createUndoRecord(project)
-    if rangeBegin then
-        removeAutomationClosedRange(automation, rangeBegin, rangeEnd)
-    else
-        automation:removeAll()
-    end
-    local verified, verificationError = xpcall(function()
-        verifyPreparedAutomation(
-            automation,
-            rangeBegin and "range" or "all",
-            rangeBegin,
-            rangeEnd,
-            {}
-        )
-    end, function(errorValue)
-        return errorValue
-    end)
-    if not verified then
-        raiseUndoRequiredExecutionError("clear_automation", verificationError)
-    end
-
-    local _sameAutomation, serialized = serializeAutomation(group, parameterName)
-    serialized.trackIndex = trackIndex
-    serialized.groupIndex = groupIndex
-    serialized.groupUuid = group:getUUID()
-    serialized.clearedRange = rangeBegin and { beginPosition = rangeBegin, endPosition = rangeEnd } or JSON_NULL
-    return serialized
+    return executeCommandPipeline({
+        action = "clear_automation",
+        freshRead = function()
+            local project, _track, trackIndex, _reference, group, groupIndex =
+                resolveGroup(payload)
+            local parameterName =
+                requireString(payload.parameter, "parameter", false)
+            local automation, before =
+                serializeAutomation(group, parameterName)
+            validateExpectedFingerprint(
+                before.fingerprint,
+                optionalString(
+                    payload.expectedFingerprint,
+                    "expectedFingerprint",
+                    false
+                ),
+                "STALE_AUTOMATION",
+                "The automation curve changed after it was read"
+            )
+            local hasBegin = isProvided(payload.rangeBegin)
+            local hasEnd = isProvided(payload.rangeEnd)
+            if hasBegin ~= hasEnd then
+                raiseBridgeError(
+                    "INVALID_ARGUMENT",
+                    "rangeBegin and rangeEnd must be supplied together"
+                )
+            end
+            local rangeBegin = nil
+            local rangeEnd = nil
+            if hasBegin then
+                rangeBegin =
+                    requireInteger(payload.rangeBegin, "rangeBegin", 0)
+                rangeEnd = requireInteger(
+                    payload.rangeEnd,
+                    "rangeEnd",
+                    rangeBegin
+                )
+            end
+            local clearMode = rangeBegin and "range" or "all"
+            local expectedPoints =
+                runtimeState.expectedAutomationPoints(
+                    before.points,
+                    clearMode,
+                    rangeBegin,
+                    rangeEnd,
+                    {}
+                )
+            return {
+                project = project,
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = group:getUUID(),
+                group = group,
+                automation = automation,
+                parameterName = parameterName,
+                before = before,
+                rangeBegin = rangeBegin,
+                rangeEnd = rangeEnd,
+                clearMode = clearMode,
+                expectedPoints = expectedPoints,
+                clearedPointCount =
+                    before.pointCount - #expectedPoints
+            }
+        end,
+        preflight = function(state)
+            return { changedCount = state.clearedPointCount }
+        end,
+        alreadySatisfied = function(state, _plan)
+            local result = state.before
+            result.trackIndex = state.trackIndex
+            result.groupIndex = state.groupIndex
+            result.groupUuid = state.groupUuid
+            result.clearedPointCount = 0
+            result.changedCount = 0
+            result.clearedRange = state.rangeBegin
+                and {
+                    beginPosition = state.rangeBegin,
+                    endPosition = state.rangeEnd
+                }
+                or JSON_NULL
+            result.verified = true
+            result.undoRecordCount = 0
+            return result
+        end,
+        mutate = function(state, _plan)
+            if state.rangeBegin then
+                removeAutomationClosedRange(
+                    state.automation,
+                    state.rangeBegin,
+                    state.rangeEnd
+                )
+            else
+                state.automation:removeAll()
+            end
+        end,
+        verify = function(state, plan)
+            local _project, _track, trackIndex, _reference, group, groupIndex =
+                resolveGroup(payload)
+            local _automation, serialized =
+                serializeAutomation(group, state.parameterName)
+            if json.encode(serialized.points)
+                ~= json.encode(state.expectedPoints) then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not retain the complete requested Automation clear",
+                    {
+                        trackIndex = trackIndex,
+                        groupIndex = groupIndex,
+                        parameter = state.parameterName,
+                        expectedPointCount = #state.expectedPoints,
+                        actualPointCount = serialized.pointCount
+                    }
+                )
+            end
+            serialized.trackIndex = trackIndex
+            serialized.groupIndex = groupIndex
+            serialized.groupUuid = group:getUUID()
+            serialized.clearedPointCount = plan.changedCount
+            serialized.changedCount = plan.changedCount
+            serialized.clearedRange = state.rangeBegin
+                and {
+                    beginPosition = state.rangeBegin,
+                    endPosition = state.rangeEnd
+                }
+                or JSON_NULL
+            serialized.verified = true
+            serialized.undoRecordCount = 1
+            return serialized
+        end
+    })
 end
 
 runtimeState.expectedAutomationPoints = function(
@@ -9263,6 +9805,18 @@ runtimeState.expectedAutomationPoints = function(
     return result
 end
 
+runtimeState.serializeAutomationPoints = function(automation)
+    local rawPoints = automation:getAllPoints()
+    local points = json.array()
+    for index = 1, #rawPoints do
+        points[#points + 1] = {
+            position = rawPoints[index][1],
+            value = rawPoints[index][2]
+        }
+    end
+    return points
+end
+
 runtimeState.snapshotPitchControlContent = function(group)
     local result = {}
     for controlIndex = 1, group:getNumPitchControls() do
@@ -9271,15 +9825,20 @@ runtimeState.snapshotPitchControlContent = function(group)
             group:getPitchControl(controlIndex),
             controlIndex
         )
-        result[#result + 1] = json.encode({
-            kind = serialized.kind,
-            position = serialized.position,
-            pitch = serialized.pitch,
-            points = serialized.points or JSON_NULL
-        })
+        result[#result + 1] =
+            runtimeState.pitchControlContentValue(serialized)
     end
     table.sort(result)
     return result
+end
+
+runtimeState.pitchControlContentValue = function(serialized)
+    return json.encode({
+        kind = serialized.kind,
+        position = serialized.position,
+        pitch = serialized.pitch,
+        points = serialized.points or JSON_NULL
+    })
 end
 
 runtimeState.groupVoiceChecksSatisfied = function(

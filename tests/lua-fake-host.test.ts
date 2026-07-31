@@ -195,6 +195,34 @@ test("Fake Host: compact Automation reads omit unrequested point arrays", (conte
   assertMarker(context, "query-automation-summary");
 });
 
+test("CMD-005: standalone Smart Pitch no-op creates no Undo", (context) => {
+  assertMarker(context, "pitch-control-already-satisfied");
+});
+
+test("CMD-005: Automation set no-op creates no Undo", (context) => {
+  assertMarker(context, "automation-set-already-satisfied");
+});
+
+test("CMD-005: Automation clear no-op creates no Undo", (context) => {
+  assertMarker(context, "automation-clear-already-satisfied");
+});
+
+test("CMD-005: Automation simplify no-op creates no Undo", (context) => {
+  assertMarker(context, "automation-simplify-already-satisfied");
+});
+
+test("CMD-006: standalone Smart Pitch addition verifies complete Group content", (context) => {
+  assertMarker(context, "pitch-control-add-postcondition-failure");
+});
+
+test("CMD-006: standalone Smart Pitch edit verifies complete Group content", (context) => {
+  assertMarker(context, "pitch-control-edit-postcondition-failure");
+});
+
+test("CMD-006: standalone Smart Pitch deletion verifies complete Group content", (context) => {
+  assertMarker(context, "pitch-control-delete-postcondition-failure");
+});
+
 test("Fake Host: aggregate tuning uses one Undo for multiple curves", (context) => {
   assertMarker(context, "aggregate-tuning-single-undo");
 });

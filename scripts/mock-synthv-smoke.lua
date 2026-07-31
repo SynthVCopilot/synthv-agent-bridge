@@ -142,7 +142,15 @@ local function makePitchControl(kind)
     function c:getPosition() return self.position end
     function c:setPosition(v) self.position=v end
     function c:getPitch() return self.pitch end
-    function c:setPitch(v) self.pitch=v end
+    function c:setPitch(v)
+        if not (
+            pitchControlIgnorePitch
+            and self.parent
+            and not self.parent.isValidationCandidate
+        ) then
+            self.pitch=v
+        end
+    end
     if kind=="curve" then
         function c:getPoints()
             local points={}
@@ -168,6 +176,9 @@ end
 
 noteIgnorePitch = false
 noteRemoveNoop = false
+pitchControlIgnorePitch = false
+pitchControlAddNoop = false
+pitchControlRemoveNoop = false
 
 local function makeNote()
     local n = attachScriptData({
@@ -411,12 +422,22 @@ local function makeGroup()
         return self.pitchControls[i]
     end
     function g:addPitchControl(control)
+        if pitchControlAddNoop and not self.isValidationCandidate then
+            return #self.pitchControls
+        end
         control.parent=self
         self.pitchControls[#self.pitchControls+1]=control
         table.sort(self.pitchControls,function(x,y)return x.position<y.position end)
         return indexOf(self.pitchControls,control)
     end
-    function g:removePitchControl(i) table.remove(self.pitchControls,i) end
+    function g:removePitchControl(i)
+        if not (
+            pitchControlRemoveNoop
+            and not self.isValidationCandidate
+        ) then
+            table.remove(self.pitchControls,i)
+        end
+    end
     function g:getParameter(name)
         if self.rejectContentReadAfterLinkedClone
             or isolatedCloneContentReadsUnsafe then
@@ -430,6 +451,7 @@ local function makeGroup()
     end
     function g:clone()
         local copy=makeGroup()
+        copy.isValidationCandidate=true
         copy.name=self.name
         for _,note in ipairs(self.notes) do copy:addNote(note:clone()) end
         for _,control in ipairs(self.pitchControls) do copy:addPitchControl(control:clone()) end
@@ -1735,7 +1757,28 @@ print("CASE:stale-before-undo-and-redacted")
 local compactAutomationWrite=callWrite("set_automation_points",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","responseMode":"compact","clearMode":"all","points":[{"position":0,"value":-3},{"position":705600000,"value":0}]}')
 assert(compactAutomationWrite:find('"responseMode":"compact"',1,true),"compact automation write mode was not returned")
 assert(not compactAutomationWrite:find('"points":',1,true),"compact automation write returned the full curve")
+local automationSetNoopUndoBefore=project.undo
+local automationSetNoop=call(
+    "set_automation_points",
+    '{"trackIndex":1,"groupIndex":1,"parameter":"loudness",'..
+        '"responseMode":"compact","clearMode":"all","points":['..
+        '{"position":0,"value":-3},{"position":705600000,"value":0}]}'
+)
+assert(project.undo==automationSetNoopUndoBefore,"already-satisfied Automation set created an Undo")
+assert(automationSetNoop:find('"addedOrUpdatedCount":0',1,true),"already-satisfied Automation set did not report zero changes")
+assert(automationSetNoop:find('"undoRecordCount":0',1,true),"already-satisfied Automation set reported an Undo")
+print("CASE:automation-set-already-satisfied")
 callWrite("clear_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","rangeBegin":0,"rangeEnd":100}')
+local automationClearNoopUndoBefore=project.undo
+local automationClearNoop=call(
+    "clear_automation",
+    '{"trackIndex":1,"groupIndex":1,"parameter":"loudness",'..
+        '"rangeBegin":0,"rangeEnd":100}'
+)
+assert(project.undo==automationClearNoopUndoBefore,"already-satisfied Automation clear created an Undo")
+assert(automationClearNoop:find('"clearedPointCount":0',1,true),"already-satisfied Automation clear did not report zero changes")
+assert(automationClearNoop:find('"undoRecordCount":0',1,true),"already-satisfied Automation clear reported an Undo")
+print("CASE:automation-clear-already-satisfied")
 local track1Fingerprint="main-group:"..project.tracks[1].refs[1].group.uuid
 local mixerWrite=callWrite("set_track_mixer",'{"trackIndex":1,"trackFingerprint":"'..track1Fingerprint..'","gainDecibel":-3,"pan":0.25,"muted":false,"solo":true}')
 assert(mixerWrite:find('"m":',1,true),"mixer response omitted Lua telemetry")
@@ -1935,6 +1978,63 @@ end
 local pointFingerprint=assert(pitchAdded:match('"fingerprint":"([^"]+)","kind":"point"'))
 local pitchEdited=callWrite("edit_pitch_controls",'{"trackIndex":1,"groupIndex":1,"edits":[{"pitchControlIndex":1,"fingerprint":"'..escape(pointFingerprint)..'","changes":{"pitch":0.75}}]}')
 local editedPointFingerprint=assert(pitchEdited:match('"fingerprint":"([^"]+)","kind":"point"'))
+
+do
+local pitchNoopUndoBefore=project.undo
+local pitchNoop=call(
+    "edit_pitch_controls",
+    '{"trackIndex":1,"groupIndex":1,"edits":[{"pitchControlIndex":1,'..
+        '"fingerprint":"'..escape(editedPointFingerprint)..'",'..
+        '"changes":{"pitch":0.75}}]}'
+)
+assert(project.undo==pitchNoopUndoBefore,"already-satisfied Smart Pitch edit created an Undo")
+assert(pitchNoop:find('"editedCount":0',1,true),"already-satisfied Smart Pitch edit did not report zero changes")
+assert(pitchNoop:find('"undoRecordCount":0',1,true),"already-satisfied Smart Pitch edit reported an Undo")
+print("CASE:pitch-control-already-satisfied")
+
+local pitchEditFailureUndoBefore=project.undo
+pitchControlIgnorePitch=true
+local pitchEditFailure=callExpectError(
+    "edit_pitch_controls",
+    '{"trackIndex":1,"groupIndex":1,"edits":[{"pitchControlIndex":1,'..
+        '"fingerprint":"'..escape(editedPointFingerprint)..'",'..
+        '"changes":{"pitch":0.875}}]}',
+    "HOST_POSTCONDITION_FAILED"
+)
+pitchControlIgnorePitch=false
+assert(project.undo==pitchEditFailureUndoBefore+1,"ignored Smart Pitch edit did not retain one Undo")
+assert(pitchEditFailure:find('"undoRequired":true',1,true),"ignored Smart Pitch edit did not require Undo")
+print("CASE:pitch-control-edit-postcondition-failure")
+
+local pitchDeleteFailureUndoBefore=project.undo
+pitchControlRemoveNoop=true
+local pitchDeleteFailure=callExpectError(
+    "delete_pitch_controls",
+    '{"trackIndex":1,"groupIndex":1,"pitchControls":[{"pitchControlIndex":1,'..
+        '"fingerprint":"'..escape(editedPointFingerprint)..'"}]}',
+    "HOST_POSTCONDITION_FAILED"
+)
+pitchControlRemoveNoop=false
+assert(project.undo==pitchDeleteFailureUndoBefore+1,"ignored Smart Pitch delete did not retain one Undo")
+assert(pitchDeleteFailure:find('"undoRequired":true',1,true),"ignored Smart Pitch delete did not require Undo")
+print("CASE:pitch-control-delete-postcondition-failure")
+
+local pitchAddFailureUndoBefore=project.undo
+local pitchCountBeforeFailedAdd=project.tracks[1].refs[1].group:getNumPitchControls()
+pitchControlAddNoop=true
+local pitchAddFailure=callExpectError(
+    "add_pitch_controls",
+    '{"trackIndex":1,"groupIndex":1,"pitchControls":['..
+        '{"kind":"point","position":1058400000,"pitch":0.125}]}',
+    "HOST_POSTCONDITION_FAILED"
+)
+pitchControlAddNoop=false
+assert(project.undo==pitchAddFailureUndoBefore+1,"ignored Smart Pitch add did not retain one Undo")
+assert(project.tracks[1].refs[1].group:getNumPitchControls()==pitchCountBeforeFailedAdd,"ignored Smart Pitch add changed the Group")
+assert(pitchAddFailure:find('"undoRequired":true',1,true),"ignored Smart Pitch add did not require Undo")
+print("CASE:pitch-control-add-postcondition-failure")
+end
+
 callWrite("delete_pitch_controls",'{"trackIndex":1,"groupIndex":1,"pitchControls":[{"pitchControlIndex":1,"fingerprint":"'..escape(editedPointFingerprint)..'"}]}')
 assert(project.tracks[1].refs[1].group:getNumPitchControls()==1,"pitch-control CRUD failed")
 
@@ -1951,6 +2051,16 @@ end
 local sampled=call("sample_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","positions":[352800000],"interpolation":"linear"}')
 assert(sampled:find('"sampleCount":1',1,true),"automation sampling failed")
 callWrite("simplify_automation",'{"trackIndex":1,"groupIndex":1,"parameter":"loudness","beginPosition":0,"endPosition":1411200000,"threshold":0.01}')
+local simplifyNoopUndoBefore=project.undo
+local simplifyNoop=call(
+    "simplify_automation",
+    '{"trackIndex":1,"groupIndex":1,"parameter":"loudness",'..
+        '"beginPosition":0,"endPosition":1411200000,"threshold":0.01}'
+)
+assert(project.undo==simplifyNoopUndoBefore,"already-satisfied Automation simplify created an Undo")
+assert(simplifyNoop:find('"removedPointCount":0',1,true),"already-satisfied Automation simplify did not report zero removals")
+assert(simplifyNoop:find('"undoRecordCount":0',1,true),"already-satisfied Automation simplify reported an Undo")
+print("CASE:automation-simplify-already-satisfied")
 
 local retakeGenerated=callWrite("generate_note_retake",'{"trackIndex":1,"groupIndex":1,"noteIndex":2,"fingerprint":"'..escape(fingerprints[2])..'","newDuration":false,"newPitch":true,"newTimbre":true,"activate":true}')
 local generatedTakeId=assert(retakeGenerated:match('"generatedTakeId":(%d+)'))
@@ -2423,5 +2533,5 @@ do
 end
 end
 
-assert(project.undo==77,"expected 77 undo records, got "..project.undo)
+assert(project.undo==80,"expected 80 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")
