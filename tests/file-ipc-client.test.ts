@@ -214,6 +214,10 @@ test("a timeout leaves a claimed request owned by the SynthV host", async (conte
   });
   context.after(async () => fs.rm(fixture.directory, { recursive: true, force: true }));
 
+  let releaseClaimedRequest: () => void = () => undefined;
+  const keepRequestClaimed = new Promise<void>((resolve) => {
+    releaseClaimedRequest = resolve;
+  });
   const bridge = (async () => {
     while (true) {
       try {
@@ -226,20 +230,24 @@ test("a timeout leaves a claimed request owned by the SynthV host", async (conte
         await sleep(5);
       }
     }
-    await sleep(300);
+    await keepRequestClaimed;
     await fs.rm(fixture.config.paths.processingFile, { force: true });
   })();
 
-  await assert.rejects(
-    fixture.client.send("ping"),
-    (error: unknown) => error instanceof BridgeTimeoutError,
-  );
-  await fs.access(fixture.config.paths.processingFile);
-  await assert.rejects(
-    fixture.client.send("ping"),
-    (error: unknown) => error instanceof BridgeBusyError,
-  );
-  await bridge;
+  try {
+    await assert.rejects(
+      fixture.client.send("ping"),
+      (error: unknown) => error instanceof BridgeTimeoutError,
+    );
+    await fs.access(fixture.config.paths.processingFile);
+    await assert.rejects(
+      fixture.client.send("ping"),
+      (error: unknown) => error instanceof BridgeBusyError,
+    );
+  } finally {
+    releaseClaimedRequest();
+    await bridge;
+  }
 });
 
 test("getStatus distinguishes fresh and stale heartbeats", async (context) => {

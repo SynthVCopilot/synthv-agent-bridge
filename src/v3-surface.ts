@@ -1365,7 +1365,18 @@ async function waitForSessionTokenChange(
   }
 }
 
-export function registerV3Surface(
+export const V3_INTERNAL_ADAPTER_NAMES = {
+  status: "v3_internal_status",
+  describe: "v3_internal_describe",
+  query: "v3_internal_query",
+  edit: "v3_internal_command_edit",
+  delete: "v3_internal_command_delete",
+  transaction: "v3_internal_transaction",
+  ui: "v3_internal_ui",
+  review: "v3_internal_review",
+} as const;
+
+export function registerV3InternalAdapters(
   registerTool: RegisterTool,
   definitions: ActionToolDefinitions,
   guardTokens: GuardTokenStore,
@@ -1418,7 +1429,7 @@ export function registerV3Surface(
     .describe("Fresh contextId returned by sv_query.");
 
   registerTool(
-    "sv_status",
+    V3_INTERNAL_ADAPTER_NAMES.status,
     {
       title: "SynthV Status",
       description: "Read Bridge/host status, ping, or hot-reload the Bridge.",
@@ -1470,7 +1481,7 @@ export function registerV3Surface(
   );
 
   registerTool(
-    "sv_describe",
+    V3_INTERNAL_ADAPTER_NAMES.describe,
     {
       title: "Describe SynthV Actions",
       description:
@@ -1504,7 +1515,7 @@ export function registerV3Surface(
   );
 
   registerTool(
-    "sv_read",
+    V3_INTERNAL_ADAPTER_NAMES.query,
     {
       title: "Read SynthV",
       description:
@@ -1636,7 +1647,9 @@ export function registerV3Surface(
   );
 
   const registerWrite = (
-    name: "sv_edit" | "sv_delete",
+    name:
+      | typeof V3_INTERNAL_ADAPTER_NAMES.edit
+      | typeof V3_INTERNAL_ADAPTER_NAMES.delete,
     category: "edit" | "delete",
   ): void => {
     registerTool(
@@ -1699,11 +1712,11 @@ export function registerV3Surface(
       },
     );
   };
-  registerWrite("sv_edit", "edit");
-  registerWrite("sv_delete", "delete");
+  registerWrite(V3_INTERNAL_ADAPTER_NAMES.edit, "edit");
+  registerWrite(V3_INTERNAL_ADAPTER_NAMES.delete, "delete");
 
   registerTool(
-    "sv_transaction",
+    V3_INTERNAL_ADAPTER_NAMES.transaction,
     {
       title: "Run SynthV Transaction",
       description:
@@ -1751,7 +1764,7 @@ export function registerV3Surface(
   );
 
   registerTool(
-    "sv_ui",
+    V3_INTERNAL_ADAPTER_NAMES.ui,
     {
       title: "Control SynthV UI",
       description:
@@ -1809,7 +1822,7 @@ export function registerV3Surface(
   );
 
   registerTool(
-    "sv_sidebar",
+    V3_INTERNAL_ADAPTER_NAMES.review,
     {
       title: "Use SynthV Sidebar",
       description:

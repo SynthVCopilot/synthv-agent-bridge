@@ -15,6 +15,14 @@ import {
 import { BridgeError, toPublicError } from "./errors.js";
 import type { FileIpcClient } from "./ipc/file-ipc-client.js";
 import type { BridgeAction } from "./protocol.js";
+import {
+  commandOutcome,
+  runWithTrace,
+} from "./v3-command-kernel.js";
+import {
+  dispatchV3Command,
+  type V3CommandDispatchResult,
+} from "./v3-command-dispatcher.js";
 import { transactionEligibleActionNames } from "./v3-command-policy.js";
 
 const SIDEBAR_REQUEST_MARKER = "synthv-agent-bridge-sidebar-request-v1";
@@ -430,6 +438,23 @@ export class SidebarCoordinator {
     private readonly client: FileIpcClient,
   ) {}
 
+  private async dispatchConfirmedCommand(
+    action: SidebarPreviewAction,
+    payload: Record<string, unknown>,
+  ): Promise<V3CommandDispatchResult> {
+    return runWithTrace(async () =>
+      dispatchV3Command({
+        action,
+        expectedEffect: "allowAlreadySatisfied",
+        invoke: async () =>
+          commandOutcome(
+            action,
+            await this.client.send<Record<string, unknown>>(action, payload),
+          ) as V3CommandDispatchResult,
+      }),
+    );
+  }
+
   public start(): void {
     if (this.pollTimer !== null || this.stopPromise !== null) {
       return;
@@ -829,7 +854,7 @@ export class SidebarCoordinator {
           },
         );
       }
-      await this.client.send(plan.action, {
+      await this.dispatchConfirmedCommand(plan.action, {
         ...plan.payload,
         _sidebarPlanId: plan.planId,
       });

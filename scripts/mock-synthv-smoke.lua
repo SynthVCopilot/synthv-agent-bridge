@@ -1092,15 +1092,23 @@ local function callExpectError(action,payload,errorCode)
 end
 
 do
-    local f=assert(io.open(requestFile,"wb"))
-    f:write('{"protocolVersion":1,"requestId":"00000000-0000-4000-8000-000000000000","action":"ping","createdAt":"2026-07-26T00:00:00.000Z","payload":{}}')
-    f:close()
-    assert(scheduled,"bridge stopped unexpectedly")
-    local callback=scheduled; scheduled=nil; callback()
-    local rf=assert(io.open(responseFile,"rb")); local response=rf:read("*a"); rf:close(); os.remove(responseFile)
-    assert(response:find('"v":3',1,true),"v1 rejection did not use the v3 response envelope")
-    assert(response:find('"id":"00000000-0000-4000-8000-000000000000"',1,true),"v1 rejection did not preserve request correlation")
-    assert(response:find('"code":"PROTOCOL_MISMATCH"',1,true),"legacy v1 request was not rejected")
+    for legacyVersion=1,2 do
+        local correlation="legacy-protocol-"..legacyVersion
+        local f=assert(io.open(requestFile,"wb"))
+        if legacyVersion==1 then
+            f:write('{"protocolVersion":1,"requestId":"'..correlation..'","action":"ping","createdAt":"2026-07-26T00:00:00.000Z","payload":{}}')
+        else
+            f:write('{"v":2,"id":"'..correlation..'","t":"legacy-protocol-trace","b":"legacy-build","a":"ping","p":{}}')
+        end
+        f:close()
+        assert(scheduled,"bridge stopped unexpectedly")
+        local callback=scheduled; scheduled=nil; callback()
+        local rf=assert(io.open(responseFile,"rb")); local response=rf:read("*a"); rf:close(); os.remove(responseFile)
+        assert(response:find('"v":3',1,true),"legacy rejection did not use the v3 response envelope")
+        assert(response:find('"id":"'..correlation..'"',1,true),"legacy rejection did not preserve request correlation")
+        assert(response:find('"code":"PROTOCOL_MISMATCH"',1,true),"legacy protocol request was not rejected")
+    end
+    print("CASE:protocol-v1-v2-rejected")
 end
 
 do

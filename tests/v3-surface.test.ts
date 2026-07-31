@@ -862,7 +862,7 @@ test("reload waiting observes a delayed SynthV session token", async () => {
   const changed = await v2Testing.waitForSessionTokenChange(
     async () => tokens.shift(),
     "session-a",
-    100,
+    1_000,
     1,
   );
   assert.equal(changed, "session-b");

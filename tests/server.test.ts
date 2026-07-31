@@ -15,6 +15,7 @@ import {
   createServer,
   TRACK_DISPLAY_COLOR_PATTERN,
 } from "../src/server.js";
+import { V3_INTERNAL_ADAPTER_NAMES } from "../src/v3-surface.js";
 
 test("track color schema accepts public RGB and native ARGB forms", () => {
   for (const value of ["#D6BC43", "ffd6bc43", "#FFD6BC43"]) {
@@ -186,6 +187,18 @@ test("v3 exposes six semantic tools under a 6 KB metadata budget", async () => {
   } finally {
     await client.close();
     await server.close();
+  }
+});
+
+test("v3 private adapters cannot be confused with public or legacy MCP tools", () => {
+  const names = Object.values(V3_INTERNAL_ADAPTER_NAMES);
+  assert.equal(new Set(names).size, names.length);
+  for (const name of names) {
+    assert.match(name, /^v3_internal_/u);
+    assert.doesNotMatch(
+      name,
+      /^sv_(?:read|edit|delete|transaction|sidebar)$/u,
+    );
   }
 });
 

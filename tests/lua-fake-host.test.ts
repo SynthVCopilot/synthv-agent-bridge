@@ -91,6 +91,10 @@ test("Fake Host: component build mismatch is rejected before action dispatch", (
   assertMarker(context, "build-mismatch-blocks-command");
 });
 
+test("Fake Host: protocol v1 and v2 fail with PROTOCOL_MISMATCH", (context) => {
+  assertMarker(context, "protocol-v1-v2-rejected");
+});
+
 test("CLN-001: linked reference keeps its Group UUID and increments reference count", (context) => {
   assertMarker(context, "cln-001-linked-reference");
 });

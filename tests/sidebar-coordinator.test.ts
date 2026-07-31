@@ -7,6 +7,7 @@ import test from "node:test";
 import { loadConfig } from "../src/config.js";
 import type { FileIpcClient } from "../src/ipc/file-ipc-client.js";
 import { SidebarCoordinator } from "../src/sidebar-coordinator.js";
+import { recentTraceSummaries } from "../src/v3-command-kernel.js";
 
 const sleep = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -197,6 +198,12 @@ test("sidebar applies a confirmed preview through the existing IPC client", asyn
 
   await fixture.coordinator.pollOnce();
 
+  assert.deepEqual(
+    recentTraceSummaries(1)[0]?.stages.filter((stage) =>
+      ["contextResolved", "verified"].includes(stage),
+    ),
+    ["contextResolved", "verified"],
+  );
   assert.deepEqual(fixture.calls, [
     {
       action: "set_track_mixer",

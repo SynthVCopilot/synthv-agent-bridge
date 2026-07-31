@@ -23,8 +23,9 @@ import {
   type V3CommandDispatchResult,
 } from "./v3-command-dispatcher.js";
 import {
-  registerV3Surface,
+  registerV3InternalAdapters,
   type ActionToolDefinitions,
+  V3_INTERNAL_ADAPTER_NAMES,
 } from "./v3-surface.js";
 import { commandPolicyFor } from "./v3-command-policy.js";
 
@@ -131,7 +132,7 @@ async function assertCoherentExecutor(
 ): Promise<void> {
   const statusResult = await invokeCollected(
     internals,
-    "sv_status",
+    V3_INTERNAL_ADAPTER_NAMES.status,
     { operation: "bridge" },
     "freshRead",
   );
@@ -297,7 +298,12 @@ function collectV3Internals(
     tools.set(name, { config, handler });
     return {} as RegisteredTool;
   }) as RegisterTool;
-  registerV3Surface(collect, definitions, guardTokens, getSessionToken);
+  registerV3InternalAdapters(
+    collect,
+    definitions,
+    guardTokens,
+    getSessionToken,
+  );
   return tools;
 }
 
@@ -356,7 +362,7 @@ export function registerV3Facade(
         }
         const result = await invokeCollected(
           internals,
-          "sv_status",
+          V3_INTERNAL_ADAPTER_NAMES.status,
           input,
           "freshRead",
         );
@@ -389,7 +395,7 @@ export function registerV3Facade(
       runWithTrace(async () => {
         const result = await invokeCollected(
           internals,
-          "sv_describe",
+          V3_INTERNAL_ADAPTER_NAMES.describe,
           { actions: input.action === undefined ? [] : [input.action] },
           "accepted",
         );
@@ -440,7 +446,7 @@ export function registerV3Facade(
       runWithTrace(async () => {
         const result = await invokeCollected(
           internals,
-          "sv_read",
+          V3_INTERNAL_ADAPTER_NAMES.query,
           input,
           "freshRead",
         );
@@ -482,10 +488,10 @@ export function registerV3Facade(
           const category = commandPolicyFor(input.action).category;
           const internalName =
             category === "transaction"
-              ? "sv_transaction"
+              ? V3_INTERNAL_ADAPTER_NAMES.transaction
               : category === "delete"
-                ? "sv_delete"
-                : "sv_edit";
+                ? V3_INTERNAL_ADAPTER_NAMES.delete
+                : V3_INTERNAL_ADAPTER_NAMES.edit;
           const outcome = await dispatchV3Command({
             action: input.action,
             expectedEffect: input.expectedEffect,
@@ -493,7 +499,7 @@ export function registerV3Facade(
               const result = await invokeCollected(
                 internals,
                 internalName,
-                internalName === "sv_transaction"
+                internalName === V3_INTERNAL_ADAPTER_NAMES.transaction
                   ? {
                       action: input.action,
                       args: input.args,
@@ -548,7 +554,7 @@ export function registerV3Facade(
       runWithTrace(async () => {
         const result = await invokeCollected(
           internals,
-          "sv_ui",
+          V3_INTERNAL_ADAPTER_NAMES.ui,
           input,
           "verified",
         );
@@ -590,7 +596,7 @@ export function registerV3Facade(
         }
         const result = await invokeCollected(
           internals,
-          "sv_sidebar",
+          V3_INTERNAL_ADAPTER_NAMES.review,
           input,
           "projected",
         );

@@ -140,7 +140,7 @@ Current slice record:
   host result as the established projection.
 - Non-goals: changing the public Mixer DTO, authorizing writes, enabling the
   Snapshot cache, or migrating other Query actions.
-- Existing action/path: `sv_query` -> private `sv_read` adapter ->
+- Existing action/path: `sv_query` -> v3 internal Query adapter ->
   `get_track_mixer`.
 - Target aggregate: `TrackShell` Mixer state.
 - Public compatibility: the established projection remains the returned
@@ -169,7 +169,7 @@ Next slice record:
   compact default and explicitly requested diagnostic fields.
 - Non-goals: changing the Group Voice DTO, enabling cache reuse, interpreting
   singer identity, or exposing untouched default Vocal Mode names.
-- Existing action/path: `sv_query` -> private `sv_read` adapter ->
+- Existing action/path: `sv_query` -> v3 internal Query adapter ->
   `get_group_voice`.
 - Target aggregate: `GroupReference` Voice state.
 - Public compatibility: default output remains Track/Group locators,
@@ -200,7 +200,7 @@ Following collection slice:
 - Non-goals: pagination, Snapshot cache activation, Track mutation, or changing
   the established Track summary fields except for the required
   `mainGroupUuid` privacy correction.
-- Existing action/path: `sv_query` -> private `sv_read` adapter ->
+- Existing action/path: `sv_query` -> v3 internal Query adapter ->
   `list_tracks`.
 - Target aggregate: ordered `TrackShell` summaries.
 - Public compatibility: `trackCount`, Track order, all non-sensitive
@@ -234,7 +234,7 @@ Ownership collection slice:
   the reference counts required for shared-Group write policy.
 - Non-goals: changing Group ownership, authorizing a write from a read-only
   Context, exposing Group UUIDs/fingerprints, or enabling Snapshot cache reuse.
-- Existing action/path: `sv_query` -> private `sv_read` adapter ->
+- Existing action/path: `sv_query` -> v3 internal Query adapter ->
   `list_note_groups`.
 - Target aggregate: ordered library `GroupContent` summaries.
 - Public compatibility: `groupCount`, library order, `libraryIndex`, `name`,

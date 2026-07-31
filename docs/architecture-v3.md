@@ -68,7 +68,7 @@ v3 does not weaken the repository safety invariants:
 - The Node process remains network-free by default.
 - `.svp` files are never parsed or mutated by the Bridge.
 
-## Target component model
+## Implemented component model
 
 ```text
 Agent / MCP client
