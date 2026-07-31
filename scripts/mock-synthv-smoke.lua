@@ -2147,6 +2147,62 @@ callWrite("rollback_transaction",'{"transactionId":"'..escape(transactionId)..'"
 assert(project.tracks[1].name=="Track","transaction rollback did not restore the track name")
 assert(project.tracks[2].mixer.gain==0,"transaction rollback did not restore the mixer")
 
+do
+local noEffectTransactionUndoBefore=project.undo
+local noEffectTransaction=call(
+    "apply_transaction",
+    '{"summary":"Already satisfied transaction","steps":['..
+        '{"action":"set_track_mixer","payload":{'..
+            '"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'",'..
+            '"gainDecibel":0}}]}'
+)
+assert(
+    project.undo==noEffectTransactionUndoBefore,
+    "already-satisfied transaction created an Undo"
+)
+assert(
+    noEffectTransaction:find('"changedCount":0',1,true),
+    "already-satisfied transaction did not report zero changes"
+)
+assert(
+    noEffectTransaction:find('"undoRecordCount":0',1,true),
+    "already-satisfied transaction reported an Undo"
+)
+print("CASE:transaction-already-satisfied")
+
+local noWriteDependentUndoBefore=project.undo
+local noWriteDependent=callExpectError(
+    "apply_transaction",
+    '{"summary":"No-write dependency failure","steps":['..
+        '{"action":"set_track_mixer","payload":{'..
+            '"trackIndex":2,"trackFingerprint":"'..track2Fingerprint..'",'..
+            '"gainDecibel":0}},'..
+        '{"action":"update_track","payload":{'..
+            '"trackIndex":{"$result":{"step":1,"path":["trackIndex"]}},'..
+            '"trackFingerprint":{"$result":{'..
+                '"step":1,"path":["fingerprint"]}}}}'..
+    ']}',
+    "TRANSACTION_EXECUTION_FAILED"
+)
+assert(
+    project.undo==noWriteDependentUndoBefore,
+    "dependent failure after a no-op step created an Undo"
+)
+assert(
+    noWriteDependent:find('"completedStepCount":1',1,true),
+    "dependent no-write failure lost its completed-step count"
+)
+assert(
+    noWriteDependent:find('"changedStepCount":0',1,true),
+    "dependent no-write failure reported a changed step"
+)
+assert(
+    noWriteDependent:find('"undoRequired":false',1,true),
+    "dependent no-write failure incorrectly required Undo"
+)
+print("CASE:transaction-dependent-no-write-failure")
+end
+
 local dependentTransactionUndoBefore=project.undo
 local dependentTransactionTrackCountBefore=#project.tracks
 local dependentTransactionResponse=call(

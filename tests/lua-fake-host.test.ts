@@ -239,6 +239,14 @@ test("CMD-006: aggregate note postcondition failure requires one Undo", (context
   assertMarker(context, "aggregate-tuning-postcondition-failure");
 });
 
+test("CMD-005: an already-satisfied transaction creates no Undo", (context) => {
+  assertMarker(context, "transaction-already-satisfied");
+});
+
+test("SAF-006: dependent failure after a no-op step requires no Undo", (context) => {
+  assertMarker(context, "transaction-dependent-no-write-failure");
+});
+
 test("Fake Host: dependent partial failure reports one Undo recovery", (context) => {
   assertMarker(context, "dependent-partial-write-undo");
 });

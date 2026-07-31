@@ -11082,6 +11082,12 @@ local function validateTransactionStepAtUndoBoundary(step, stepIndex)
     )
     transactionMode = previousMode
     if ok then
+        if type(resultOrError) == "table"
+            and resultOrError.changedCount == 0
+            and resultOrError.undoRecordCount == 0
+            and resultOrError.verified == true then
+            return false
+        end
         raiseBridgeError(
             "TRANSACTION_PREFLIGHT_INCOMPLETE",
             "A transaction step did not reach its validated undo boundary",
@@ -11091,11 +11097,13 @@ local function validateTransactionStepAtUndoBoundary(step, stepIndex)
     if resultOrError ~= TRANSACTION_VALIDATION_SENTINEL then
         error(resultOrError, 0)
     end
+    return true
 end
 
 local function preflightTransaction(steps)
     local scopes = {}
     local dependentStepCount = 0
+    local plannedIndependentChangeCount = 0
     for index = 1, #steps do
         local step = steps[index]
         if #steps > 1
@@ -11157,11 +11165,18 @@ local function preflightTransaction(steps)
                     }
                 )
             end
+            step.preflightWillMutate = resultOrError
+            if resultOrError then
+                plannedIndependentChangeCount =
+                    plannedIndependentChangeCount + 1
+            end
         end
     end
     return {
         dependentStepCount = dependentStepCount,
-        fullyPreflightedBeforeWrite = dependentStepCount == 0
+        fullyPreflightedBeforeWrite = dependentStepCount == 0,
+        plannedIndependentChangeCount =
+            plannedIndependentChangeCount
     }
 end
 
@@ -11247,19 +11262,20 @@ local function executeTransactionSteps(steps)
     if not project then
         raiseBridgeError("PROJECT_UNAVAILABLE", "No Synthesizer V project is open")
     end
-    createUndoRecord(project)
     local results = json.array()
     local completedStepCount = 0
+    local changedStepCount = 0
+    local undoOpened = false
     local failedStepIndex = nil
     local failedAction = nil
     local failurePhase = nil
-    transactionMode = "execute"
     local ok, resultOrError = xpcall(function()
         for index = 1, #steps do
             local rawStep = steps[index]
             failedStepIndex = index
             failedAction = rawStep.action
             local step = rawStep
+            local willMutate = rawStep.preflightWillMutate == true
             if rawStep.dependencyCount > 0 then
                 failurePhase = "resolveDependencies"
                 step = {
@@ -11273,13 +11289,26 @@ local function executeTransactionSteps(steps)
                     dependencyCount = rawStep.dependencyCount
                 }
                 failurePhase = "dependentPreflight"
-                validateTransactionStepAtUndoBoundary(step, index)
+                willMutate =
+                    validateTransactionStepAtUndoBoundary(step, index)
+            end
+            if willMutate and not undoOpened then
+                transactionMode = nil
+                createUndoRecord(project)
+                undoOpened = true
             end
             failurePhase = "execute"
             transactionMode = "execute"
-            results[#results + 1] =
+            local stepResult =
                 invokeActionHandler(step.action, step.payload)
+            if type(stepResult) == "table" then
+                stepResult.undoRecordCount = 0
+            end
+            results[#results + 1] = stepResult
             completedStepCount = index
+            if willMutate then
+                changedStepCount = changedStepCount + 1
+            end
         end
         return results
     end, function(errorValue)
@@ -11297,7 +11326,8 @@ local function executeTransactionSteps(steps)
             originalDetails = resultOrError.details or JSON_NULL
         end
         local partialWritePossible =
-            completedStepCount > 0 or failurePhase == "execute"
+            changedStepCount > 0
+            or (failurePhase == "execute" and undoOpened)
         raiseBridgeError(
             "TRANSACTION_EXECUTION_FAILED",
             "A single-Undo transaction failed after execution began",
@@ -11309,6 +11339,8 @@ local function executeTransactionSteps(steps)
                 originalCode = originalCode or JSON_NULL,
                 originalMessage = originalMessage,
                 originalDetails = originalDetails,
+                changedStepCount = changedStepCount,
+                undoOpened = undoOpened,
                 partialWritePossible = partialWritePossible,
                 undoRequired = partialWritePossible,
                 undoGuidance = partialWritePossible
@@ -11317,6 +11349,9 @@ local function executeTransactionSteps(steps)
             }
         )
     end
+    preflight.changedStepCount = changedStepCount
+    preflight.undoRecordCount = undoOpened and 1 or 0
+    preflight.verified = true
     return results, preflight
 end
 
@@ -11372,7 +11407,9 @@ function handlers.apply_transaction(payload)
         results = results,
         rollbackAvailable = rollbackAvailable,
         rollbackError = rollbackError or JSON_NULL,
-        undoRecordCount = 1,
+        changedCount = execution.changedStepCount,
+        undoRecordCount = execution.undoRecordCount,
+        verified = execution.verified,
         atomicity = "singleUndoRecord",
         dependentStepCount = execution.dependentStepCount,
         fullyPreflightedBeforeWrite = execution.fullyPreflightedBeforeWrite
@@ -11417,7 +11454,9 @@ function handlers.rollback_transaction(payload)
         originalSummary = stored.summary,
         stepCount = #steps,
         results = results,
-        undoRecordCount = 1,
+        changedCount = execution.changedStepCount,
+        undoRecordCount = execution.undoRecordCount,
+        verified = execution.verified,
         atomicity = "singleUndoRecord",
         dependentStepCount = execution.dependentStepCount,
         fullyPreflightedBeforeWrite = execution.fullyPreflightedBeforeWrite
