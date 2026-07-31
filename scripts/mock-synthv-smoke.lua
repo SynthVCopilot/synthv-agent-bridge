@@ -166,6 +166,9 @@ local function makePitchControl(kind)
     return c
 end
 
+noteIgnorePitch = false
+noteRemoveNoop = false
+
 local function makeNote()
     local n = attachScriptData({
         onset = 0,
@@ -188,7 +191,11 @@ local function makeNote()
     function n:setTimeRange(o,d) self.onset=o; self.duration=d end
     function n:getEnd() return self.onset + self.duration end
     function n:getPitch() return self.pitch end
-    function n:setPitch(v) self.pitch=v end
+    function n:setPitch(v)
+        if not (noteIgnorePitch and self.parent ~= nil) then
+            self.pitch=v
+        end
+    end
     function n:getLyrics() return self.lyrics end
     function n:setLyrics(v) self.lyrics=v end
     function n:getPhonemes() return self.phonemes end
@@ -381,7 +388,9 @@ local function makeGroup()
         table.sort(self.notes,function(x,y)return x.onset<y.onset end)
         return indexOf(self.notes,n)
     end
-    function g:removeNote(i) table.remove(self.notes,i) end
+    function g:removeNote(i)
+        if not noteRemoveNoop then table.remove(self.notes,i) end
+    end
     function g:getNumPitchControls()
         assert(
             not self.rejectContentReadAfterLinkedClone
@@ -1653,6 +1662,63 @@ for value in notesAfter:gmatch('"fingerprint":"([^"]+)"') do
 end
 assert(#fingerprints==2,"expected two note fingerprints")
 local newFingerprint=fingerprints[1]
+do
+local noEffectUndoBefore=project.undo
+local noEffectEdit=call(
+    "edit_notes",
+    '{"trackIndex":1,"groupIndex":1,"edits":[{"noteIndex":1,'..
+        '"fingerprint":"'..escape(newFingerprint)..'",'..
+        '"changes":{"pitch":62}}]}'
+)
+assert(project.undo==noEffectUndoBefore,"already-satisfied note edit created an undo record")
+assert(noEffectEdit:find('"editedCount":0',1,true),"already-satisfied note edit did not report zero changes")
+assert(noEffectEdit:find('"undoRecordCount":0',1,true),"already-satisfied note edit reported an Undo")
+print("CASE:note-edit-already-satisfied")
+
+local ignoredEditUndoBefore=project.undo
+noteIgnorePitch=true
+local ignoredEdit=callExpectError(
+    "edit_notes",
+    '{"trackIndex":1,"groupIndex":1,"edits":[{"noteIndex":1,'..
+        '"fingerprint":"'..escape(newFingerprint)..'",'..
+        '"changes":{"pitch":63}}]}',
+    "HOST_POSTCONDITION_FAILED"
+)
+noteIgnorePitch=false
+assert(project.undo==ignoredEditUndoBefore+1,"ignored note setter did not retain one Undo boundary")
+assert(project.tracks[1].refs[1].group.notes[1].pitch==62,"ignored note setter unexpectedly changed pitch")
+assert(ignoredEdit:find('"undoRequired":true',1,true),"ignored note setter did not require one Undo")
+print("CASE:note-edit-postcondition-failure")
+end
+
+do
+local transformNoopUndoBefore=project.undo
+local transformNoop=call(
+    "transform_notes",
+    '{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,'..
+        '"fingerprint":"'..escape(newFingerprint)..'"}],'..
+        '"transform":{"durationScale":1.0000000001}}'
+)
+assert(project.undo==transformNoopUndoBefore,"already-satisfied note transform created an Undo")
+assert(transformNoop:find('"transformedCount":0',1,true),"already-satisfied transform did not report zero changes")
+assert(transformNoop:find('"undoRecordCount":0',1,true),"already-satisfied transform reported an Undo")
+print("CASE:note-transform-already-satisfied")
+
+local ignoredTransformUndoBefore=project.undo
+noteIgnorePitch=true
+local ignoredTransform=callExpectError(
+    "transform_notes",
+    '{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,'..
+        '"fingerprint":"'..escape(newFingerprint)..'"}],'..
+        '"transform":{"pitchOffsetSemitones":1}}',
+    "HOST_POSTCONDITION_FAILED"
+)
+noteIgnorePitch=false
+assert(project.undo==ignoredTransformUndoBefore+1,"ignored transform did not retain one Undo boundary")
+assert(ignoredTransform:find('"undoRequired":true',1,true),"ignored transform did not require one Undo")
+print("CASE:note-transform-postcondition-failure")
+end
+
 local undoBeforeInvalidBatch=project.undo
 local pitchBeforeInvalidBatch=project.tracks[1].refs[1].group.notes[1].pitch
 callExpectError("edit_notes",'{"trackIndex":1,"groupIndex":1,"edits":[{"noteIndex":1,"fingerprint":"'..escape(fingerprints[1])..'","changes":{"pitch":63}},{"noteIndex":2,"fingerprint":"'..escape(fingerprints[2])..'","changes":{"unsupported":true}}]}',"INVALID_ARGUMENT")
@@ -2193,6 +2259,20 @@ end
 
 local finalNotes=call("get_track_notes",'{"trackIndex":1,"offset":0,"limit":100}')
 local finalFingerprint=extractJsonString(finalNotes,"fingerprint")
+do
+local ignoredDeleteUndoBefore=project.undo
+noteRemoveNoop=true
+local ignoredDelete=callExpectError(
+    "delete_notes",
+    '{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,'..
+        '"fingerprint":"'..escape(finalFingerprint)..'"}]}',
+    "HOST_POSTCONDITION_FAILED"
+)
+noteRemoveNoop=false
+assert(project.undo==ignoredDeleteUndoBefore+1,"ignored note delete did not retain one Undo boundary")
+assert(ignoredDelete:find('"undoRequired":true',1,true),"ignored note delete did not require one Undo")
+print("CASE:note-delete-postcondition-failure")
+end
 callWrite("delete_notes",'{"trackIndex":1,"groupIndex":1,"notes":[{"noteIndex":1,"fingerprint":"'..escape(finalFingerprint)..'"}]}')
 
 do
@@ -2268,5 +2348,5 @@ do
 end
 end
 
-assert(project.undo==73,"expected 73 undo records, got "..project.undo)
+assert(project.undo==76,"expected 76 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

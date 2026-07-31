@@ -1156,6 +1156,36 @@ local function makeNoteFingerprint(groupUuid, noteIndex, note, encodedAttributes
     return table.concat(parts, "|")
 end
 
+runtimeState.makeNoteContentFingerprint = function(groupUuid, note)
+    -- A note index is a locator, not note-owned content. Use a fixed index for
+    -- before/after and whole-Group multisets so onset changes that reorder
+    -- notes can still be verified without mistaking the reordering for data
+    -- loss.
+    return makeNoteFingerprint(groupUuid, 0, note)
+end
+
+runtimeState.snapshotNoteContent = function(group)
+    local groupUuid = group:getUUID()
+    local snapshot = {}
+    for noteIndex = 1, group:getNumNotes() do
+        snapshot[#snapshot + 1] =
+            runtimeState.makeNoteContentFingerprint(
+                groupUuid,
+                group:getNote(noteIndex)
+            )
+    end
+    table.sort(snapshot)
+    return snapshot
+end
+
+runtimeState.noteContentSnapshotsEqual = function(left, right)
+    if #left ~= #right then return false end
+    for index = 1, #left do
+        if left[index] ~= right[index] then return false end
+    end
+    return true
+end
+
 local function serializeNote(group, reference, note, noteIndex)
     local groupUuid = group:getUUID()
     local sanitizedAttributes = sanitizeForJson(note:getAttributes())
@@ -7692,45 +7722,178 @@ end
 
 function handlers.edit_notes(payload)
     payload = requireObject(payload, "payload")
-    local project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
-    local edits = requireArray(payload.edits, "edits", 1, 512)
-    local prepared = {}
-    local seen = {}
+    return executeCommandPipeline({
+        action = "edit_notes",
+        freshRead = function()
+            local project, _track, trackIndex, reference, group, groupIndex =
+                resolveGroup(payload)
+            local edits = requireArray(payload.edits, "edits", 1, 512)
+            local groupUuid = group:getUUID()
+            local expectedContent =
+                runtimeState.snapshotNoteContent(group)
+            local prepared = {}
+            local seen = {}
+            local changedCount = 0
 
-    for index = 1, #edits do
-        local edit = requireObject(edits[index], "edits[" .. index .. "]")
-        local noteIndex = requireInteger(edit.noteIndex, "edits[" .. index .. "].noteIndex", 1, group:getNumNotes())
-        if seen[noteIndex] then
-            raiseBridgeError("INVALID_ARGUMENT", "The same noteIndex appears more than once", { noteIndex = noteIndex })
+            for index = 1, #edits do
+                local path = "edits[" .. index .. "]"
+                local edit = requireObject(edits[index], path)
+                local noteIndex = requireInteger(
+                    edit.noteIndex,
+                    path .. ".noteIndex",
+                    1,
+                    group:getNumNotes()
+                )
+                if seen[noteIndex] then
+                    raiseBridgeError(
+                        "INVALID_ARGUMENT",
+                        "The same noteIndex appears more than once",
+                        { noteIndex = noteIndex }
+                    )
+                end
+                seen[noteIndex] = true
+                local fingerprint = requireString(
+                    edit.fingerprint,
+                    path .. ".fingerprint",
+                    false
+                )
+                local note = validateFingerprint(group, noteIndex, fingerprint)
+                local changesPath = path .. ".changes"
+                local changes =
+                    prepareNoteChanges(note, edit.changes, changesPath)
+                local candidate = note:clone()
+                applyPreparedNoteChanges(candidate, changes, changesPath)
+                local beforeContent =
+                    runtimeState.makeNoteContentFingerprint(groupUuid, note)
+                local expectedAfter =
+                    runtimeState.makeNoteContentFingerprint(
+                        groupUuid,
+                        candidate
+                    )
+                local effective = beforeContent ~= expectedAfter
+                if effective then
+                    changedCount = changedCount + 1
+                    -- The snapshot is sorted below after replacing the original
+                    -- note-owned content at its pre-write index.
+                    for contentIndex = 1, #expectedContent do
+                        if expectedContent[contentIndex] == beforeContent then
+                            expectedContent[contentIndex] = expectedAfter
+                            break
+                        end
+                    end
+                end
+                prepared[#prepared + 1] = {
+                    note = note,
+                    noteIndex = noteIndex,
+                    changes = changes,
+                    path = changesPath,
+                    effective = effective,
+                    expectedAfter = expectedAfter
+                }
+            end
+            table.sort(expectedContent)
+            return {
+                project = project,
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = groupUuid,
+                reference = reference,
+                group = group,
+                prepared = prepared,
+                changedCount = changedCount,
+                expectedContent = expectedContent
+            }
+        end,
+        preflight = function(state)
+            return {
+                changedCount = state.changedCount
+            }
+        end,
+        alreadySatisfied = function(state, _plan)
+            return {
+                trackIndex = state.trackIndex,
+                groupIndex = state.groupIndex,
+                groupUuid = state.groupUuid,
+                editedCount = 0,
+                notes = json.array(),
+                verified = true,
+                undoRecordCount = 0
+            }
+        end,
+        mutate = function(state, _plan)
+            for index = 1, #state.prepared do
+                local edit = state.prepared[index]
+                if edit.effective then
+                    applyPreparedNoteChanges(
+                        edit.note,
+                        edit.changes,
+                        edit.path
+                    )
+                end
+            end
+        end,
+        verify = function(state, _plan)
+            local _project, _track, trackIndex, reference, group, groupIndex =
+                resolveGroup(payload)
+            local actualContent =
+                runtimeState.snapshotNoteContent(group)
+            if not runtimeState.noteContentSnapshotsEqual(
+                actualContent,
+                state.expectedContent
+            ) then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not retain the complete requested note edit",
+                    {
+                        trackIndex = trackIndex,
+                        groupIndex = groupIndex,
+                        expectedNoteCount = #state.expectedContent,
+                        actualNoteCount = #actualContent
+                    }
+                )
+            end
+
+            local wanted = {}
+            for index = 1, #state.prepared do
+                local edit = state.prepared[index]
+                if edit.effective then
+                    wanted[edit.expectedAfter] =
+                        (wanted[edit.expectedAfter] or 0) + 1
+                end
+            end
+            local notes = json.array()
+            local groupUuid = group:getUUID()
+            for noteIndex = 1, group:getNumNotes() do
+                local note = group:getNote(noteIndex)
+                local content =
+                    runtimeState.makeNoteContentFingerprint(groupUuid, note)
+                if (wanted[content] or 0) > 0 then
+                    notes[#notes + 1] =
+                        serializeNote(group, reference, note, noteIndex)
+                    wanted[content] = wanted[content] - 1
+                end
+            end
+            if #notes ~= state.changedCount then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV retained the Group snapshot but not every edited-note identity",
+                    {
+                        expectedEditedCount = state.changedCount,
+                        actualEditedCount = #notes
+                    }
+                )
+            end
+            return {
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = groupUuid,
+                editedCount = #notes,
+                notes = notes,
+                verified = true,
+                undoRecordCount = 1
+            }
         end
-        seen[noteIndex] = true
-        local fingerprint = requireString(edit.fingerprint, "edits[" .. index .. "].fingerprint", false)
-        local note = validateFingerprint(group, noteIndex, fingerprint)
-        local changesPath = "edits[" .. index .. "].changes"
-        prepared[#prepared + 1] = {
-            note = note,
-            changes = prepareNoteChanges(note, edit.changes, changesPath),
-            path = changesPath
-        }
-    end
-
-    createUndoRecord(project)
-    for index = 1, #prepared do
-        applyPreparedNoteChanges(prepared[index].note, prepared[index].changes, prepared[index].path)
-    end
-
-    local notes = json.array()
-    for index = 1, #prepared do
-        local note = prepared[index].note
-        notes[#notes + 1] = serializeNote(group, reference, note, note:getIndexInParent())
-    end
-    return {
-        trackIndex = trackIndex,
-        groupIndex = groupIndex,
-        groupUuid = group:getUUID(),
-        editedCount = #notes,
-        notes = notes
-    }
+    })
 end
 
 function handlers.transform_notes(payload)
@@ -7797,7 +7960,6 @@ function handlers.transform_notes(payload)
         )
         or 0
     local edits = json.array()
-    local expected = {}
     local seen = {}
     local unchangedCount = 0
 
@@ -7919,20 +8081,32 @@ function handlers.transform_notes(payload)
                 fingerprint = fingerprint,
                 changes = effective
             }
-            expected[#expected + 1] = {
-                note = note,
-                noteIndex = noteIndex,
-                changes = effective
-            }
         end
     end
 
     if #edits == 0 then
-        raiseBridgeError(
-            "NO_CHANGES",
-            "The requested transform would not change any target note",
-            { targetedCount = #targets }
-        )
+        return {
+            trackIndex = trackIndex,
+            groupIndex = groupIndex,
+            groupUuid = group:getUUID(),
+            semanticAction = "transform_notes",
+            changedCount = 0,
+            editedCount = 0,
+            notes = json.array(),
+            targetedCount = #targets,
+            transformedCount = 0,
+            unchangedCount = unchangedCount,
+            transform = {
+                onsetOffsetBlick = onsetOffsetBlick or JSON_NULL,
+                onsetOffsetSeconds = onsetOffsetSeconds or JSON_NULL,
+                durationScale = durationScale,
+                durationOffsetBlick = durationOffsetBlick,
+                pitchOffsetSemitones = pitchOffsetSemitones,
+                durationUnitPreserved = "blick"
+            },
+            verified = true,
+            undoRecordCount = 0
+        }
     end
 
     -- edit_notes owns the clone preflight and the one undo boundary. This
@@ -7945,36 +8119,8 @@ function handlers.transform_notes(payload)
         edits = edits
     })
 
-    for index = 1, #expected do
-        local check = expected[index]
-        local actualOnset = check.note:getOnset()
-        local actualDuration = check.note:getDuration()
-        local actualPitch = check.note:getPitch()
-        if (check.changes.onset ~= nil
-                and actualOnset ~= check.changes.onset)
-            or (check.changes.duration ~= nil
-                and actualDuration ~= check.changes.duration)
-            or (check.changes.pitch ~= nil
-                and actualPitch ~= check.changes.pitch) then
-            raiseBridgeError(
-                "HOST_POSTCONDITION_FAILED",
-                "SynthV did not retain a transformed note value",
-                {
-                    noteIndex = check.noteIndex,
-                    requested = check.changes,
-                    actual = {
-                        onset = actualOnset,
-                        duration = actualDuration,
-                        pitch = actualPitch
-                    },
-                    undoGuidance =
-                        "Use SynthV Edit > Undo to revert this transform."
-                }
-            )
-        end
-    end
-
     result.semanticAction = "transform_notes"
+    result.changedCount = #edits
     result.targetedCount = #targets
     result.transformedCount = #edits
     result.unchangedCount = unchangedCount
@@ -8382,45 +8528,137 @@ end
 
 function handlers.delete_notes(payload)
     payload = requireObject(payload, "payload")
-    local project, _track, trackIndex, reference, group, groupIndex = resolveGroup(payload)
-    local targets = requireArray(payload.notes, "notes", 1, 512)
-    local prepared = {}
-    local seen = {}
+    return executeCommandPipeline({
+        action = "delete_notes",
+        freshRead = function()
+            local project, _track, trackIndex, reference, group, groupIndex =
+                resolveGroup(payload)
+            local targets = requireArray(payload.notes, "notes", 1, 512)
+            local prepared = {}
+            local seen = {}
+            local deleteIndices = {}
 
-    for index = 1, #targets do
-        local target = requireObject(targets[index], "notes[" .. index .. "]")
-        local noteIndex = requireInteger(target.noteIndex, "notes[" .. index .. "].noteIndex", 1, group:getNumNotes())
-        if seen[noteIndex] then
-            raiseBridgeError("INVALID_ARGUMENT", "The same noteIndex appears more than once", { noteIndex = noteIndex })
+            for index = 1, #targets do
+                local path = "notes[" .. index .. "]"
+                local target = requireObject(targets[index], path)
+                local noteIndex = requireInteger(
+                    target.noteIndex,
+                    path .. ".noteIndex",
+                    1,
+                    group:getNumNotes()
+                )
+                if seen[noteIndex] then
+                    raiseBridgeError(
+                        "INVALID_ARGUMENT",
+                        "The same noteIndex appears more than once",
+                        { noteIndex = noteIndex }
+                    )
+                end
+                seen[noteIndex] = true
+                deleteIndices[noteIndex] = true
+                local fingerprint = requireString(
+                    target.fingerprint,
+                    path .. ".fingerprint",
+                    false
+                )
+                local note =
+                    validateFingerprint(group, noteIndex, fingerprint)
+                prepared[#prepared + 1] = {
+                    noteIndex = noteIndex,
+                    note =
+                        serializeNote(
+                            group,
+                            reference,
+                            note,
+                            noteIndex
+                        )
+                }
+            end
+
+            local groupUuid = group:getUUID()
+            local expectedContent = {}
+            for noteIndex = 1, group:getNumNotes() do
+                if not deleteIndices[noteIndex] then
+                    expectedContent[#expectedContent + 1] =
+                        runtimeState.makeNoteContentFingerprint(
+                            groupUuid,
+                            group:getNote(noteIndex)
+                        )
+                end
+            end
+            table.sort(expectedContent)
+            table.sort(prepared, function(left, right)
+                return left.noteIndex > right.noteIndex
+            end)
+            return {
+                project = project,
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = groupUuid,
+                group = group,
+                prepared = prepared,
+                expectedContent = expectedContent
+            }
+        end,
+        preflight = function(state)
+            return {
+                changedCount = #state.prepared
+            }
+        end,
+        alreadySatisfied = function(state, _plan)
+            return {
+                trackIndex = state.trackIndex,
+                groupIndex = state.groupIndex,
+                groupUuid = state.groupUuid,
+                deletedCount = 0,
+                deletedNotes = json.array(),
+                verified = true,
+                undoRecordCount = 0
+            }
+        end,
+        mutate = function(state, _plan)
+            for index = 1, #state.prepared do
+                state.group:removeNote(
+                    state.prepared[index].noteIndex
+                )
+            end
+        end,
+        verify = function(state, _plan)
+            local _project, _track, trackIndex, _reference, group, groupIndex =
+                resolveGroup(payload)
+            local actualContent =
+                runtimeState.snapshotNoteContent(group)
+            if not runtimeState.noteContentSnapshotsEqual(
+                actualContent,
+                state.expectedContent
+            ) then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not retain the complete requested note deletion",
+                    {
+                        trackIndex = trackIndex,
+                        groupIndex = groupIndex,
+                        expectedNoteCount = #state.expectedContent,
+                        actualNoteCount = #actualContent
+                    }
+                )
+            end
+
+            local deleted = json.array()
+            for index = #state.prepared, 1, -1 do
+                deleted[#deleted + 1] = state.prepared[index].note
+            end
+            return {
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                groupUuid = group:getUUID(),
+                deletedCount = #deleted,
+                deletedNotes = deleted,
+                verified = true,
+                undoRecordCount = 1
+            }
         end
-        seen[noteIndex] = true
-        local fingerprint = requireString(target.fingerprint, "notes[" .. index .. "].fingerprint", false)
-        local note = validateFingerprint(group, noteIndex, fingerprint)
-        prepared[#prepared + 1] = {
-            noteIndex = noteIndex,
-            note = serializeNote(group, reference, note, noteIndex)
-        }
-    end
-
-    table.sort(prepared, function(left, right)
-        return left.noteIndex > right.noteIndex
-    end)
-    createUndoRecord(project)
-    for index = 1, #prepared do
-        group:removeNote(prepared[index].noteIndex)
-    end
-
-    local deleted = json.array()
-    for index = #prepared, 1, -1 do
-        deleted[#deleted + 1] = prepared[index].note
-    end
-    return {
-        trackIndex = trackIndex,
-        groupIndex = groupIndex,
-        groupUuid = group:getUUID(),
-        deletedCount = #deleted,
-        deletedNotes = deleted
-    }
+    })
 end
 
 function handlers.get_note_retakes(payload)

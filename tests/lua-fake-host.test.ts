@@ -143,6 +143,26 @@ test("Fake Host: already-satisfied mixer command creates no Undo", (context) => 
   assertMarker(context, "already-satisfied-no-undo");
 });
 
+test("SAF-007: already-satisfied note edit creates no Undo", (context) => {
+  assertMarker(context, "note-edit-already-satisfied");
+});
+
+test("SAF-008: ignored note setter fails its postcondition with Undo guidance", (context) => {
+  assertMarker(context, "note-edit-postcondition-failure");
+});
+
+test("SAF-008: ignored note deletion fails its postcondition with Undo guidance", (context) => {
+  assertMarker(context, "note-delete-postcondition-failure");
+});
+
+test("CMD-005: rounded identity transform returns alreadySatisfied without Undo", (context) => {
+  assertMarker(context, "note-transform-already-satisfied");
+});
+
+test("CMD-006: ignored transformed value fails through the note postcondition", (context) => {
+  assertMarker(context, "note-transform-postcondition-failure");
+});
+
 test("Fake Host: mixer emits bounded Lua command-stage timings", (context) => {
   assertMarker(context, "mixer-lua-stage-timings");
 });

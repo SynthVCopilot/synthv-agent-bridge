@@ -302,9 +302,19 @@ test("deterministic note transforms stay guarded and use one edit undo boundary"
   assert.match(handler, /validateFingerprint/);
   assert.match(handler, /getBlickFromSeconds/);
   assert.match(handler, /handlers\.edit_notes/);
-  assert.match(handler, /HOST_POSTCONDITION_FAILED/);
   assert.match(handler, /never chooses musical intent or target notes/);
   assert.doesNotMatch(handler, /createUndoRecord\(project\)/);
+
+  const editHandlerStart = bridgeSource.indexOf(
+    "function handlers.edit_notes",
+  );
+  const editHandler = bridgeSource.slice(
+    editHandlerStart,
+    handlerStart,
+  );
+  assert.match(editHandler, /executeCommandPipeline/);
+  assert.match(editHandler, /HOST_POSTCONDITION_FAILED/);
+  assert.match(editHandler, /snapshotNoteContent/);
 });
 
 test("automation writes fail closed without the fresh host definition range", async () => {
