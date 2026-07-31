@@ -1,10 +1,20 @@
 #!/usr/bin/env node
 
-import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+
+import { readComponentBuildIdentity } from "./component-build-identity.mjs";
 
 function usage() {
   console.error(
@@ -30,6 +40,108 @@ async function readOptionalText(filePath) {
   } catch {
     return null;
   }
+}
+
+async function pathExists(filePath) {
+  return stat(filePath).then(() => true).catch(() => false);
+}
+
+function sha256(content) {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
+async function installScriptsAtomically(
+  sourceDirectory,
+  destinationDirectory,
+  installedFiles,
+  preparedFiles = {},
+) {
+  const transactionId = randomUUID();
+  const stagingDirectory = path.join(
+    destinationDirectory,
+    `.v3-install-staging-${transactionId}`,
+  );
+  const backupDirectory = path.join(
+    destinationDirectory,
+    `.v3-install-backup-${transactionId}`,
+  );
+  await mkdir(stagingDirectory, { recursive: true });
+  await mkdir(backupDirectory, { recursive: true });
+
+  const expectedHashes = {};
+  const backedUp = [];
+  const activated = [];
+  let preserveBackup = false;
+  try {
+    for (const fileName of installedFiles) {
+      const sourceFile = path.join(sourceDirectory, fileName);
+      const stagedFile = path.join(stagingDirectory, fileName);
+      const sourceText =
+        preparedFiles[fileName] ?? await readFile(sourceFile, "utf8");
+      expectedHashes[fileName] = sha256(sourceText);
+      await writeFile(stagedFile, sourceText, "utf8");
+      const stagedText = await readFile(stagedFile, "utf8");
+      if (sha256(stagedText) !== expectedHashes[fileName]) {
+        throw new Error(`Staged install verification failed for ${fileName}`);
+      }
+    }
+
+    for (const fileName of installedFiles) {
+      const destinationFile = path.join(destinationDirectory, fileName);
+      const backupFile = path.join(backupDirectory, fileName);
+      if (await pathExists(destinationFile)) {
+        await rename(destinationFile, backupFile);
+        backedUp.push(fileName);
+      }
+      await rename(path.join(stagingDirectory, fileName), destinationFile);
+      activated.push(fileName);
+      if (
+        process.env.NODE_ENV === "test" &&
+        process.env.SYNTHV_AGENT_INSTALL_TEST_FAIL_AFTER_ACTIVATION ===
+          String(activated.length)
+      ) {
+        throw new Error(
+          `Injected install failure after activating ${activated.length} file(s)`,
+        );
+      }
+    }
+    for (const fileName of installedFiles) {
+      const installedText = await readFile(
+        path.join(destinationDirectory, fileName),
+        "utf8",
+      );
+      if (sha256(installedText) !== expectedHashes[fileName]) {
+        throw new Error(`Installed file verification failed for ${fileName}`);
+      }
+    }
+  } catch (error) {
+    const rollbackErrors = [];
+    for (const fileName of activated.reverse()) {
+      await rm(path.join(destinationDirectory, fileName), {
+        force: true,
+      }).catch((rollbackError) => rollbackErrors.push(rollbackError));
+    }
+    for (const fileName of backedUp.reverse()) {
+      await rename(
+        path.join(backupDirectory, fileName),
+        path.join(destinationDirectory, fileName),
+      ).catch((rollbackError) => rollbackErrors.push(rollbackError));
+    }
+    if (rollbackErrors.length > 0) {
+      preserveBackup = true;
+      throw new AggregateError(
+        [error, ...rollbackErrors],
+        `Install failed and rollback was incomplete; recovery files remain at ${backupDirectory}`,
+      );
+    }
+    throw error;
+  } finally {
+    await rm(stagingDirectory, { recursive: true, force: true });
+    if (!preserveBackup) {
+      await rm(backupDirectory, { recursive: true, force: true });
+    }
+  }
+  return expectedHashes;
 }
 
 async function requestHotReload() {
@@ -86,7 +198,7 @@ async function requestHotReload() {
   return "unconfirmed";
 }
 
-async function writeInstallManifest(scriptFile) {
+async function writeInstallManifest(scriptFile, buildIdentity) {
   const ipcDirectory = path.resolve(
     process.env.SYNTHV_AGENT_BRIDGE_DIR?.trim() || os.tmpdir(),
   );
@@ -99,8 +211,9 @@ async function writeInstallManifest(scriptFile) {
     installFile,
     `${JSON.stringify(
       {
-        schemaVersion: 1,
+        schemaVersion: 2,
         scriptFile,
+        ...buildIdentity,
         writtenAtEpochMs: Date.now(),
       },
       null,
@@ -129,51 +242,69 @@ if (!suppliedTarget) {
   process.exitCode = 2;
 } else {
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const packageManifest = JSON.parse(
+    await readFile(path.join(repositoryRoot, "package.json"), "utf8"),
+  );
+  const componentIdentity =
+    await readComponentBuildIdentity(repositoryRoot, { includeSidebar: installSidebar });
   const sourceDirectory = path.join(repositoryRoot, "synthv");
-  const sourceBridgeFile = path.join(sourceDirectory, "SynthVAgentBridge.lua");
   const destinationDirectory = path.resolve(suppliedTarget, "SynthV Agent Bridge");
   const destinationBridgeFile = path.join(
     destinationDirectory,
     "SynthVAgentBridge.lua",
   );
-  const sourceSidebarFile = path.join(
-    sourceDirectory,
-    "SynthVAgentSidebar.lua",
-  );
-  const destinationSidebarFile = path.join(
-    destinationDirectory,
-    "SynthVAgentSidebar.lua",
-  );
-  const [sourceBridge, installedBridgeBefore] = await Promise.all([
-    readOptionalText(sourceBridgeFile),
-    readOptionalText(destinationBridgeFile),
-  ]);
+  const sourceBridge = componentIdentity.prepareExecutorSource();
+  const installedBridgeBefore =
+    await readOptionalText(destinationBridgeFile);
   const bridgeChanged =
-    sourceBridge === null || installedBridgeBefore !== sourceBridge;
+    installedBridgeBefore !== sourceBridge;
   let sidebarChanged = false;
+  let sourceSidebar;
   if (installSidebar) {
-    const [sourceSidebar, installedSidebarBefore] = await Promise.all([
-      readOptionalText(sourceSidebarFile),
-      readOptionalText(destinationSidebarFile),
-    ]);
+    const destinationSidebarFile = path.join(
+      destinationDirectory,
+      "SynthVAgentSidebar.lua",
+    );
+    sourceSidebar = componentIdentity.prepareSidebarSource();
+    const installedSidebarBefore =
+      await readOptionalText(destinationSidebarFile);
     sidebarChanged =
-      sourceSidebar === null || installedSidebarBefore !== sourceSidebar;
+      installedSidebarBefore !== sourceSidebar;
   }
 
-  await mkdir(destinationDirectory, { recursive: true });
   const installedFiles = [
     "SynthVAgentBridge.lua",
     "StopSynthVAgentBridge.lua",
     ...(installSidebar ? ["SynthVAgentSidebar.lua"] : []),
   ];
-  for (const fileName of installedFiles) {
-    await cp(
-      path.join(sourceDirectory, fileName),
-      path.join(destinationDirectory, fileName),
-    );
-  }
+  await mkdir(destinationDirectory, { recursive: true });
+  const installedHashes = await installScriptsAtomically(
+    sourceDirectory,
+    destinationDirectory,
+    installedFiles,
+    {
+      "SynthVAgentBridge.lua": sourceBridge,
+      ...(installSidebar
+        ? { "SynthVAgentSidebar.lua": sourceSidebar }
+        : {}),
+    },
+  );
   await writeInstallManifest(
     path.join(destinationDirectory, "SynthVAgentBridge.lua"),
+    {
+      packageVersion: packageManifest.version,
+      protocolVersion: 3,
+      executorBuildId: componentIdentity.executorBuildId,
+      sidebarBuildId: installSidebar
+        ? componentIdentity.sidebarBuildId
+        : null,
+      executorSourceFingerprint:
+        componentIdentity.executorSourceFingerprint,
+      sidebarSourceFingerprint: installSidebar
+        ? componentIdentity.sidebarSourceFingerprint
+        : null,
+      installedFiles: installedHashes,
+    },
   );
   console.log(`Installed SynthV Agent Bridge scripts to ${destinationDirectory}`);
   const reloadResult = reloadEnabled

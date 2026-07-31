@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 
 import type { BridgeConfig } from "../config.js";
 import { PROTOCOL_VERSION } from "../config.js";
+import { EXECUTOR_BUILD_ID } from "../build-info.js";
 import {
   BridgeBusyError,
   BridgeProtocolError,
@@ -20,6 +21,10 @@ import {
   type BridgeRequest,
   type BridgeStatus,
 } from "../protocol.js";
+import {
+  currentTraceId,
+  traceStage,
+} from "../v3-command-kernel.js";
 import { SerialExecutor } from "./serial-executor.js";
 
 export interface BridgeStatusSnapshot {
@@ -115,7 +120,15 @@ export class FileIpcClient {
     action: BridgeAction,
     payload: Record<string, unknown> = {},
   ): Promise<T> {
-    return this.serialExecutor.run(async () => this.sendSerial<T>(action, payload));
+    const queuedAtMs = Date.now();
+    traceStage("ipcQueued", { action });
+    return this.serialExecutor.run(async () => {
+      traceStage("ipcDequeued", {
+        action,
+        durationMs: Date.now() - queuedAtMs,
+      });
+      return this.sendSerial<T>(action, payload);
+    });
   }
 
   private async sendSerial<T>(
@@ -133,12 +146,20 @@ export class FileIpcClient {
       const envelope = {
         v: PROTOCOL_VERSION,
         id: requestId,
+        t:
+          currentTraceId() ??
+          `tr_${randomBytes(12).toString("base64url")}`,
+        b: EXECUTOR_BUILD_ID,
         a: action,
         p: payload,
       } as const;
       const request = parseBridgeRequest(envelope) satisfies BridgeRequest;
 
       await this.writeJsonAtomically(this.config.paths.requestFile, envelope);
+      traceStage("ipcPublished", {
+        action,
+        requestBytes: JSON.stringify(envelope).length,
+      });
       return await this.waitForResponse<T>(request);
     } finally {
       await this.removeOwnRequest(requestId).catch(() => undefined);
@@ -245,12 +266,47 @@ export class FileIpcClient {
         const raw = await fs.readFile(this.config.paths.responseFile, "utf8");
         const parsedJson: unknown = JSON.parse(raw);
         const response = parseBridgeResponse(parsedJson);
+        if (response.telemetry !== undefined) {
+          for (const stage of response.telemetry.stages) {
+            traceStage(`lua${stage.stage[0]?.toUpperCase() ?? ""}${stage.stage.slice(1)}`, {
+              action: request.action,
+              durationMs: stage.durationMs,
+            });
+          }
+          traceStage("luaCompleted", {
+            action: request.action,
+            luaTotalMs: response.telemetry.totalMs,
+          });
+        }
+        traceStage("ipcResponded", {
+          action: request.action,
+          responseBytes: raw.length,
+        });
 
         await removeIfExists(this.config.paths.responseFile);
 
         if (response.requestId !== request.requestId) {
           await sleep(this.config.pollIntervalMs);
           continue;
+        }
+        if (response.traceId !== request.traceId) {
+          throw new BridgeProtocolError(
+            "SynthV bridge returned a mismatched trace identifier.",
+            {
+              expectedTraceId: request.traceId,
+              actualTraceId: response.traceId,
+            },
+          );
+        }
+        if (response.executorBuildId !== EXECUTOR_BUILD_ID) {
+          throw new BridgeProtocolError(
+            "SynthV executor build does not match the MCP server build.",
+            {
+              expectedExecutorBuildId: EXECUTOR_BUILD_ID,
+              actualExecutorBuildId: response.executorBuildId,
+              requiredAction: "reinstall_or_reload_bridge",
+            },
+          );
         }
 
         // A correlated response means the Lua host has completed the editor

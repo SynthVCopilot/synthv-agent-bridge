@@ -1,14 +1,29 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 
-import { SERVER_VERSION, type BridgeConfig } from "./config.js";
 import {
+  PROTOCOL_VERSION,
+  SERVER_VERSION,
+  type BridgeConfig,
+} from "./config.js";
+import {
+  EXECUTOR_BUILD_ID,
   SERVER_BUILD_FINGERPRINT,
   SERVER_CAPABILITY_FINGERPRINT,
+  SIDEBAR_BUILD_ID,
 } from "./build-info.js";
 import { BridgeError, toPublicError } from "./errors.js";
 import type { FileIpcClient } from "./ipc/file-ipc-client.js";
 import type { BridgeAction } from "./protocol.js";
+import {
+  commandOutcome,
+  runWithTrace,
+} from "./v3-command-kernel.js";
+import {
+  dispatchV3Command,
+  type V3CommandDispatchResult,
+} from "./v3-command-dispatcher.js";
+import { transactionEligibleActionNames } from "./v3-command-policy.js";
 
 const SIDEBAR_REQUEST_MARKER = "synthv-agent-bridge-sidebar-request-v1";
 const SIDEBAR_PREVIEW_MARKER = "synthv-agent-bridge-sidebar-preview-v1";
@@ -20,42 +35,7 @@ const MAX_SIDEBAR_PLAN_BYTES = 1024 * 1024;
 const MAX_HISTORY_ENTRIES = 20;
 const STALE_INSTRUCTION_MS = 5 * 60 * 1000;
 
-export const TRANSACTION_STEP_ACTIONS = [
-  "set_time_axis",
-  "create_note_group",
-  "clone_note_group",
-  "delete_note_group",
-  "add_group_reference",
-  "clone_group_reference",
-  "add_track",
-  "update_track",
-  "clone_track",
-  "clone_track_shell",
-  "delete_track",
-  "update_group",
-  "set_group_voice",
-  "apply_group_tuning",
-  "delete_group_reference",
-  "add_notes",
-  "edit_notes",
-  "transform_notes",
-  "set_note_phoneme_properties",
-  "delete_notes",
-  "generate_note_retake",
-  "activate_note_retake",
-  "delete_note_retake",
-  "add_pitch_controls",
-  "edit_pitch_controls",
-  "delete_pitch_controls",
-  "simplify_automation",
-  "set_automation_points",
-  "clear_automation",
-  "set_track_mixer",
-  "create_harmony_track",
-  "humanize_notes",
-  "apply_expression_preset",
-  "fit_lyrics",
-] as const satisfies readonly BridgeAction[];
+export const TRANSACTION_STEP_ACTIONS = transactionEligibleActionNames();
 
 export const SIDEBAR_PREVIEW_ACTIONS = [
   ...TRANSACTION_STEP_ACTIONS,
@@ -179,16 +159,74 @@ async function removeIfExists(filePath: string): Promise<void> {
   }
 }
 
-async function writeTextAtomically(filePath: string, content: string): Promise<void> {
-  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+type AtomicTextFileOperations = {
+  writeFile(
+    filePath: string,
+    content: string,
+    encoding: "utf8",
+  ): Promise<unknown>;
+  unlink(filePath: string): Promise<unknown>;
+  rename(source: string, destination: string): Promise<unknown>;
+};
+
+const TRANSIENT_WINDOWS_FILE_CODES = new Set(["EACCES", "EBUSY", "EPERM"]);
+const FILE_CONTENTION_RETRY_DELAYS_MS = [5, 10, 20, 40, 80, 100, 100] as const;
+
+function isTransientFileContention(error: unknown): boolean {
+  return TRANSIENT_WINDOWS_FILE_CODES.has(
+    (error as NodeJS.ErrnoException).code ?? "",
+  );
+}
+
+async function retryTransientFileContention<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  for (const delayMs of FILE_CONTENTION_RETRY_DELAYS_MS) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isTransientFileContention(error)) {
+        throw error;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  return operation();
+}
+
+async function removeIfExistsWith(
+  operations: AtomicTextFileOperations,
+  filePath: string,
+): Promise<void> {
   try {
-    await fs.writeFile(temporary, content, "utf8");
-    await removeIfExists(filePath);
-    await fs.rename(temporary, filePath);
-  } finally {
-    await removeIfExists(temporary).catch(() => undefined);
+    await retryTransientFileContention(() => operations.unlink(filePath));
+  } catch (error) {
+    if (!isMissingFile(error)) {
+      throw error;
+    }
   }
 }
+
+async function writeTextAtomically(
+  filePath: string,
+  content: string,
+  operations: AtomicTextFileOperations = fs,
+): Promise<void> {
+  const temporary = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await operations.writeFile(temporary, content, "utf8");
+    await removeIfExistsWith(operations, filePath);
+    await retryTransientFileContention(() =>
+      operations.rename(temporary, filePath),
+    );
+  } finally {
+    await removeIfExistsWith(operations, temporary).catch(() => undefined);
+  }
+}
+
+export const sidebarCoordinatorTesting = {
+  writeTextAtomically,
+};
 
 function lineValue(text: string, key: string): string | undefined {
   const prefix = `${key}=`;
@@ -447,6 +485,8 @@ function parseCommand(text: string): SidebarCommand {
 export class SidebarCoordinator {
   private pollTimer: NodeJS.Timeout | null = null;
   private polling = false;
+  private readonly backgroundTasks = new Set<Promise<void>>();
+  private stopPromise: Promise<void> | null = null;
   private lastHeartbeatAt = 0;
   private lastError: { readonly code: string; readonly message: string } | null =
     null;
@@ -456,27 +496,56 @@ export class SidebarCoordinator {
     private readonly client: FileIpcClient,
   ) {}
 
+  private async dispatchConfirmedCommand(
+    action: SidebarPreviewAction,
+    payload: Record<string, unknown>,
+  ): Promise<V3CommandDispatchResult> {
+    return runWithTrace(async () =>
+      dispatchV3Command({
+        action,
+        expectedEffect: "allowAlreadySatisfied",
+        invoke: async () =>
+          commandOutcome(
+            action,
+            await this.client.send<Record<string, unknown>>(action, payload),
+          ) as V3CommandDispatchResult,
+      }),
+    );
+  }
+
   public start(): void {
-    if (this.pollTimer !== null) {
+    if (this.pollTimer !== null || this.stopPromise !== null) {
       return;
     }
     this.pollTimer = setInterval(() => {
-      void this.pollOnce().catch(async (error: unknown) => {
-        this.lastError = toPublicError(error);
-        await this.writeClientStatus("running").catch(() => undefined);
-      });
+      this.trackBackground(
+        this.pollOnce().catch(async (error: unknown) => {
+          this.lastError = toPublicError(error);
+          await this.writeClientStatus("running").catch(() => undefined);
+        }),
+      );
     }, Math.max(100, this.config.pollIntervalMs));
     this.pollTimer.unref();
     this.lastHeartbeatAt = Date.now();
-    void this.writeClientStatus("running").catch(() => undefined);
+    this.trackBackground(
+      this.writeClientStatus("running").catch(() => undefined),
+    );
   }
 
-  public stop(): void {
+  public stop(): Promise<void> {
+    if (this.stopPromise !== null) {
+      return this.stopPromise;
+    }
     if (this.pollTimer !== null) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
-    void this.writeClientStatus("stopped").catch(() => undefined);
+    const pendingTasks = [...this.backgroundTasks];
+    this.stopPromise = (async () => {
+      await Promise.allSettled(pendingTasks);
+      await this.writeClientStatus("stopped").catch(() => undefined);
+    })();
+    return this.stopPromise;
   }
 
   public async getInstruction(): Promise<SidebarInstructionSnapshot> {
@@ -583,11 +652,15 @@ export class SidebarCoordinator {
   }
 
   public async getDiagnostics(): Promise<Record<string, unknown>> {
-    const [bridgeStatusRaw, clientStatusRaw, taskStateRaw, history] =
+    const [bridgeStatusRaw, clientStatusRaw, runtimeStatusRaw, taskStateRaw, history] =
       await Promise.all([
         readLimitedText(this.config.paths.statusFile, MAX_SIDEBAR_TEXT_BYTES),
         readLimitedText(
           this.config.paths.sidebarClientStatusFile,
+          MAX_SIDEBAR_TEXT_BYTES,
+        ),
+        readLimitedText(
+          this.config.paths.sidebarRuntimeStatusFile,
           MAX_SIDEBAR_TEXT_BYTES,
         ),
         readLimitedText(this.config.paths.sidebarStateFile, MAX_SIDEBAR_TEXT_BYTES),
@@ -606,9 +679,41 @@ export class SidebarCoordinator {
       ipcDirectory: this.config.paths.directory,
       bridgeStatus,
       clientStatus: clientStatusRaw,
+      runtimeStatus: runtimeStatusRaw,
       taskState: taskStateRaw,
       history,
       lastError: this.lastError,
+    };
+  }
+
+  public async getRuntimeBuildIdentity(): Promise<{
+    readonly state: "absent" | "stale" | "matched" | "mismatch";
+    readonly buildId?: string;
+    readonly ageMs?: number;
+  }> {
+    const raw = await readLimitedText(
+      this.config.paths.sidebarRuntimeStatusFile,
+      MAX_SIDEBAR_TEXT_BYTES,
+    );
+    if (raw === null) {
+      return { state: "absent" };
+    }
+    const updatedAtEpochMs = Number(lineValue(raw, "updatedAtEpochMs"));
+    const ageMs = Number.isFinite(updatedAtEpochMs)
+      ? Math.max(0, Date.now() - updatedAtEpochMs)
+      : Number.POSITIVE_INFINITY;
+    const buildId = lineValue(raw, "buildId");
+    if (ageMs > Math.max(5_000, this.config.statusStaleMs * 2)) {
+      return {
+        state: "stale",
+        ...(buildId === undefined ? {} : { buildId }),
+        ageMs,
+      };
+    }
+    return {
+      state: buildId === SIDEBAR_BUILD_ID ? "matched" : "mismatch",
+      ...(buildId === undefined ? {} : { buildId }),
+      ageMs,
     };
   }
 
@@ -655,6 +760,15 @@ export class SidebarCoordinator {
     } finally {
       this.polling = false;
     }
+  }
+
+  private trackBackground(operation: Promise<void>): void {
+    let tracked: Promise<void>;
+    tracked = operation.finally(() => {
+      this.backgroundTasks.delete(tracked);
+    });
+    this.backgroundTasks.add(tracked);
+    void tracked.catch(() => undefined);
   }
 
   private async readPlan(): Promise<SidebarPlan | null> {
@@ -786,7 +900,19 @@ export class SidebarCoordinator {
     });
 
     try {
-      await this.client.send(plan.action, {
+      const sidebarBuild = await this.getRuntimeBuildIdentity();
+      if (sidebarBuild.state === "mismatch") {
+        throw new BridgeError(
+          "The active SynthV Sidebar build does not match the MCP server; the preview was not applied.",
+          "BUILD_MISMATCH",
+          {
+            expectedSidebarBuildId: SIDEBAR_BUILD_ID,
+            actualSidebarBuildId: sidebarBuild.buildId ?? null,
+            requiredAction: "reinstall_or_reload_sidebar",
+          },
+        );
+      }
+      await this.dispatchConfirmedCommand(plan.action, {
         ...plan.payload,
         _sidebarPlanId: plan.planId,
       });
@@ -1017,9 +1143,12 @@ export class SidebarCoordinator {
       "synthv-agent-bridge-sidebar-client-status-v1",
       `state=${state}`,
       `version=${SERVER_VERSION}`,
+      `protocolVersion=${PROTOCOL_VERSION}`,
+      `expectedExecutorBuildId=${EXECUTOR_BUILD_ID}`,
       `buildFingerprint=${SERVER_BUILD_FINGERPRINT}`,
       `capabilityFingerprint=${SERVER_CAPABILITY_FINGERPRINT}`,
       `updatedAtEpochMs=${now}`,
+      `processId=${process.pid}`,
       `ipcDirectory=${sanitizeLine(this.config.paths.directory)}`,
     ];
     if (this.lastError !== null) {

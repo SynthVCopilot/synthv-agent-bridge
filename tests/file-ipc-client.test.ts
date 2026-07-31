@@ -7,6 +7,7 @@ import test from "node:test";
 
 import type { BridgeConfig } from "../src/config.js";
 import { loadConfig } from "../src/config.js";
+import { EXECUTOR_BUILD_ID } from "../src/build-info.js";
 import {
   BridgeBusyError,
   BridgeRemoteError,
@@ -14,6 +15,11 @@ import {
 } from "../src/errors.js";
 import { FileIpcClient } from "../src/ipc/file-ipc-client.js";
 import { parseBridgeRequest } from "../src/protocol.js";
+import {
+  currentTraceId,
+  runWithTrace,
+  traceDiagnostics,
+} from "../src/v3-command-kernel.js";
 
 const sleep = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -76,7 +82,13 @@ function successResponse(
   request: ReturnType<typeof parseBridgeRequest>,
   result: unknown,
 ): unknown {
-  return { v: 2, id: request.requestId, r: result };
+  return {
+    v: 3,
+    id: request.requestId,
+    t: request.traceId,
+    b: EXECUTOR_BUILD_ID,
+    r: result,
+  };
 }
 
 function errorResponse(
@@ -84,7 +96,13 @@ function errorResponse(
   code: string,
   message: string,
 ): unknown {
-  return { v: 2, id: request.requestId, e: { code, message } };
+  return {
+    v: 3,
+    id: request.requestId,
+    t: request.traceId,
+    b: EXECUTOR_BUILD_ID,
+    e: { code, message },
+  };
 }
 
 test("FileIpcClient performs a correlated request/response round trip", async (context) => {
@@ -95,10 +113,15 @@ test("FileIpcClient performs a correlated request/response round trip", async (c
     successResponse(request, {
       echoedAction: request.action,
       payload: request.payload,
+      expectedExecutorBuildId: request.expectedExecutorBuildId,
     }),
   );
 
-  const result = await fixture.client.send<{ echoedAction: string; payload: unknown }>(
+  const result = await fixture.client.send<{
+    echoedAction: string;
+    payload: unknown;
+    expectedExecutorBuildId: string;
+  }>(
     "get_project_info",
     { detail: true },
   );
@@ -106,7 +129,47 @@ test("FileIpcClient performs a correlated request/response round trip", async (c
 
   assert.equal(result.echoedAction, "get_project_info");
   assert.deepEqual(result.payload, { detail: true });
+  assert.equal(result.expectedExecutorBuildId, EXECUTOR_BUILD_ID);
   await assert.rejects(fs.access(fixture.config.paths.lockFile), /ENOENT/);
+});
+
+test("FileIpcClient folds bounded Lua timings into the active cross-layer trace", async (context) => {
+  const fixture = await createFixture();
+  context.after(async () =>
+    fs.rm(fixture.directory, { recursive: true, force: true }),
+  );
+  const bridge = serveRequests(fixture.config, 1, (request) => ({
+    v: 3,
+    id: request.requestId,
+    t: request.traceId,
+    b: EXECUTOR_BUILD_ID,
+    m: {
+      totalMs: 7.5,
+      stages: [
+        { stage: "freshRead", durationMs: 2.25 },
+        { stage: "verified", durationMs: 1.5 },
+      ],
+    },
+    r: { trackIndex: 1 },
+  }));
+
+  let traceId = "";
+  await runWithTrace(async () => {
+    traceId = currentTraceId() ?? "";
+    await fixture.client.send("get_track_mixer", { trackIndex: 1 });
+  });
+  await bridge;
+
+  const diagnostics = traceDiagnostics({
+    level: "debug",
+    traceId,
+    limit: 1,
+  });
+  const serialized = JSON.stringify(diagnostics);
+  assert.match(serialized, /ipcDequeued/u);
+  assert.match(serialized, /luaFreshRead/u);
+  assert.match(serialized, /"durationMs":2\.25/u);
+  assert.match(serialized, /"luaTotalMs":7\.5/u);
 });
 
 test("FileIpcClient serializes concurrent calls on one client", async (context) => {
@@ -151,6 +214,10 @@ test("a timeout leaves a claimed request owned by the SynthV host", async (conte
   });
   context.after(async () => fs.rm(fixture.directory, { recursive: true, force: true }));
 
+  let releaseClaimedRequest: () => void = () => undefined;
+  const keepRequestClaimed = new Promise<void>((resolve) => {
+    releaseClaimedRequest = resolve;
+  });
   const bridge = (async () => {
     while (true) {
       try {
@@ -163,20 +230,24 @@ test("a timeout leaves a claimed request owned by the SynthV host", async (conte
         await sleep(5);
       }
     }
-    await sleep(300);
+    await keepRequestClaimed;
     await fs.rm(fixture.config.paths.processingFile, { force: true });
   })();
 
-  await assert.rejects(
-    fixture.client.send("ping"),
-    (error: unknown) => error instanceof BridgeTimeoutError,
-  );
-  await fs.access(fixture.config.paths.processingFile);
-  await assert.rejects(
-    fixture.client.send("ping"),
-    (error: unknown) => error instanceof BridgeBusyError,
-  );
-  await bridge;
+  try {
+    await assert.rejects(
+      fixture.client.send("ping"),
+      (error: unknown) => error instanceof BridgeTimeoutError,
+    );
+    await fs.access(fixture.config.paths.processingFile);
+    await assert.rejects(
+      fixture.client.send("ping"),
+      (error: unknown) => error instanceof BridgeBusyError,
+    );
+  } finally {
+    releaseClaimedRequest();
+    await bridge;
+  }
 });
 
 test("getStatus distinguishes fresh and stale heartbeats", async (context) => {
@@ -184,10 +255,11 @@ test("getStatus distinguishes fresh and stale heartbeats", async (context) => {
   context.after(async () => fs.rm(fixture.directory, { recursive: true, force: true }));
 
   await writeJsonAtomically(fixture.config.paths.statusFile, {
-    protocolVersion: 2,
+    protocolVersion: 3,
     state: "running",
     updatedAtEpochMs: Date.now(),
     bridgeVersion: "0.1.0",
+    executorBuildId: "executor-test",
     host: { osType: "Linux" },
     projectFile: "song.svp",
     ipcDirectory: fixture.directory,
@@ -195,10 +267,11 @@ test("getStatus distinguishes fresh and stale heartbeats", async (context) => {
   assert.equal((await fixture.client.getStatus()).connected, true);
 
   await writeJsonAtomically(fixture.config.paths.statusFile, {
-    protocolVersion: 2,
+    protocolVersion: 3,
     state: "running",
     updatedAtEpochMs: Date.now() - 5000,
     bridgeVersion: "0.1.0",
+    executorBuildId: "executor-test",
     host: { osType: "Linux" },
     projectFile: "song.svp",
     ipcDirectory: fixture.directory,

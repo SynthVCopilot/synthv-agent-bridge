@@ -40,7 +40,8 @@ import {
   SidebarCoordinator,
   TRANSACTION_STEP_ACTIONS,
 } from "./sidebar-coordinator.js";
-import { registerV2Surface } from "./v2-surface.js";
+import { registerV3Facade } from "./v3-facade.js";
+import { assertV3CommandPolicyCatalog } from "./v3-command-policy.js";
 
 const indexSchema = z.number().int().min(1);
 const blickSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
@@ -695,7 +696,7 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     {
       instructions:
-        "Use sv_describe for unfamiliar actions. Read only the intended target before writes and batch changes with its contextId. Indices are 1-based. Writes stay fingerprint-guarded and create one SynthV undo record. Sidebar requests must be published as previews.",
+        "Use sv_describe for unfamiliar capabilities. Query only the intended target with contextMode=writeIntent before sv_command. Indices are 1-based. Guards remain private, shared Group content fails closed, and one logical command uses one SynthV Undo boundary. Use sv_review for optional Sidebar confirmation.",
     },
   );
   const actionTools = new Map<string, RegisteredTool>();
@@ -717,7 +718,31 @@ export function createServer(config: BridgeConfig): McpServer {
     return registered;
   }) as McpServer["registerTool"];
   sidebar.start();
-  server.server.onclose = () => sidebar.stop();
+  server.server.onclose = () => {
+    void sidebar.stop();
+  };
+  const closeServer = server.close.bind(server);
+  let closePromise: Promise<void> | null = null;
+  server.close = () => {
+    if (closePromise !== null) {
+      return closePromise;
+    }
+    const transportClose = Promise.resolve().then(closeServer);
+    const sidebarClose = sidebar.stop();
+    closePromise = (async () => {
+      const [transportResult, sidebarResult] = await Promise.allSettled([
+        transportClose,
+        sidebarClose,
+      ]);
+      if (transportResult.status === "rejected") {
+        throw transportResult.reason;
+      }
+      if (sidebarResult.status === "rejected") {
+        throw sidebarResult.reason;
+      }
+    })();
+    return closePromise;
+  };
 
   server.registerTool(
     "bridge_status",
@@ -1030,14 +1055,20 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Get SynthV Time Axis",
       description:
-        "Read every tempo and time-signature mark plus a fingerprint for safe time-axis edits.",
-      inputSchema: {},
+        "Read bounded tempo and time-signature pages plus a full-state fingerprint for safe time-axis edits.",
+      inputSchema: {
+        tempoOffset: z.number().int().min(0).default(0),
+        tempoLimit: z.number().int().min(1).max(1000).default(128),
+        measureOffset: z.number().int().min(0).default(0),
+        measureLimit: z.number().int().min(1).max(1000).default(128),
+      },
       annotations: {
         readOnlyHint: true,
         openWorldHint: false,
       },
     },
-    async () => runTool(async () => client.send("get_time_axis")),
+    async (input) =>
+      runTool(async () => client.send("get_time_axis", input)),
   );
 
   server.registerTool(
@@ -1077,14 +1108,17 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "List SynthV Tracks",
       description:
-        "List tracks with 1-based storage indices, display order, group counts, note counts, and mixer state.",
-      inputSchema: {},
+        "List a bounded page of tracks with 1-based storage indices, display order, group counts, note counts, and mixer state.",
+      inputSchema: {
+        offset: z.number().int().min(0).default(0),
+        limit: z.number().int().min(1).max(1000).default(128),
+      },
       annotations: {
         readOnlyHint: true,
         openWorldHint: false,
       },
     },
-    async () => runTool(async () => client.send("list_tracks")),
+    async (input) => runTool(async () => client.send("list_tracks", input)),
   );
 
   server.registerTool(
@@ -1092,14 +1126,18 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "List SynthV Note-Group Library",
       description:
-        "List reusable note groups in the project library with UUIDs, fingerprints, note counts, pitch-control counts, and reference counts.",
-      inputSchema: {},
+        "List a bounded page of reusable note groups with UUIDs, fingerprints, note counts, pitch-control counts, and reference counts.",
+      inputSchema: {
+        offset: z.number().int().min(0).default(0),
+        limit: z.number().int().min(1).max(1000).default(128),
+      },
       annotations: {
         readOnlyHint: true,
         openWorldHint: false,
       },
     },
-    async () => runTool(async () => client.send("list_note_groups")),
+    async (input) =>
+      runTool(async () => client.send("list_note_groups", input)),
   );
 
   server.registerTool(
@@ -1201,15 +1239,15 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Clone SynthV Group Reference",
       description:
-        "Copy a vocal group reference to another track, either linked to the same library group or deep-copied into a new library group.",
+        "Copy a vocal Group Reference to another Track with explicit linked or isolated ownership.",
       inputSchema: {
+        cloneIntent: z.enum(["linked", "isolated"]),
         sourceTrackIndex: indexSchema,
         sourceGroupIndex: indexSchema.default(1),
         sourceGroupUuid: groupUuidSchema.optional(),
         sourceReferenceFingerprint: fingerprintSchema.optional(),
         targetTrackIndex: indexSchema,
         targetTrackFingerprint: fingerprintSchema.optional(),
-        linked: z.boolean().default(true),
         name: z.string().min(1).max(200).optional(),
       },
       annotations: {
@@ -1228,11 +1266,27 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Get SynthV Track Notes",
       description:
-        "Read a track's groups and notes. Returns group UUIDs plus note fingerprints required by safe edit/delete tools.",
+        "Read one bounded Group/note page from a track, or one explicit Group. Returns private group/note guards for safe edit/delete Contexts.",
       inputSchema: {
         trackIndex: indexSchema.describe("1-based track storage index."),
+        groupIndex: indexSchema
+          .optional()
+          .describe("Optional single 1-based Group page target."),
+        groupOffset: z
+          .number()
+          .int()
+          .min(0)
+          .default(0)
+          .describe("Zero-based Group page offset when groupIndex is omitted."),
+        groupLimit: z
+          .number()
+          .int()
+          .min(1)
+          .max(128)
+          .default(1)
+          .describe("Maximum Groups returned when groupIndex is omitted."),
         offset: z.number().int().min(0).default(0).describe("Number of notes to skip per group."),
-        limit: z.number().int().min(1).max(5000).default(1000).describe("Maximum notes returned per group."),
+        limit: z.number().int().min(1).max(5000).default(64).describe("Maximum notes returned per Group."),
       },
       annotations: {
         readOnlyHint: true,
@@ -1268,7 +1322,7 @@ export function createServer(config: BridgeConfig): McpServer {
       inputSchema: {
         ...groupLocatorShape,
         offset: z.number().int().min(0).default(0),
-        limit: z.number().int().min(1).max(1000).default(1000),
+        limit: z.number().int().min(1).max(1000).default(64),
         noteIndices: z
           .array(indexSchema)
           .min(1)
@@ -1343,7 +1397,7 @@ export function createServer(config: BridgeConfig): McpServer {
             "Continue a previous page without repeating its Group locator or numeric offset.",
           ),
         offset: z.number().int().min(0).default(0),
-        limit: z.number().int().min(1).max(256).default(128),
+        limit: z.number().int().min(1).max(256).default(64),
         noteIndices: z
           .array(indexSchema)
           .min(1)
@@ -1433,7 +1487,7 @@ export function createServer(config: BridgeConfig): McpServer {
           .max(8)
           .optional()
           .describe(
-            "Optional v2 projection. Omit for the complete phrase response.",
+            "Optional v3 projection. Omit for the complete phrase response.",
           ),
       },
       annotations: {
@@ -1531,6 +1585,16 @@ export function createServer(config: BridgeConfig): McpServer {
       inputSchema: {
         ...groupLocatorShape,
         includeAttributes: z.boolean().default(true),
+        offset: z.number().int().min(0).default(0),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(1000)
+          .default(64)
+          .describe(
+            "Maximum computed phoneme/attribute entries returned for this page.",
+          ),
         pitchSample: z
           .object({
             absoluteStart: blickSchema,
@@ -1594,8 +1658,9 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Clone SynthV Track",
       description:
-        "Deep-clone a track so its main Vocal, groups, notes, automation, and mixer settings are inherited. Non-main vocal Groups require explicit detachment because the official API cannot verify or assign their Vocal database identities; review those Vocals after cloning.",
+        "Create an isolated Track clone whose vocal GroupContent targets are UUID-separated. Non-main vocal Groups require explicit detachment and manual Vocal review because the official API cannot read or verify their Vocal identities.",
       inputSchema: {
+        cloneIntent: z.enum(["isolated"]),
         ...trackGuardShape,
         name: z.string().min(1).max(200).optional(),
         displayColor: displayColorSchema.optional(),
@@ -1626,6 +1691,7 @@ export function createServer(config: BridgeConfig): McpServer {
       description:
         "Clone only a source track's host-owned main Vocal context into a new empty track. Notes, pitch controls, known automation, and every non-main Group are removed before insertion. The official API cannot reveal the Vocal database identity, so the result reports host-clone inheritance without naming the Vocal.",
       inputSchema: {
+        cloneIntent: z.enum(["shell"]),
         ...trackGuardShape,
         name: z.string().min(1).max(200).optional(),
         groupName: z.string().min(1).max(200).optional(),
@@ -1734,7 +1800,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Apply SynthV Group Tuning Batch",
       description:
-        "Prevalidate and apply one same-Group tuning pass: Group Voice/Vocal Modes, fingerprint-guarded note and phoneme edits, and multiple fingerprint-guarded automation curves. The Lua host validates the complete batch before creating exactly one SynthV undo record; an unexpected execution failure explicitly requires one SynthV Undo.",
+        "Prevalidate and apply one same-Group tuning pass: Group Voice/Vocal Modes, fingerprint-guarded note and phoneme edits, multiple fingerprint-guarded automation curves, and Smart Pitch controls. The Lua host validates the complete batch before creating exactly one SynthV undo record; an unexpected execution failure explicitly requires one SynthV Undo.",
       inputSchema: {
         ...groupLocatorShape,
         summary: z.string().min(1).max(1000),
@@ -1767,6 +1833,46 @@ export function createServer(config: BridgeConfig): McpServer {
           .array(groupTuningAutomationSchema)
           .min(1)
           .max(32)
+          .optional(),
+        pitchControls: z
+          .object({
+            add: z
+              .array(pitchControlCreateSchema)
+              .min(1)
+              .max(512)
+              .optional(),
+            edits: z
+              .array(
+                z.object({
+                  pitchControlIndex: indexSchema,
+                  fingerprint: fingerprintSchema,
+                  changes: pitchControlChangesSchema,
+                }),
+              )
+              .min(1)
+              .max(512)
+              .optional(),
+            deletes: z
+              .array(
+                z.object({
+                  pitchControlIndex: indexSchema,
+                  fingerprint: fingerprintSchema,
+                }),
+              )
+              .min(1)
+              .max(512)
+              .optional(),
+          })
+          .refine(
+            (value) =>
+              value.add !== undefined ||
+              value.edits !== undefined ||
+              value.deletes !== undefined,
+            {
+              message:
+                "Smart Pitch tuning must add, edit, or delete at least one control.",
+            },
+          )
           .optional(),
       },
       annotations: {
@@ -1978,7 +2084,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Transform SynthV Notes",
       description:
-        "Apply one explicit numeric transform to a fingerprint-guarded note batch. The Bridge performs only deterministic onset, duration, and pitch mechanics; the Agent remains responsible for choosing targets and values. With MCP v2, args.target=contextNotes expands every note from a fresh contextId without repeating note indices.",
+        "Apply one explicit numeric transform to a fingerprint-guarded note batch. The Bridge performs only deterministic onset, duration, and pitch mechanics; the Agent remains responsible for choosing targets and values. With MCP v3, args.target=contextNotes expands every note from a fresh writeIntent contextId without repeating note indices.",
       inputSchema: {
         ...groupLocatorShape,
         notes: z.array(fingerprintedNoteSchema).min(1).max(512),
@@ -2156,9 +2262,11 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Get SynthV Smart Pitch Controls",
       description:
-        "Read all point and curve Smart Pitch controls in one vocal group with safe-write fingerprints.",
+        "Read a bounded page of point and curve Smart Pitch controls in one vocal group with private safe-write guards.",
       inputSchema: {
         ...groupLocatorShape,
+        offset: z.number().int().min(0).default(0),
+        limit: z.number().int().min(1).max(1000).default(64),
         sampleOffsets: z
           .array(
             z.number().int().min(Number.MIN_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
@@ -2261,7 +2369,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Get SynthV Automation",
       description:
-        "Read control points and the official definition for a group parameter. Compact mode replaces the verbose curve fingerprint with a short Guard Token.",
+        "Read the official definition and a compact curve summary, or the control points in one explicit closed range. The private curve fingerprint is retained only for Context/Guard creation.",
       inputSchema: {
         ...groupLocatorShape,
         parameter: z.string().min(1),
@@ -2751,11 +2859,14 @@ export function createServer(config: BridgeConfig): McpServer {
     async (input) => runTool(async () => client.send("playback", input)),
   );
 
-  registerV2Surface(
+  assertV3CommandPolicyCatalog(actionTools);
+
+  registerV3Facade(
     registerPublicTool,
     actionTools,
     guardTokens,
     async () => (await client.getStatus()).status?.sessionToken,
+    async () => sidebar.getRuntimeBuildIdentity(),
   );
 
   return server;

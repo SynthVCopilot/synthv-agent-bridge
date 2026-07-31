@@ -7,8 +7,10 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { readComponentBuildIdentity } from "./component-build-identity.mjs";
+
 const SERVER_NAME = "synthv-agent-bridge";
-const EXPECTED_PROTOCOL_VERSION = 2;
+const EXPECTED_PROTOCOL_VERSION = 3;
 const argumentsList = process.argv.slice(2);
 const jsonOutput = argumentsList.includes("--json");
 const targetFlagIndex = argumentsList.indexOf("--target");
@@ -106,16 +108,13 @@ async function newestMtimeMs(files) {
 
 record(
   "package-version",
-  expectedVersion === "0.1.5" ? "ok" : "error",
-  `Package version is ${expectedVersion}; this feature line must remain 0.1.5.`,
+  expectedVersion === "0.2.0" ? "ok" : "error",
+  `Package version is ${expectedVersion}; this release line must remain 0.2.0.`,
 );
 
-const sourceBridge = await readText(
-  path.join(repositoryRoot, "synthv", "SynthVAgentBridge.lua"),
-);
-const sourceSidebar = await readText(
-  path.join(repositoryRoot, "synthv", "SynthVAgentSidebar.lua"),
-);
+const componentBuildIdentity = await readComponentBuildIdentity(repositoryRoot);
+const sourceBridge = componentBuildIdentity.prepareExecutorSource();
+const sourceSidebar = componentBuildIdentity.prepareSidebarSource();
 const sourceBridgeVersion = sourceBridge?.match(
   /BRIDGE_VERSION\s*=\s*"([^"]+)"/u,
 )?.[1];
@@ -125,6 +124,8 @@ const sourceProtocolVersion = Number(
 const sourceSidebarVersion = sourceSidebar?.match(
   /SIDEBAR_VERSION\s*=\s*"([^"]+)"/u,
 )?.[1];
+const sourceExecutorBuildId = componentBuildIdentity.executorBuildId;
+const sourceSidebarBuildId = componentBuildIdentity.sidebarBuildId;
 record(
   "source-versions",
   sourceBridgeVersion === expectedVersion &&
@@ -236,6 +237,52 @@ record(
         protocolVersions: bridgeProtocolVersions,
         preferredProtocolVersion: bridgeStatus.preferredProtocolVersion,
       },
+);
+
+const runningExecutorBuildId = bridgeStatus?.executorBuildId;
+record(
+  "executor-build",
+  bridgeStatus === null
+    ? "warning"
+    : runningExecutorBuildId === sourceExecutorBuildId
+      ? "ok"
+      : "error",
+  bridgeStatus === null
+    ? "The executor build cannot be verified until the Bridge is running."
+    : runningExecutorBuildId === sourceExecutorBuildId
+      ? `Running executor build matches ${sourceExecutorBuildId}.`
+      : "Running executor build differs from source; reinstall and reload the Bridge before writing.",
+  {
+    expected: sourceExecutorBuildId ?? null,
+    actual: runningExecutorBuildId ?? null,
+  },
+);
+
+const sidebarRuntimeStatus = await readText(
+  `${prefix}.sidebar.runtime-status.txt`,
+);
+const sidebarRuntimeUpdatedAt = Number(
+  lineValue(sidebarRuntimeStatus, "updatedAtEpochMs"),
+);
+const sidebarRuntimeFresh =
+  sidebarRuntimeStatus !== null && fresh(sidebarRuntimeUpdatedAt, 10_000);
+const runningSidebarBuildId = lineValue(sidebarRuntimeStatus, "buildId");
+record(
+  "sidebar-build",
+  !sidebarRuntimeFresh
+    ? "warning"
+    : runningSidebarBuildId === sourceSidebarBuildId
+      ? "ok"
+      : "error",
+  !sidebarRuntimeFresh
+    ? "The optional Sidebar is absent or inactive; no active Sidebar build needs verification."
+    : runningSidebarBuildId === sourceSidebarBuildId
+      ? `Active Sidebar build matches ${sourceSidebarBuildId}.`
+      : "The active Sidebar build differs from source; reinstall and reopen or rescan the Sidebar.",
+  {
+    expected: sourceSidebarBuildId ?? null,
+    actual: runningSidebarBuildId ?? null,
+  },
 );
 
 const clientStatus = await readText(`${prefix}.sidebar.client-status.txt`);

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -13,6 +15,7 @@ import {
   createServer,
   TRACK_DISPLAY_COLOR_PATTERN,
 } from "../src/server.js";
+import { V3_INTERNAL_ADAPTER_NAMES } from "../src/v3-surface.js";
 
 test("track color schema accepts public RGB and native ARGB forms", () => {
   for (const value of ["#D6BC43", "ffd6bc43", "#FFD6BC43"]) {
@@ -63,7 +66,34 @@ test("MCP tool text results use compact JSON", async () => {
   );
 });
 
-test("P4 exposes eight v2 tools under a 6 KB metadata budget", async () => {
+test("server close is idempotent and stops Sidebar after transport failure", async (context) => {
+  const directory = await mkdtemp(
+    path.join(os.tmpdir(), "synthv-server-close-test-"),
+  );
+  context.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  const server = createServer(loadConfig({}, directory));
+  let transportCloseCount = 0;
+  server.server.close = async () => {
+    transportCloseCount += 1;
+    throw new Error("injected transport close failure");
+  };
+
+  const firstClose = server.close();
+  const concurrentClose = server.close();
+
+  assert.strictEqual(firstClose, concurrentClose);
+  await assert.rejects(firstClose, /injected transport close failure/u);
+  assert.equal(transportCloseCount, 1);
+  const status = await readFile(
+    loadConfig({}, directory).paths.sidebarClientStatusFile,
+    "utf8",
+  );
+  assert.match(status, /state=stopped/u);
+});
+
+test("v3 exposes six semantic tools under a 6 KB metadata budget", async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const server = createServer(loadConfig({}, "/tmp"));
   const client = new Client({ name: "p4-test", version: "1.0.0" });
@@ -78,22 +108,101 @@ test("P4 exposes eight v2 tools under a 6 KB metadata budget", async () => {
       [
         "sv_status",
         "sv_describe",
-        "sv_read",
-        "sv_edit",
-        "sv_delete",
-        "sv_transaction",
+        "sv_query",
+        "sv_command",
         "sv_ui",
-        "sv_sidebar",
+        "sv_review",
       ],
     );
     assert.ok(JSON.stringify(tools.tools).length < 6_000);
+    const describe = tools.tools.find((tool) => tool.name === "sv_describe");
+    const describeProperties = (
+      describe?.inputSchema as {
+        readonly properties?: Record<string, unknown>;
+      }
+    )?.properties;
+    assert.ok(describeProperties?.action !== undefined);
+    assert.equal(describeProperties?.actions, undefined);
+
+    const statusTool = tools.tools.find((tool) => tool.name === "sv_status");
+    const statusProperties = (
+      statusTool?.inputSchema as {
+        readonly properties?: Record<string, unknown>;
+      }
+    )?.properties;
+    assert.match(JSON.stringify(statusProperties?.operation), /diagnostics/u);
+    assert.ok(statusProperties?.level !== undefined);
+
+    const diagnosticsResult = await client.callTool({
+      name: "sv_status",
+      arguments: {
+        operation: "diagnostics",
+        level: "support",
+        limit: 2,
+      },
+    });
+    const diagnosticsContent = (
+      diagnosticsResult as {
+        readonly content: readonly {
+          readonly type: string;
+          readonly text?: string;
+        }[];
+      }
+    ).content;
+    const diagnosticsText = diagnosticsContent.find(
+      (entry) => entry.type === "text",
+    );
+    const diagnosticsRaw = diagnosticsText?.text;
+    assert.equal(typeof diagnosticsRaw, "string");
+    const diagnostics = JSON.parse(
+      diagnosticsRaw as string,
+    ) as Record<string, unknown>;
+    assert.equal(
+      (diagnostics.observability as Record<string, unknown>).level,
+      "support",
+    );
+    assert.ok(JSON.stringify(diagnostics).length <= 16_384);
+
+    const statusResult = await client.callTool({
+      name: "sv_status",
+      arguments: { operation: "bridge" },
+    });
+    const statusContent = (
+      statusResult as {
+        readonly content: readonly {
+          readonly type: string;
+          readonly text?: string;
+        }[];
+      }
+    ).content;
+    const statusText = statusContent.find(
+      (entry) => entry.type === "text",
+    );
+    const statusRaw = statusText?.text;
+    assert.equal(typeof statusRaw, "string");
+    const status = JSON.parse(
+      statusRaw as string,
+    ) as Record<string, unknown>;
+    assert.equal(status.observability, undefined);
   } finally {
     await client.close();
     await server.close();
   }
 });
 
-test("v2 add_notes can create an editable non-main note group", async () => {
+test("v3 private adapters cannot be confused with public or legacy MCP tools", () => {
+  const names = Object.values(V3_INTERNAL_ADAPTER_NAMES);
+  assert.equal(new Set(names).size, names.length);
+  for (const name of names) {
+    assert.match(name, /^v3_internal_/u);
+    assert.doesNotMatch(
+      name,
+      /^sv_(?:read|edit|delete|transaction|sidebar)$/u,
+    );
+  }
+});
+
+test("v3 add_notes can create an editable non-main note group", async () => {
   const [compiledServer, bridgeSource] = await Promise.all([
     readFile(new URL("../src/server.js", import.meta.url), "utf8"),
     readFile(
@@ -168,18 +277,17 @@ test("same-Group tuning is one prevalidated Lua undo record", async () => {
     handlerStart,
   );
   const handler = bridgeSource.slice(handlerStart, handlerEnd);
+  const pipelineStart = handler.indexOf("return executeCommandPipeline");
   assert.ok(handler.indexOf("prepareGroupVoiceUpdate") >= 0);
   assert.ok(handler.indexOf("prepareNoteChanges") >= 0);
   assert.ok(handler.indexOf("definition.range") >= 0);
-  assert.ok(
-    handler.indexOf("createUndoRecord(project)") >
-      handler.indexOf("definition.range"),
-  );
-  assert.equal(
-    handler.match(/createUndoRecord\(project\)/gu)?.length,
-    1,
-  );
-  assert.match(handler, /raiseUndoRequiredExecutionError/);
+  assert.ok(pipelineStart >= 0);
+  assert.doesNotMatch(handler.slice(0, pipelineStart), /resolveGroup\(payload\)/);
+  assert.match(handler, /guard = function\(state\)/);
+  assert.match(handler, /preflight = function\(state\)\s+return preparePlan\(state\)/);
+  assert.match(handler, /executeCommandPipeline/);
+  assert.match(handler, /snapshotPitchControlContent/);
+  assert.doesNotMatch(handler, /createUndoRecord\(project\)/);
 });
 
 test("deterministic note transforms stay guarded and use one edit undo boundary", async () => {
@@ -205,10 +313,23 @@ test("deterministic note transforms stay guarded and use one edit undo boundary"
   assert.ok(handlerStart >= 0);
   assert.match(handler, /validateFingerprint/);
   assert.match(handler, /getBlickFromSeconds/);
-  assert.match(handler, /handlers\.edit_notes/);
-  assert.match(handler, /HOST_POSTCONDITION_FAILED/);
+  assert.match(handler, /executeCommandPipeline/);
+  assert.match(handler, /guard = function\(state\)/);
+  assert.match(handler, /preflight = function\(state\)/);
+  assert.doesNotMatch(handler, /handlers\.edit_notes/);
   assert.match(handler, /never chooses musical intent or target notes/);
   assert.doesNotMatch(handler, /createUndoRecord\(project\)/);
+
+  const editHandlerStart = bridgeSource.indexOf(
+    "function handlers.edit_notes",
+  );
+  const editHandler = bridgeSource.slice(
+    editHandlerStart,
+    handlerStart,
+  );
+  assert.match(editHandler, /executeCommandPipeline/);
+  assert.match(editHandler, /HOST_POSTCONDITION_FAILED/);
+  assert.match(editHandler, /snapshotNoteContent/);
 });
 
 test("automation writes fail closed without the fresh host definition range", async () => {

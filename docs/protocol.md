@@ -1,467 +1,193 @@
-# File IPC protocol
+# Protocol v3
 
-The Node client and Lua executor use the compact protocol-v2 envelope
-exclusively. A protocol-v1 request is rejected with `PROTOCOL_MISMATCH`.
+Status: authoritative for `0.2.0-alpha.1`
 
-## Protocol v2
+Protocol v3 is the only Node-to-Lua envelope accepted by the Bridge. Protocol
+v1 and v2 fail with `PROTOCOL_MISMATCH`. The first implementation uses local
+files as its transport, but the semantic envelope is transport-independent.
 
-Request:
+## Public MCP surface
 
-```json
-{"v":2,"id":"AbCdEfGh12345678","a":"get_project_info","p":{}}
-```
+The server registers exactly six tools:
 
-Success:
+| Tool | Responsibility |
+|---|---|
+| `sv_status` | Connection, session, capability, trace, and component-build diagnostics |
+| `sv_describe` | One compact Query, Command, UI, or Review action schema |
+| `sv_query` | Read-only projection, pagination, and typed Context creation |
+| `sv_command` | Project edit, delete, clone, import, and bounded batch commands |
+| `sv_ui` | Selection, navigation, playback, dialogs, and clipboard |
+| `sv_review` | Publish or inspect Sidebar previews; user confirmation/dismissal occurs in SynthV |
 
-```json
-{"v":2,"id":"AbCdEfGh12345678","r":{}}
-```
+Detailed SynthV actions are private catalog entries. Arbitrary Lua method
+execution is not supported.
 
-Error:
+## File envelope
 
-```json
-{"v":2,"id":"AbCdEfGh12345678","e":{"code":"STALE_NOTE","message":"The note changed"}}
-```
-
-The single-writer channel still requires `id` correlation. V2 removes
-per-request timestamps, the repeated long field names, and the explicit `ok`
-flag. Heartbeat and session files carry timing and supported-version
-diagnostics.
-
-The v0.1.4 side-panel handoff is an independent, local display sideband owned
-by the Node coordinator, not a second Bridge protocol. Confirmed panel changes
-enter SynthV through protocol v2. See [sidebar.md](sidebar.md).
-
-## Indexing and coordinates
-
-- Track, group, and note indices are **1-based**, matching the Lua API.
-- Note onset and pitch values are local to their note group.
-- Read responses also include absolute onset, end, and pitch after applying group-reference offsets.
-- Automation point positions are group-local blicks.
-- Smart Pitch anchor positions and curve-point offsets are group-local blicks.
-- Editor view time coordinates are blicks and screen coordinates are pixels.
-- Playback positions are seconds.
-
-### Automatic note grouping
-
-`add_notes` accepts `grouping=target|ensureNonMain`. The MCP v2 surface injects
-`ensureNonMain` by default. When the requested target is a track main group, the
-Bridge validates and constructs all notes first, then creates one reusable
-library `NoteGroup`, places one non-main reference on the same track, copies the
-main reference's Voice/Vocal Modes, and inserts all notes into that group in one
-undo record. Existing non-main targets are reused.
-
-Set `grouping=target` to write directly to the requested group. `groupName` may
-be provided only when `ensureNonMain` actually creates a group.
-
-Group content belongs to the underlying `NoteGroup`, not to one reference.
-Content-mutating actions therefore default to `sharedGroupPolicy=reject`. When
-the same Group has more than one reference, the caller must intentionally set
-`sharedGroupPolicy=allowAllReferences` and supply the fresh
-`expectedReferenceCount`; otherwise the Bridge returns `SHARED_GROUP_WRITE`.
-A changed count returns `STALE_GROUP_REFERENCE_COUNT`. Reference-local fields
-such as time/pitch offset and mute do not require this all-reference opt-in.
-
-- Time-axis tempo positions are project-global blicks; time-signature positions are zero-based measure numbers.
-
-## Optimistic-concurrency fields
-
-Every write must echo the latest applicable concurrency values:
-
-- `groupUuid` for every Group write.
-- `referenceFingerprint` for reference updates/deletes, especially instrumental references without a Group UUID.
-- `fingerprint` for note and Smart Pitch edits/deletes.
-- `expectedFingerprint` for automation, time-axis, and library-group writes.
-- `trackFingerprint` for track updates, clones, deletes, and mixer writes.
-
-The MCP layer additionally supports short `guardToken` and
-`expectedGuardToken` values in compact tuning workflows. These tokens are
-resolved in memory to the original fingerprint before a file-protocol request
-is written, including guarded steps nested in `apply_transaction` and payloads
-staged through `sidebar_publish_preview`, so the Lua executor continues to
-compare the complete current fingerprint. Guard Tokens are intentionally
-invalid after the MCP server restarts or evicts an old entry.
-
-The bridge reports `STALE_GROUP`, `STALE_GROUP_REFERENCE`,
-`STALE_LIBRARY_GROUP`, `STALE_NOTE`, `STALE_PITCH_CONTROL`, `STALE_TRACK`,
-`STALE_AUTOMATION`, or `STALE_TIME_AXIS` before creating an undo record when a
-supplied guard no longer matches.
-
-### MCP v2 surface
-
-The model-facing MCP surface is versioned independently from this file
-envelope. By default it exposes `sv_status`, `sv_describe`, `sv_read`,
-`sv_edit`, `sv_delete`, `sv_transaction`, `sv_ui`, and `sv_sidebar`.
-`sv_describe` returns the existing action schemas only when requested.
-
-Guarded V2 reads may return an opaque `contextId`. The MCP server binds it to
-the complete locators and fingerprints already returned by the underlying
-action, plus the source action and target kind, then removes those verbose
-values from the model-facing result. Locator-only reads do not mint a
-write-capable Context. V2 calls expand a handle only for compatible targets:
-an incompatible action fails with `CONTEXT_INCOMPATIBLE`, while any explicit
-locator or guard that conflicts with the Context fails with
-`CONTEXT_SCOPE_MISMATCH`. The server never silently overwrites caller-supplied
-scope. A Context does not bypass Lua validation, survive MCP
-restart/eviction, or cache mutable musical state.
-
-`get_phrase_context.include` is a file-protocol projection used by the v2
-surface. Omitted `include` returns the complete response. When it is present,
-excluded voice, automation, analysis, recommendations, selection diagnostics,
-and computed-pitch summaries are not serialized and, where possible, are not
-computed.
-
-## Serialization rules
-
-- The server accepts exactly one in-flight request.
-- Request and response filenames are stable, but writes are published atomically through temporary files.
-- `requestId` correlates a response with its request.
-- A protocol-version mismatch fails closed.
-- New action names and optional payload fields may be added without changing the v2 envelope.
-- Unknown fields may be added to read responses in minor releases; clients should ignore fields they do not recognize.
-
-### Compact tuning responses
-
-The `responseMode` payload field accepts `full` or `compact`; `full` is the
-default. Compact phoneme reads may also provide
-`noteIndices` and/or an absolute `startSeconds`/`endSeconds` overlap range.
-Compact writes return counts and fresh fingerprints rather than complete
-serialized objects. At the MCP boundary those fingerprints are replaced by
-short Guard Tokens.
-
-`includeComputedPhonemes` defaults to `true`. When false, the executor skips
-`SV:getPhonemesForGroup` and omits each note's
-`computedPhonemes` field. Read responses report `computedPhonemesIncluded`,
-`scanMode`, and `scannedNoteCount`; these additive diagnostics let clients
-confirm whether an index, page, or time-range fast path was used.
-
-Response mode remains an optional action payload field in both envelopes, and
-the Node-only Guard Token substitution is not part of the file IPC contract.
-
-### Phrase context
-
-`get_phrase_context` is an additive read-only v1 action. It accepts an explicit
-Group locator or uses the current piano-roll Group when `trackIndex` is absent.
-An explicit `noteIndices` list or `startSeconds`/`endSeconds` range wins over
-selection; otherwise `preferSelectedNotes` defaults to true. The returned notes
-always use compact timing/pitch/phoneme serialization.
-
-The response also contains compact Group voice/Vocal Modes, aggregate phrase
-metrics, bounded recommendation-only targets, and summaries for up to eight
-requested automation parameters. Optional `pitchAnalysisFrames` samples at most
-256 computed-pitch frames but returns only aggregate statistics. At the MCP
-boundary, note fingerprints and each nested automation fingerprint become
-short Guard Tokens suitable for the existing guarded write tools.
-
-Phrase-note seconds are rounded to the reported `secondsPrecision` of `0.0001`.
-When `noteDefaultsOmitted` is true, absent empty phoneme/language/phoneset
-overrides, zero detune, true/default even-syllable duration, empty phoneme
-attributes, and false selection flags represent their ordinary defaults.
-Non-default values are never removed.
-
-The executor recomputes this context for each request. It intentionally does
-not cache note, selection, voice, or automation state across requests.
-
-P3 adds optional range controls without changing the v2 envelope:
-
-- `rangeMatch` defaults to `overlap`. This scans from the Group front when
-  necessary so notes sustained across a range start are included and reports
-  `coverage: "complete_overlap"`.
-- `rangeMatch: "onset"` binary-seeks to the first onset at or after the range
-  start. Responses report `coverage: "onset_only"` and
-  `mayExcludeEarlierSustains: true`.
-- An ordinary page with more notes contains a raw `pageCursor` in file IPC. The
-  MCP server replaces it with `page.cursorToken`; on continuation it restores
-  the exact Group locator, next index, and boundary fingerprint. A changed
-  boundary fails with `STALE_RANGE_CURSOR`. Tokens do not survive MCP restart or
-  eviction.
-- `ranges` accepts 1–32 `{startSeconds,endSeconds,label?}` objects and cannot be
-  combined with top-level time bounds, exact note indices, a cursor, or a
-  non-zero offset. The result contains one shared unique `notes` array and
-  per-range `noteIndices`, diagnostics, automation summaries, and optional
-  pitch summaries. The union is bounded to 256 notes and pitch sampling is
-  bounded to 256 total requested frames.
-
-Clients that omit these optional fields retain complete overlap matching and
-numeric pagination.
-
-### Action catalog
-
-Protocol v2 permits new file-IPC action names without changing the
-request/response envelope. The catalog also contains bounded Node-local actions
-that are routed through the compact MCP surface but never sent over file IPC.
-The action set includes reusable note-group library
-operations, linked/deep group references, Smart Pitch CRUD, Bridge-tracked
-Retakes, automation sampling/simplification, full selection control, viewport
-navigation, host clipboard/dialog helpers, coordinate conversion, and
-namespaced script data. Other actions expose typed Group voice/Vocal
-Mode settings, host-validated experimental Unison fields, and dedicated
-per-note phoneme properties. The catalog also includes `apply_transaction`,
-`rollback_transaction`,
-`create_harmony_track`, `humanize_notes`, `apply_expression_preset`, and
-`fit_lyrics`. `get_phrase_context` provides compact selected/ranged phrase
-analysis.
-
-`clone_track` defaults to `nonMainGroupPolicy=reject` when the source contains
-non-main vocal Groups. Explicit `detach` creates independent Group content, but
-the official API cannot verify or assign those non-main Vocal database
-identities, so the result requires manual Vocal review. `clone_track_shell`
-host-clones only the source main Vocal context into one verified-empty track and
-reports `vocalIdentityReadable=false`; it does not claim a readable singer name.
-
-`script_data` only exposes keys beginning with `synthv-agent-bridge.`. It never
-lists, clears, or overwrites another script's namespace.
-
-### Guarded transactions
-
-`apply_transaction` uses the protocol-v2 envelope:
+A request is serialized as:
 
 ```json
 {
-  "v": 2,
-  "id": "AbCdEfGh12345678",
-  "a": "apply_transaction",
-  "p": {
-    "summary": "Create and then rename a track",
-    "steps": [
-      {"action": "add_track", "payload": {"name": "Draft"}},
-      {
-        "action": "update_track",
-        "payload": {
-          "trackIndex": {"$result": {"step": 1, "path": ["trackIndex"]}},
-          "trackFingerprint": {"$result": {"step": 1, "path": ["fingerprint"]}},
-          "name": "Lead"
-        }
-      }
-    ]
-  }
+  "v": 3,
+  "id": "request-id",
+  "t": "trace-id",
+  "a": "internal-action",
+  "p": {},
+  "b": "expected-executor-build-id"
 }
 ```
 
-The batch contains 1–32 non-transaction project-write steps. The Bridge
-fully preflights every independent step before one undo record is created.
-Independent validation failure leaves the project unchanged. A complete field
-value in a later step may use
-`{"$result":{"step":1,"path":["trackIndex"]}}` to read an earlier 1-based
-forward result; it cannot refer to the current or a future step. Dependent
-steps are resolved from actual results and preflighted immediately before they
-execute, because their targets do not yet exist during the initial pass.
-Conflicting steps that mutate the same guarded scope are rejected. Track and
-library-group deletes, which shift later indices, must be the only step.
+A successful response is:
 
-All forward writes share one native undo record. This is reported as
-`atomicity: "singleUndoRecord"`; it is not an automatic rollback guarantee. A
-dependent validation or unexpected host error may happen after earlier steps
-have written. `TRANSACTION_EXECUTION_FAILED` identifies the failed step and
-reports `partialWritePossible` and `undoRequired`; when Undo is required, the
-caller must ask the user to invoke SynthV Undo once before rereading or
-retrying.
+```json
+{
+  "v": 3,
+  "id": "request-id",
+  "t": "trace-id",
+  "b": "executor-build-id",
+  "m": {
+    "totalMs": 7.5,
+    "stages": [
+      { "stage": "freshRead", "durationMs": 2.25 },
+      { "stage": "verified", "durationMs": 1.5 }
+    ]
+  },
+  "r": {}
+}
+```
 
-Optional `rollbackSteps` may also refer to a forward result. Resolved reverse
-steps are stored only in the current Bridge session.
-`rollback_transaction` accepts the returned `transactionId`, revalidates
-current fingerprints, and creates one new undo record.
+A failed response replaces `r` with `e`. The response must echo `id` and `t`.
+Node rejects a mismatched executor build before any project command is
+accepted. Full Build Identity is returned by `sv_status`; normal operations
+carry only short build identifiers.
 
-### Local MusicXML and MIDI import
+`m` is optional, bounded executor telemetry. It accepts at most 24 entries and
+each entry contains only a short stage name and a non-negative duration. It
+cannot carry lyrics, notes, fingerprints, arbitrary metadata, or project
+payloads. Node folds these measurements into the matching internal Trace and
+does not expose them in ordinary Query or Command results.
 
-`inspect_score_file` and `import_monophonic_score` are Node-local catalog
-actions rather than file-IPC actions. Both accept only an absolute local path
-ending in `.xml`, `.musicxml`, `.mxl`, `.mid`, or `.midi`. URLs, `.svp`, XML
-`DOCTYPE`/`ENTITY`, unsafe or ambiguous `.mxl` containers, and malformed input
-are rejected. Inspection makes no SynthV write and returns:
+`sv_status(operation="diagnostics")` is the explicit diagnostics projection:
 
-- a SHA-256 `fileFingerprint` over the exact source bytes;
-- 1-based MusicXML part/voice/staff or MIDI track/channel choices;
-- overlap/polyphony diagnostics and a bounded converted-note preview; and
-- the source tempo map as review-only metadata.
+- `support` returns bounded stage durations and identifiers, at most 8 KB;
+- `debug` adds bounded safe transport/action metadata, at most 16 KB;
+- an optional `traceId` selects one Trace and `limit` is capped at 20;
+- ordinary `sv_status` operations do not include recent Trace history.
 
-Import requires the fresh hash as `expectedFileFingerprint` and the literal
-`rightsConfirmed: true`. The selected lane must be unambiguous and monophonic,
-and the SynthV write is capped at 512 notes. The Node process converts the lane
-to Group-local blick notes, then calls the same guarded `add_notes` path and
-shared-Group firewall as an ordinary edit. It never applies the source tempo to
-the project automatically.
+## Query Contexts
 
-### Track color compatibility
+`sv_query` provides two Context modes and defaults to `readOnly`; callers must
+explicitly choose `writeIntent` before reusing a Context for a command:
 
-- Track write actions accept `#RRGGBB`, `AARRGGBB`, or `#AARRGGBB`.
-- Six-digit RGB is normalized to an opaque native SynthV value by prepending `ff` and removing `#`.
-- Track reads keep the host's raw `displayColor` and may additionally include `displayColorArgb` and `displayColorRgb`.
-- A color write is verified through `Track:getDisplayColor()` before it is reported as successful.
+- `readOnly`: may be served by a bounded session cache and never authorizes a
+  write.
+- `writeIntent`: always reaches the current SynthV host and binds a short-lived
+  typed Context to server-side locators and Guards.
 
-### Verified time-axis writes
+Raw fingerprints do not cross the public MCP boundary. Session replacement
+clears Contexts, Guards, cursors, and read snapshots.
 
-`set_time_axis` explicitly removes an occupied tempo/time-signature position
-before adding its replacement. The bridge validates the complete operation on a
-cloned `TimeAxis`, applies one undo record, and verifies the project-owned
-`TimeAxis` afterward. Successful responses include `verified: true`.
+Every Query action is classified by one projection strategy:
 
-### Token-efficient Group Voice refresh
+- `fixed`: bounded scalar/object result;
+- `offsetPage`: collection with an explicit offset, limit, total count, and
+  continuation metadata;
+- `cursorPage`: phrase paging with a target-bound opaque cursor;
+- `rangeSummary`: compact full-state summary unless a closed range is
+  explicitly requested;
+- `explicitBounded`: the action requires or internally enforces a bounded
+  caller scope.
 
-`get_group_voice` accepts either an explicit Group locator or an empty payload.
-An empty payload resolves the current piano-roll vocal Group, avoiding a
-potentially large `get_selection` response merely to discover the target. On
-the MCP v2 surface, the default projection contains only `trackIndex`,
-`groupIndex`, documented `parameters`, `vocalModes`, and a guarded `contextId`.
-Callers can request additional fields explicitly for diagnostics.
+Default Track, library Group, time-axis-mark, Track-Group/note, computed-data,
+and Smart Pitch reads are paged. A compact Automation read omits its point array unless
+the caller supplies a closed range. The complete private fingerprint is still
+computed from current host state before paging or summarization and remains
+available only to the server-side Context.
 
-The Codex Agent rule requires one first-use notice per conversation, not one
-notice per edit. Before Vocal Mode work, the Agent asks the user to
-select the intended Note Group, select or assign its singer, and then provide
-either the exact current singer mode names or a screenshot of that panel.
-Vocal Mode names cannot appear before a singer is selected. The Agent reuses
-that list until the user reports changing singer. Undo or a manual edit only
-requires a compact reread when it touched the same target.
+The shared Query Projector measures the final public JSON. An unscoped default
+result above 20,000 characters fails with
+`QUERY_RESPONSE_BUDGET_EXCEEDED`. An explicitly requested page, range,
+`include`, or `fields` projection may exceed that ordinary budget, but it is
+still measured and must expose its coverage rather than silently truncate.
+Projection and shadow comparison never perform a second SynthV read.
 
-### Optional host capabilities
+Computed phoneme/attribute pages retain their pending state in the normal
+projection. A pending page reports zero advancement plus the same retry offset;
+the caller must retry that page after SynthV finishes computation rather than
+skip ahead. Smart Pitch paging serializes only the requested controls instead
+of constructing the complete control array before slicing it.
 
-When the current SynthV Lua host cannot execute `Note:setPitchAutoMode()`, a
-request that would actually change the note fails with
-`UNSUPPORTED_HOST_CAPABILITY`. A request matching the current value succeeds
-without invoking the unavailable setter.
+## Command outcomes
 
-`set_group_voice` treats `singers` and `spacing` as experimental host
-capabilities because they are not in the public `NoteGroupReference#getVoice`
-field list. It accepts them only when the current reference returns the field,
-and it verifies the requested value on a cloned reference before creating an
-undo record.
+Every `sv_command` public result has one outcome:
 
-Vocal Mode pitch, timbre, and pronunciation axes accept `0..150`. SynthV may
-omit every default Vocal Mode from
-`getVoice()` until a non-default value is written, so an empty
-`vocalModeParams` map is not treated as a capability catalog. The caller may
-submit all desired mode names in one `set_group_voice` request. The Bridge
-tries the complete batch on a cloned reference and reads it back; no
-interactive per-mode discovery request is required. Names rejected by the
-current host fail before an undo record, while successful non-default values
-become visible in later reads.
+- `changed`: at least one intended effect was verified; reports affected
+  counts and the actual Undo count.
+- `alreadySatisfied`: the fresh host state already matches the command; no
+  mutation and no Undo occurred.
+- `failed`: reports the failed stage, whether mutation may have occurred, and
+  whether exactly one SynthV Undo is required.
 
-If clone validation returns `VOCAL_MODE_NOT_FOUND`, its details contain
-`requiredUserInput.kind=vocal_mode_names`, the attempted names, any names
-already visible in the Group, and an instruction to stop guessing. The Agent
-must tell the user that the scripting API cannot enumerate the current
-singer's default-only modes and ask the user to select the intended Note Group,
-select or assign its singer, and provide the exact names displayed in SynthV's
-Vocal Mode panel, preserving spelling and capitalization. The user may instead
-attach a screenshot that clearly shows the complete panel. The Agent should
-then retry all identified names in one batch and reuse them for that singer.
+A command cannot report `changed` merely because no exception occurred.
+Unexpected zero effect or a write/readback mismatch is
+`HOST_POSTCONDITION_FAILED`.
 
-The Bridge first tries a sparse nested update and verifies every previously
-visible Vocal Mode value, so an unrequested pre-existing value is never silently
-clamped. A directly requested value must still survive
-`NoteGroupReference:setVoice()` on a cloned reference. The TypeScript and Lua
-bound prevents values above 150 from reaching that preflight.
+## Command lifecycle
 
-### Tuning parameter ranges
+```text
+Schema -> Context Resolve -> Fresh Host Read -> Guard
+-> Ownership/Capability/Range Preflight -> Effect Plan
+-> Undo -> Mutate -> Postcondition Read
+-> Cache Invalidate -> Compact Projection
+```
 
-The Bridge does not perform exploratory range writes at startup or at the
-beginning of a conversation. Stable public or verified ranges are validated in
-TypeScript and Lua:
+All independent work is preflighted before `Project:newUndoRecord()`.
+Dependent batch steps are preflighted immediately before their mutation.
+Failure after an earlier dependent step wrote returns `undoRequired=true` and
+is never automatically retried.
 
-| Scope | Parameter | Accepted range |
-|---|---|---:|
-| Group Voice | loudness | `-48..12` dB |
-| Group Voice | tension, breathiness, gender, tone shift | `-1..1` |
-| Group Voice | Vocal Mode pitch/timbre/pronunciation | `0..150` |
-| Phoneme | position, activity | `0..1` |
-| Phoneme | strength | `-1..1` |
-| Phoneme | left offset | finite seconds; no Bridge-imposed bound |
-| Expression preset | strength | `0..2` |
+## Public response rules
 
-Automation is intentionally different: `Automation:getDefinition().range` is
-the authority for each current Group, host, and voice. The existing
-fingerprint/Guard read already returns this definition, so no separate probe is
-needed. SynthV Studio 2.2.1 was verified to return `pitchDelta -1200..1200`,
-`vibratoEnv 0..2`, `loudness -48..24`, `tension/breathiness/gender -2..2`,
-`voicing 0..1`, `toneShift -800..800`, `mouthOpening -1..1`,
-`rapIntonation 0..1`, and current singer `vocalMode_<Name> -150..150`.
-Because these live ranges differ from older public tables, the Bridge validates
-automation point values against the host-returned definition rather than a
-duplicated fixed list.
+Normal responses contain only:
 
-Clone-only SynthV 2.2.1 verification also confirmed phoneme
-`position/activity 0..1`, `strength -1..1`, and unchanged `leftOffset` values
-through at least `-10..10` seconds. Generic note attributes remain
-host-validated finite values unless a semantic action has a narrower contract;
-for example, `apply_expression_preset` deliberately limits its strength to
-`0..2`.
+- `traceId`;
+- outcome/error code and failed stage;
+- affected counts and durable identifiers;
+- verification and Undo metadata;
+- replacement `contextId` when safe;
+- bounded warnings and recovery guidance.
 
-### Same-Group tuning batch
+They do not contain raw fingerprints, lyrics, phoneme text, full note arrays,
+Automation point arrays, stack traces, or local IPC paths. The target limits
+are 20 KB for an ordinary compact read, 2 KB for a write acknowledgement, and
+4 KB for a public error.
 
-`apply_group_tuning` accepts an optional Group Voice/Vocal Mode change,
-fingerprint-guarded note edits with optional phoneme changes, and up to 32
-fingerprint-guarded automation updates for one Group. It resolves and validates
-the complete payload—including every current fingerprint and every
-host-returned automation range—before `Project:newUndoRecord()`, then applies
-the pass as exactly one SynthV undo record. Prefer it over several sequential
-writes when one tuning decision affects the same Group. SynthV's public
-scripting API does not expose Undo. If the host unexpectedly rejects execution
-after that undo boundary, the Bridge returns `undoRequired`,
-`partialWritePossible`, and one-step Undo guidance; callers must not retry until
-the user undoes once and the target is reread.
+## Indexing and ownership
 
-### Deterministic note transform batch
+Track, Group, Reference, and note indices remain 1-based at the protocol
+boundary.
 
-`transform_notes` applies one explicit numeric transform to 1–512
-fingerprint-guarded notes in the same Group. Supported fields are
-`onsetOffsetBlick` or `onsetOffsetSeconds` (mutually exclusive),
-`durationScale`, `durationOffsetBlick`, and `pitchOffsetSemitones`.
-The duration calculation is
-`round(originalDuration * durationScale) + durationOffsetBlick`.
+Group-content commands treat notes, lyrics, phonemes, Retakes, Automation, and
+Smart Pitch as shared content. A fresh reference count greater than one fails
+by default unless the caller explicitly chooses all-reference intent and
+supplies the matching fresh count.
 
-A seconds onset offset converts every current absolute onset through the fresh
-project `TimeAxis`, adds the requested number of seconds, converts back to
-blicks, and keeps the original duration unit in blicks. The complete batch is
-rejected before its undo boundary if any target is stale or any resulting
-onset, duration, or MIDI pitch is invalid. Successful writes use the existing
-`edit_notes` clone preflight, create one undo record, and verify the retained
-values afterward.
+Clone intent is one of:
 
-On MCP v2, callers may pass `target: "contextNotes"` with a fresh
-`contextId`. The TypeScript layer expands exactly the note guards returned by
-that read and removes the compact alias before file IPC. This is a transport
-optimization, not target inference: the Agent still chooses the read scope and
-the explicit numeric transform.
+- `linked`: intentionally share the target Note Group;
+- `isolated`: clone the Note Group and verify distinct UUID, reference count,
+  and target association; confirm the unchanged source through a separate
+  fresh host read;
+- `shell`: create a verified-empty track shell.
 
-### Hot reload
+No `deepCopy` boolean exists in v3.
 
-`reload_bridge` compiles the currently running script file with Lua
-`loadfile()`, writes the correlated response, and then transfers polling to a
-new in-session Bridge instance. It does not call UI automation or inject hooks.
-The installer can request the same transition through the
-`synthv-agent-bridge.reload` marker, records the installed absolute path in a
-local `synthv-agent-bridge.install.json` manifest with `schemaVersion: 1`, and
-confirms that the session token changed. This manifest schema is independent
-from file IPC protocol v2. The fallback is needed because SynthV 2.2.1 does not
-expose the loaded script path to Lua. A Bridge version that predates this action
-must be restarted manually once before later installs can reload automatically.
+## Transport and recovery
 
-The MCP v2 surface tracks the heartbeat `sessionToken`. When SynthV restarts or
-the Bridge hot-reloads, the next v2 call automatically detects the changed
-token and clears every cached `contextId` and Guard Token. A write is rejected
-with `SYNTHV_SESSION_CHANGED` and `requiredAction=read_target_again`; a fresh
-read without an old context proceeds and includes `sessionReset` in its result.
-When `sv_status` requests the reload itself, it waits for the new heartbeat
-token and clears those caches before returning, so an immediate follow-up
-cannot enter the acknowledgement-to-heartbeat race window.
-This makes the reset explicit to the Agent without attempting to restart the
-SynthV application. Automatically restarting SynthV is intentionally out of
-scope because it can interrupt unsaved work; the safe automatic behavior is
-cache invalidation followed by a fresh guarded read.
+The persistent Lua executor claims one request at a time. Node also serializes
+transport calls, so there is one logical writer and no lock service. Temporary
+and stale transport files are recovered according to session identity.
 
-### Selection-aware writes
-
-Group voice and phoneme reads include whether the target is the current
-piano-roll Group, whether it is selected in either editor, and how many of its
-notes are selected. `set_group_voice` can require the current editor Group;
-`set_note_phoneme_properties` can additionally require every target note to be
-selected. These guards are opt-in because official object setters operate on
-explicit Group UUIDs, note indices, and fingerprints without requiring UI
-selection. This keeps batch automation available while allowing
-selection-sensitive user requests to fail safely with `SELECTION_MISMATCH`.
-
-UI write responses report observed host state. `set_selection` rereads and
-returns `get_selection`; `set_editor_view` serializes the resulting navigation
-state in addition to the requested fields; and `playback` returns the current
-SynthV status and playhead after the command. Callers should use those observed
-fields instead of assuming the host retained every requested value exactly.
+The installer stages Node-owned Lua/Sidebar files, verifies source hashes,
+replaces the installed set, and restores the previous set on replacement
+failure. Runtime code does not access GitHub, Git, or any network service.

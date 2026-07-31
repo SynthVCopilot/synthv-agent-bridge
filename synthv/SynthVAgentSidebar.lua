@@ -3,7 +3,8 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 local SCRIPT_NAME = "SynthV Agent"
-local SIDEBAR_VERSION = "0.1.5"
+local SIDEBAR_VERSION = "0.2.0"
+local SIDEBAR_BUILD_ID = "__SYNTHV_AGENT_SIDEBAR_BUILD_ID__"
 local MIN_EDITOR_VERSION = 131330 -- Synthesizer V Studio 2.1.2
 local POLL_INTERVAL_MS = 500
 local MAX_TEXT_BYTES = 64 * 1024
@@ -62,6 +63,7 @@ local COMMAND_FILE = PREFIX .. ".sidebar.command.txt"
 local ACTIVITY_FILE = PREFIX .. ".sidebar.activity.txt"
 local STATE_FILE = PREFIX .. ".sidebar.state.txt"
 local CLIENT_STATUS_FILE = PREFIX .. ".sidebar.client-status.txt"
+local RUNTIME_STATUS_FILE = PREFIX .. ".sidebar.runtime-status.txt"
 
 math.randomseed(os.time() + math.floor(os.clock() * 1000000))
 
@@ -107,6 +109,48 @@ local function writeFileAtomically(filePath, content)
         return false, renameError
     end
     return true
+end
+
+local lastRuntimeStatusSecond = -1
+local lastRuntimeStatusSignature = nil
+
+local function runtimeStatusValue(value, maximum)
+    return tostring(value or "")
+        :gsub("[\r\n]+", " ")
+        :sub(1, maximum)
+end
+
+local function writeRuntimeStatus(state, failureStage, failureMessage)
+    state = state or "running"
+    local currentSecond = os.time()
+    local signature = table.concat({
+        state,
+        runtimeStatusValue(failureStage, 64),
+        runtimeStatusValue(failureMessage, 512)
+    }, "\0")
+    if currentSecond == lastRuntimeStatusSecond
+        and signature == lastRuntimeStatusSignature then
+        return
+    end
+    lastRuntimeStatusSecond = currentSecond
+    lastRuntimeStatusSignature = signature
+    local lines = {
+        "synthv-agent-bridge-sidebar-runtime-v3",
+        "state=" .. runtimeStatusValue(state, 32),
+        "version=" .. SIDEBAR_VERSION,
+        "buildId=" .. SIDEBAR_BUILD_ID,
+        "updatedAtEpochMs=" .. tostring(currentSecond * 1000)
+    }
+    if failureStage ~= nil then
+        lines[#lines + 1] =
+            "failureStage=" .. runtimeStatusValue(failureStage, 64)
+    end
+    if failureMessage ~= nil then
+        lines[#lines + 1] =
+            "failureMessage=" .. runtimeStatusValue(failureMessage, 512)
+    end
+    lines[#lines + 1] = ""
+    writeFileAtomically(RUNTIME_STATUS_FILE, table.concat(lines, "\n"))
 end
 
 local function lineValue(content, key)
@@ -350,9 +394,9 @@ local function updateStatus()
         or text("○ M 离线", "○ M offline")
     local updated = updatedBridge .. "\n" .. updatedClient
     if updated ~= lastStatusText then
-        lastStatusText = updated
         bridgeStatusValue:setValue(updatedBridge)
         clientStatusValue:setValue(updatedClient)
+        lastStatusText = updated
     end
 end
 
@@ -380,8 +424,8 @@ local function updateTaskState()
     local translated = TASK_STATUS_LABELS[status]
     local updated = text(translated[1], translated[2])
     if updated ~= lastTaskStateText then
-        lastTaskStateText = updated
         taskStateValue:setValue(updated)
+        lastTaskStateText = updated
     end
     cancelRequestButtonValue:setEnabled(
         status == "queued" or status == "claimed" or status == "stale"
@@ -448,13 +492,38 @@ local function updateActivity()
     activityValue:setValue(trim(bodyAfterLines(raw, 4)))
 end
 
+local function refreshStage(stage, callback)
+    local ok, errorMessage = pcall(callback)
+    if not ok then
+        writeRuntimeStatus("error", stage, errorMessage)
+        return false
+    end
+    return true
+end
+
 local function refreshAll()
-    updateStatus()
-    updateTaskState()
-    updateSelection()
-    updatePreview()
-    updateActivity()
-    submitButtonValue:setEnabled(trim(tostring(instructionValue:getValue() or "")) ~= "")
+    local stages = {
+        { "status", updateStatus },
+        { "taskState", updateTaskState },
+        { "selection", updateSelection },
+        { "preview", updatePreview },
+        { "activity", updateActivity },
+        {
+            "instruction",
+            function()
+                submitButtonValue:setEnabled(
+                    trim(tostring(instructionValue:getValue() or "")) ~= ""
+                )
+            end
+        }
+    }
+    for index = 1, #stages do
+        if not refreshStage(stages[index][1], stages[index][2]) then
+            return false
+        end
+    end
+    writeRuntimeStatus("running")
+    return true
 end
 
 local function showMessage(message)
@@ -677,7 +746,7 @@ function getClientInfo()
         name = SCRIPT_NAME,
         author = "Pengjie Zhou",
         category = "SynthV Agent Bridge",
-        versionNumber = 5,
+        versionNumber = 7,
         minEditorVersion = MIN_EDITOR_VERSION,
         type = "SidePanelSection"
     }
@@ -877,5 +946,4 @@ function getSidePanelSectionState()
     }
 end
 
-refreshAll()
 poll()

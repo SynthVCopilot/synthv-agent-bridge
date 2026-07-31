@@ -50,7 +50,7 @@ payloads or repeat the full first-use checklist after a preview.
    the bundled gentle/bright/childlike intent, reads current Automation
    `definition.range` values, and applies one `apply_group_tuning` batch. The
    Demo template puts `automation` and `pitchAnalysis` in the top-level
-   `sv_read.include` projection so their fresh Guards remain in the Context.
+   `sv_query.include` projection so their fresh Guards remain in the Context.
 6. Codex rereads the entire Demo Group and verifies 42 notes, five intentional
    phrase gaps, zero overlaps, retained Vocal Modes and phonemes, and all five
    automation curves before starting loop playback.
@@ -83,5 +83,5 @@ automatic.
   post-write verification, and
   loop playback
 
-The Demo intentionally uses the same eight MCP tools and internal actions as a
+The Demo intentionally uses the same six MCP v3 tools and internal actions as a
 normal tuning session, so a successful run demonstrates the real workflow.

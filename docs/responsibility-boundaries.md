@@ -95,7 +95,7 @@ duration, and semitone operations. Commands such as `make_emotional` or
 `tune_whole_song` do not qualify: they hide artistic decisions and make
 failures difficult to review.
 
-For a fresh phrase Context, MCP v2 can apply the same deterministic transform
+For a fresh `writeIntent` phrase Context, MCP v3 can apply the same deterministic transform
 without repeating every note index:
 
 ```json

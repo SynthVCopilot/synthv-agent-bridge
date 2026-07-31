@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -10,18 +10,26 @@ import {
   SERVER_CAPABILITY_FINGERPRINT,
 } from "../src/build-info.js";
 
+const componentBuildIdentity = await import(
+  new URL("../../scripts/component-build-identity.mjs", import.meta.url).href,
+);
+
 type DoctorCheck = {
   readonly name: string;
   readonly status: "ok" | "warning" | "error";
 };
 
-function runDoctor(ipcDirectory: string): {
+function runDoctor(ipcDirectory: string, target?: string): {
   readonly status: number | null;
   readonly checks: DoctorCheck[];
 } {
   const result = spawnSync(
     process.execPath,
-    [path.resolve("scripts", "doctor.mjs"), "--json"],
+    [
+      path.resolve("scripts", "doctor.mjs"),
+      "--json",
+      ...(target === undefined ? [] : ["--target", target]),
+    ],
     {
       cwd: process.cwd(),
       encoding: "utf8",
@@ -59,7 +67,7 @@ test("doctor accepts a fresh MCP capability fingerprint", async () => {
       [
         "synthv-agent-bridge-sidebar-client-status-v1",
         "state=running",
-        "version=0.1.5",
+        "version=0.2.0",
         `buildFingerprint=${SERVER_BUILD_FINGERPRINT}`,
         `capabilityFingerprint=${SERVER_CAPABILITY_FINGERPRINT}`,
         `updatedAtEpochMs=${Date.now()}`,
@@ -91,7 +99,7 @@ test("doctor rejects a fresh MCP process from a different build", async () => {
       [
         "synthv-agent-bridge-sidebar-client-status-v1",
         "state=running",
-        "version=0.1.5",
+        "version=0.2.0",
         "buildFingerprint=stale-build",
         "capabilityFingerprint=stale-build",
         `updatedAtEpochMs=${Date.now()}`,
@@ -108,3 +116,38 @@ test("doctor rejects a fresh MCP process from a different build", async () => {
     await rm(ipcDirectory, { recursive: true, force: true });
   }
 });
+
+test(
+  "doctor accepts installed scripts prepared with component build identities",
+  async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "synthv-doctor-installed-"),
+    );
+    try {
+      const target = path.join(directory, "scripts");
+      const installedDirectory = path.join(target, "SynthV Agent Bridge");
+      await mkdir(installedDirectory, { recursive: true });
+      const identity =
+        await componentBuildIdentity.readComponentBuildIdentity(process.cwd());
+      await Promise.all([
+        writeFile(
+          path.join(installedDirectory, "SynthVAgentBridge.lua"),
+          identity.prepareExecutorSource(),
+          "utf8",
+        ),
+        writeFile(
+          path.join(installedDirectory, "SynthVAgentSidebar.lua"),
+          identity.prepareSidebarSource(),
+          "utf8",
+        ),
+      ]);
+
+      const result = runDoctor(directory, target);
+      assert.equal(result.status, 0);
+      assert.equal(check(result.checks, "installed-scripts").status, "ok");
+      assert.equal(check(result.checks, "optional-sidebar").status, "ok");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);

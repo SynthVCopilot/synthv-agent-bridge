@@ -10,6 +10,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import type { BridgeConfig } from "../src/config.js";
 import { loadConfig } from "../src/config.js";
+import { EXECUTOR_BUILD_ID } from "../src/build-info.js";
 import { parseBridgeRequest } from "../src/protocol.js";
 import { createServer } from "../src/server.js";
 
@@ -44,8 +45,10 @@ async function serveOneBridgeRequest(
     JSON.parse(await fs.readFile(config.paths.processingFile, "utf8")),
   );
   await writeJsonAtomically(config.paths.responseFile, {
-    v: 2,
+    v: 3,
     id: request.requestId,
+    t: request.traceId,
+    b: EXECUTOR_BUILD_ID,
     r: inspect(request),
   });
   await fs.rm(config.paths.processingFile, { force: true });
@@ -107,10 +110,23 @@ test("local score actions inspect in Node and import through one guarded add_not
     await client.close();
     await server.close();
   });
+  await writeJsonAtomically(config.paths.statusFile, {
+    protocolVersion: 3,
+    protocolVersions: [3],
+    preferredProtocolVersion: 3,
+    state: "running",
+    updatedAtEpochMs: Date.now(),
+    bridgeVersion: "0.2.0",
+    executorBuildId: EXECUTOR_BUILD_ID,
+    host: { osType: "Windows" },
+    projectFile: "test.svp",
+    ipcDirectory: directory,
+    sessionToken: "score-test-session",
+  });
 
   const inspected = readToolJson(
     await client.callTool({
-      name: "sv_read",
+      name: "sv_query",
       arguments: {
         action: "inspect_score_file",
         args: { filePath: scorePath },
@@ -122,10 +138,9 @@ test("local score actions inspect in Node and import through one guarded add_not
   assert.equal(inspected.sourceTempoAppliedToProject, false);
 
   const rightsRejectedResult = await client.callTool({
-    name: "sv_edit",
+    name: "sv_command",
     arguments: {
       action: "import_monophonic_score",
-      response: "full",
       args: {
         trackIndex: 2,
         groupIndex: 1,
@@ -164,10 +179,9 @@ test("local score actions inspect in Node and import through one guarded add_not
   });
   const imported = readToolJson(
     await client.callTool({
-      name: "sv_edit",
+      name: "sv_command",
       arguments: {
         action: "import_monophonic_score",
-        response: "full",
         args: {
           trackIndex: 2,
           groupIndex: 1,
@@ -192,10 +206,7 @@ test("local score actions inspect in Node and import through one guarded add_not
       lyrics: "la",
     },
   ]);
-  assert.equal(imported.addedCount, 1);
-  assert.equal(imported.undoRecordCount, 1);
-  assert.equal(
-    (imported.sourceScore as Record<string, unknown>)["fileFingerprint"],
-    inspected.fileFingerprint,
-  );
+  assert.equal(imported.outcome, "changed");
+  assert.equal(imported.changedCount, 1);
+  assert.equal(imported.undoRecords, 1);
 });

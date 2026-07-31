@@ -4,8 +4,108 @@ All notable changes will be documented in this file.
 
 ## Unreleased
 
+- No unreleased changes.
+
+## 0.2.0-alpha.1 - 2026-07-30
+
+### Breaking
+
+- Replaced the eight-tool MCP v2 surface with the six-tool v3 semantic Facade:
+  `sv_status`, `sv_describe`, `sv_query`, `sv_command`, `sv_ui`, and
+  `sv_review`.
+- Replaced file IPC protocol v2 with v3. There is no runtime compatibility
+  mode; Node, Lua, and the optional Sidebar must be upgraded as one build set.
+
 ### Added
 
+- Typed `readOnly` and `writeIntent` Query Contexts.
+- Public Command outcomes `changed`, `alreadySatisfied`, and `failed`.
+- Redacted cross-layer traces, byte/timing measurements, and component Build
+  Identity with project-write coherence gating.
+- Strict numeric Lua command-stage telemetry and explicit bounded
+  `sv_status(operation="diagnostics")` support/debug projections; ordinary
+  status and command results do not include Trace history.
+- A bounded read Snapshot cache foundation that is not used for write
+  authorization and remains measurement-gated.
+- Fault-injectable Lua behavior tests for clone isolation, shared ownership,
+  stale Guards, no-op Undo behavior, Automation endpoints, aggregate Undo,
+  session invalidation, postcondition failures, and partial-write recovery.
+- Closed-range Automation postcondition verification and compact stale
+  fingerprint summaries.
+
+### Changed
+
+- All live semantic writes are classified by the v3 Command Policy catalog and
+  enter the common Command Dispatcher. High-risk note, clone, aggregate
+  tuning, Automation, Smart Pitch, and dependent-transaction paths add
+  action-specific fresh preflight and postcondition verification.
+- A focused `get_track_mixer` write-intent read now carries a private Track
+  guard into a directly reusable `contextId`, avoiding a detour through
+  `list_tracks`.
+- The installer stages and verifies one component set and restores the prior
+  set if replacement fails.
+- Local source builds record the current Git commit at build time when no CI
+  build metadata is supplied; the running Bridge remains Git- and network-free.
+- Build metadata is generated explicitly by build, development, and typecheck
+  commands, so clean checkouts do not depend on npm lifecycle hooks or commit a
+  self-referential generated Git revision.
+- Hot reload now accepts the installer’s current schema-v2 manifest, including
+  hosts that cannot recover the running script path from Lua debug metadata.
+- Sidebar refresh failures now report the failing stage, keep the polling loop
+  alive, and retry WidgetValue updates instead of poisoning the displayed-value
+  cache after a transient host error.
+
+### Fixed
+
+- Sidebar shutdown is now awaitable and drains its tracked status/poll work
+  before publishing the final stopped state. Server shutdown reuses one close
+  Promise and still finishes Sidebar cleanup if transport close fails,
+  preventing late writes from racing shutdown and temporary-directory cleanup.
+
+### Known alpha limits
+
+- The bounded Snapshot cache is intentionally not active; every project Query
+  reaches SynthV because current measurements do not justify stale-read risk.
+- Representative SynthV 2.2.1 standalone working-copy acceptance is recorded,
+  but stable `0.2.0` still requires the release gates outside the Phase 4-6
+  implementation plan.
+
+## 0.2.0 - 2026-07-31
+
+This release promotes the verified 31-write v3 surface to a reduced-stable
+baseline. Seven native-risk clone/transaction/harmony paths remain
+experimental and fail before project IPC. The one-hour functional Stage 3
+soak passed; the user explicitly waived the post-fix resource-monitor rerun,
+which remains a documented follow-up risk and is not claimed as a pass.
+
+### Added
+
+- An executable `validate:v3-reads` release driver that generates the exact
+  1,000-call/17-Query Stage 3 schedule, verifies project/Session/executor
+  identity around every call, enforces the 20 KB public budget, emits only
+  aggregate evidence, and refuses a full live matrix before explicit Stage 2
+  completion.
+- An executable `validate:v3-stability` driver for concurrent requests,
+  Bridge reload/Session invalidation, reduced-capability fail-closed repetition,
+  and real-host trace on/off p95 comparison, plus the default-on
+  `SYNTHV_AGENT_TRACE_ENABLED` validation switch.
+- A machine-checked 200-call Stage 3 write schedule over all 31 verified write
+  Actions, with six or seven cycles per Action, plus an explicit separate
+  30-cycle linked-clone/Undo requirement.
+- A complete v3 Query policy registry covering all 17 read Actions, a shared
+  model-facing projector, a 20,000-character unscoped default-response gate,
+  and bounded projection telemetry. The first shadow slices for
+  `get_track_mixer`, `get_group_voice`, `list_tracks`, and
+  `list_note_groups` compare independently built projections from the same
+  host result, record only bounded parity/item counts, preserve nested
+  Contexts and ownership summaries, and keep all private Guards server-side.
+- Default host pages for time-axis marks, Tracks, library Groups, notes,
+  computed note data, and Smart Pitch controls. Compact Automation reads now
+  omit point arrays unless an explicit closed range is requested, while their
+  full private OCC fingerprint remains available for Context creation.
+- Retry-safe computed-data pages that preserve pending state without advancing,
+  direct Smart Pitch page serialization, and independent Group/note paging for
+  `get_track_notes`.
 - Node-local `inspect_score_file` and `import_monophonic_score` actions for
   explicitly supplied local MusicXML (`.xml`, `.musicxml`, `.mxl`) and SMF MIDI
   (`.mid`, `.midi`) files. Inspection returns selectable lanes, overlap
@@ -24,12 +124,12 @@ All notable changes will be documented in this file.
 - A bundled, machine-readable Mandarin Twinkle Star guided Demo. The Agent
   offers it once after the first healthy connection, prints five concise stage
   headings, creates only an isolated 42-note non-main Group, pauses for the
-  required Vocal/Vocal Mode handoff, then uses the existing v2 actions to tune,
+  required Vocal/Vocal Mode handoff, then uses the internal actions to tune,
   verify, and loop the song without changing user-owned project material.
 - A one-time MCP first-use notice that tells the Agent to ask for the current
   singer's exact Vocal Mode names or a panel screenshot before Vocal Mode work,
   reuse the result for that singer, and ask again only after a singer change.
-- V2 `add_notes` now defaults to `grouping=ensureNonMain`. Notes aimed at a
+- v3 `add_notes` defaults to `grouping=ensureNonMain`. Notes aimed at a
   track main group are inserted into a newly created reusable non-main group
   and reference, with the main Voice/Vocal Modes copied so the new notes remain
   directly tunable. Explicit non-main groups are reused, and
@@ -50,6 +150,13 @@ All notable changes will be documented in this file.
 
 ### Changed
 
+- Isolated Group-reference clone, Note Group/Track/Track-shell clone, harmony
+  Track, and transaction apply/rollback are classified experimental and fail
+  before project IPC after reproducible SynthV 2.2.1 native crashes. Linked
+  Group-reference clone remains available.
+- The machine-readable API coverage inventory uses `verifiedUi` and accepts
+  the release terminal states `verified`, `unsupported`, and `experimental`;
+  its checker rejects drift from the live capability-stability registry.
 - Note Group content writes now reject multiply referenced Groups by default.
   An intentional all-reference edit must set
   `sharedGroupPolicy=allowAllReferences` and provide a matching fresh
@@ -59,7 +166,7 @@ All notable changes will be documented in this file.
   `nonMainGroupPolicy=detach` is explicit. Detach verifies independent Group
   content but does not claim that the unreadable non-main Vocal identities were
   preserved; callers must review those Vocals manually.
-- MCP v2 Contexts are target-typed and source-scope-bound. Locator-only reads
+- MCP v3 Contexts are target-typed and source-scope-bound. Locator-only reads
   no longer mint write-capable Contexts, and incompatible actions or conflicting
   explicit locators/guards fail closed instead of silently changing scope.
 - Transaction results describe `atomicity: "singleUndoRecord"` as a recovery
@@ -68,23 +175,22 @@ All notable changes will be documented in this file.
   user must invoke SynthV Undo once before retrying.
 - Selection, viewport, and playback controls return the state observed from
   SynthV after the request instead of only echoing requested values.
-- MCP v2 now promotes `get_phrase_context` projections supplied only through
-  `args.include` into the canonical top-level `sv_read.include` selection
+- MCP v3 promotes `get_phrase_context` projections supplied only through
+  `args.include` into the canonical top-level `sv_query.include` selection
   before Guard capture. Supplying different projections in both locations
   fails early with a protocol error instead of silently dropping Automation or
   pitch-analysis Context data.
-- File IPC now accepts only the compact protocol-v2 request/response envelope;
-  Lua rejects protocol-v1 requests with `PROTOCOL_MISMATCH`. The public MCP
-  server always exposes the eight compact v2 tools, and the removed
-  `SYNTHV_AGENT_BRIDGE_MCP_SURFACE=legacy` switch can no longer expose detailed
-  action handlers as standalone tools. `sv_describe` continues to return their
-  schemas just in time.
+- File IPC accepts only the compact protocol-v3 request/response envelope;
+  Lua rejects protocol-v1/v2 requests with `PROTOCOL_MISMATCH`. The public MCP
+  server exposes only the six compact v3 tools, and detailed action handlers
+  cannot be registered as standalone tools. `sv_describe` returns their schemas
+  just in time.
 - The installer manifest now uses the independent `schemaVersion` field instead
   of overloading `protocolVersion`.
 - MCP-requested Bridge reloads now wait for the changed heartbeat session token
   and clear Context/Guard caches before `sv_status` returns.
 - `get_group_voice` can resolve the current piano-roll Group from an empty
-  payload. MCP v2 now projects only target indices, documented parameters,
+  payload. MCP v3 projects only target indices, documented parameters,
   Vocal Modes, and `contextId` by default, avoiding a full selection read and
   duplicate raw/diagnostic fields when only refreshing a Voice write guard.
 - First-use instructions distinguish relevant manual edits from unrelated UI
@@ -106,6 +212,21 @@ All notable changes will be documented in this file.
 
 ### Fixed
 
+- Default and explicit Track-note projections remove nested main Group UUIDs;
+  command/UI acknowledgements and errors no longer expose private UUID or Guard
+  data.
+- Doctor compares installed executor/Sidebar files after the same Build ID
+  injection used by the installer, eliminating false mismatches.
+- Windows Sidebar status replacement retries bounded `EBUSY`, `EACCES`, and
+  `EPERM` races and records the writer PID.
+- Track, Group, time-axis, and metadata no-ops return `alreadySatisfied`
+  without opening Undo; collection mutations now verify count, identity, and
+  survivor order after host writes.
+- Guardless Group reads and Track collection pages now remove private Group
+  UUIDs even when no write-capable Context is minted.
+- Retake note fingerprints and nested Track fingerprints from Track-note reads
+  are now consumed into server-side Contexts or discarded before projection
+  instead of crossing the public MCP boundary.
 - `get_track_notes` Context projection now retains its track locator for nested
   Group Contexts, while Context expansion rejects kind/scope mismatches and
   conflicting guarded-array fingerprints.

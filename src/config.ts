@@ -1,9 +1,9 @@
 import os from "node:os";
 import path from "node:path";
 
-export const PROTOCOL_VERSION = 2 as const;
+export const PROTOCOL_VERSION = 3 as const;
 export const SERVER_NAME = "synthv-agent-bridge";
-export const SERVER_VERSION = "0.1.5";
+export const SERVER_VERSION = "0.2.0";
 
 export interface BridgePaths {
   readonly directory: string;
@@ -25,6 +25,7 @@ export interface BridgePaths {
   readonly sidebarHistoryFile: string;
   readonly sidebarStateFile: string;
   readonly sidebarClientStatusFile: string;
+  readonly sidebarRuntimeStatusFile: string;
 }
 
 export interface BridgeConfig {
@@ -111,6 +112,7 @@ export function loadConfig(
       sidebarHistoryFile: `${prefix}.sidebar.history.json`,
       sidebarStateFile: `${prefix}.sidebar.state.txt`,
       sidebarClientStatusFile: `${prefix}.sidebar.client-status.txt`,
+      sidebarRuntimeStatusFile: `${prefix}.sidebar.runtime-status.txt`,
     },
     timeoutMs,
     pollIntervalMs,

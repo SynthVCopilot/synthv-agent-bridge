@@ -73,6 +73,8 @@ export type BridgeAction = (typeof BRIDGE_ACTIONS)[number];
 export interface BridgeRequest {
   readonly protocolVersion: typeof PROTOCOL_VERSION;
   readonly requestId: string;
+  readonly traceId: string;
+  readonly expectedExecutorBuildId: string;
   readonly action: BridgeAction;
   readonly payload: Record<string, unknown>;
 }
@@ -83,11 +85,24 @@ export interface BridgeRemoteErrorPayload {
   readonly details?: unknown;
 }
 
+export interface BridgeStageTiming {
+  readonly stage: string;
+  readonly durationMs: number;
+}
+
+export interface BridgeResponseTelemetry {
+  readonly totalMs: number;
+  readonly stages: readonly BridgeStageTiming[];
+}
+
 export type BridgeResponse =
   | {
       readonly protocolVersion:
         typeof PROTOCOL_VERSION;
       readonly requestId: string;
+      readonly traceId: string;
+      readonly executorBuildId: string;
+      readonly telemetry?: BridgeResponseTelemetry;
       readonly ok: true;
       readonly result: unknown;
     }
@@ -95,6 +110,9 @@ export type BridgeResponse =
       readonly protocolVersion:
         typeof PROTOCOL_VERSION;
       readonly requestId: string;
+      readonly traceId: string;
+      readonly executorBuildId: string;
+      readonly telemetry?: BridgeResponseTelemetry;
       readonly ok: false;
       readonly error: BridgeRemoteErrorPayload;
     };
@@ -118,6 +136,7 @@ export interface BridgeStatus {
   readonly projectFile: string;
   readonly ipcDirectory: string;
   readonly sessionToken?: string;
+  readonly executorBuildId?: string;
   readonly message?: string;
   readonly [key: string]: unknown;
 }
@@ -164,6 +183,55 @@ function asFiniteNumber(value: unknown, path: string): number {
   return value;
 }
 
+function parseResponseTelemetry(value: unknown): BridgeResponseTelemetry {
+  const telemetry = asRecord(value, "m");
+  const telemetryKeys = Object.keys(telemetry);
+  if (
+    telemetryKeys.some(
+      (key) => key !== "totalMs" && key !== "stages",
+    )
+  ) {
+    fail("m", "must contain only totalMs and stages");
+  }
+  const totalMs = asFiniteNumber(telemetry.totalMs, "m.totalMs");
+  if (totalMs < 0) {
+    fail("m.totalMs", "must be non-negative");
+  }
+  if (!Array.isArray(telemetry.stages) || telemetry.stages.length > 24) {
+    fail("m.stages", "must be an array with at most 24 entries");
+  }
+  const stages = telemetry.stages.map((value, index) => {
+    const stage = asRecord(value, `m.stages[${index}]`);
+    const keys = Object.keys(stage);
+    if (
+      keys.length !== 2 ||
+      !keys.includes("stage") ||
+      !keys.includes("durationMs")
+    ) {
+      fail(
+        `m.stages[${index}]`,
+        "must contain only stage and durationMs",
+      );
+    }
+    const stageName = asString(stage.stage, `m.stages[${index}].stage`);
+    if (!/^[A-Za-z][A-Za-z0-9]{0,31}$/u.test(stageName)) {
+      fail(
+        `m.stages[${index}].stage`,
+        "must be a short alphanumeric stage name",
+      );
+    }
+    const durationMs = asFiniteNumber(
+      stage.durationMs,
+      `m.stages[${index}].durationMs`,
+    );
+    if (durationMs < 0) {
+      fail(`m.stages[${index}].durationMs`, "must be non-negative");
+    }
+    return { stage: stageName, durationMs };
+  });
+  return { totalMs, stages };
+}
+
 function assertWireVersion(value: unknown, path = "v"): asserts value is typeof PROTOCOL_VERSION {
   if (value !== PROTOCOL_VERSION) {
     fail(path, `must equal ${PROTOCOL_VERSION}`);
@@ -180,6 +248,8 @@ export function parseBridgeRequest(value: unknown): BridgeRequest {
   return {
     protocolVersion: PROTOCOL_VERSION,
     requestId: asRequestId(record.id, "id"),
+    traceId: asRequestId(record.t, "t"),
+    expectedExecutorBuildId: asString(record.b, "b"),
     action: action as BridgeAction,
     payload: asRecord(record.p, "p"),
   };
@@ -198,9 +268,16 @@ export function safeParseBridgeRequest(
 export function parseBridgeResponse(value: unknown): BridgeResponse {
   const record = asRecord(value, "response");
   assertWireVersion(record.v);
+  const telemetry =
+    record.m === undefined
+      ? {}
+      : { telemetry: parseResponseTelemetry(record.m) };
   const base = {
     protocolVersion: PROTOCOL_VERSION,
     requestId: asRequestId(record.id, "id"),
+    traceId: asRequestId(record.t, "t"),
+    executorBuildId: asString(record.b, "b"),
+    ...telemetry,
   } as const;
   if (Object.prototype.hasOwnProperty.call(record, "r")) {
     if (Object.prototype.hasOwnProperty.call(record, "e")) {
@@ -261,6 +338,10 @@ export function parseBridgeStatus(value: unknown): BridgeStatus {
   if (sessionToken !== undefined && typeof sessionToken !== "string") {
     fail("sessionToken", "must be a string when present");
   }
+  const executorBuildId = record.executorBuildId;
+  if (executorBuildId !== undefined && typeof executorBuildId !== "string") {
+    fail("executorBuildId", "must be a string when present");
+  }
 
   return {
     ...record,
@@ -278,6 +359,7 @@ export function parseBridgeStatus(value: unknown): BridgeStatus {
         ? record.ipcDirectory
         : fail("ipcDirectory", "must be a string"),
     ...(sessionToken === undefined ? {} : { sessionToken }),
+    ...(executorBuildId === undefined ? {} : { executorBuildId }),
     ...(message === undefined ? {} : { message }),
   };
 }

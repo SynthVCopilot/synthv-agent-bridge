@@ -27,7 +27,7 @@
 - A read-only doctor for installed versions, heartbeats, IPC state, and Codex
   configuration.
 
-## Current — official API coverage expansion
+## Completed — official API coverage expansion and v3 migration
 
 - Reusable note-group library and linked/deep reference operations.
 - Vocal and instrumental Group-reference updates and removal.
@@ -49,10 +49,10 @@
   recommendation-only review targets.
 - Explicit complete-overlap or binary onset-only range scans, guarded phrase
   page cursors, and one-sweep multi-range phrase analysis with shared notes.
-- P4 default MCP v2 surface with eight domain tools, just-in-time action
-  schemas, range-scoped `contextId` guards, phrase field projection, minimal
-  write acknowledgements, and Dense rows for large note sets.
-- V2 note insertion automatically creates a reusable non-main group when the
+- Six-tool MCP v3 Facade with just-in-time action schemas, range-scoped
+  `contextId` guards, phrase field projection, minimal write acknowledgements,
+  and Dense rows for large note sets. The legacy v2 surface is removed.
+- v3 note insertion automatically creates a reusable non-main group when the
   requested target is a track main group, preserving Voice/Vocal Mode editing
   for newly inserted notes.
 - Deterministic guarded note transforms apply one explicit onset, duration, or
@@ -85,14 +85,33 @@ The native side panel remains an optional compact review console. Future work
 is limited to stability, compatibility, and interaction fixes; it is not a
 performance roadmap or a second SynthV editing interface.
 
-## Next — durable recovery and advanced music analysis
+## Current — v0.2.0 reduced-stable maintenance
+
+- Keep the completed six-tool migration and 64/64 Action coverage checks from
+  drifting after the reduced-stable release.
+- Preserve the completed Vocal onboarding, 31 verified write Actions, and
+  passed human listening result for the integrated tuning scenario.
+- Keep the seven native-risk clone/transaction/harmony paths explicitly
+  experimental and disabled until a future repetition matrix proves them safe.
+- Preserve the completed Stage 3 read/reload/concurrency, reduced-capability,
+  tracing A/B, write/Undo, listening, and one-hour functional-soak evidence.
+- Re-run the fixed settled-resource monitor as follow-up hardening; the user
+  explicitly waived it for v0.2.0, so no resource PASS is claimed.
+- Keep Snapshot LRU disabled until traces prove repeated read projection is a
+  significant cost.
+- Revisit the seven experimental paths only with new host versions and a fresh
+  crash-safe repetition matrix.
+
+See [v3 development plan](v3-development-plan.md).
+
+## Later — durable recovery and advanced music analysis
 
 - Durable rollback metadata with explicit project-revision checks.
 - Shared-value/override compression and richer cross-object batch operations.
 - Harmony voicing beyond fixed intervals, pronunciation diagnostics, and
   configurable humanization/expression profiles.
 
-## Later
+## Longer term
 
 - Render-and-analyze feedback loops.
 - Optional remote transport with authentication.

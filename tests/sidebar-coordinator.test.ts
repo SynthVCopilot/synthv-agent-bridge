@@ -6,7 +6,14 @@ import test from "node:test";
 
 import { loadConfig } from "../src/config.js";
 import type { FileIpcClient } from "../src/ipc/file-ipc-client.js";
-import { SidebarCoordinator } from "../src/sidebar-coordinator.js";
+import {
+  SidebarCoordinator,
+  sidebarCoordinatorTesting,
+} from "../src/sidebar-coordinator.js";
+import { recentTraceSummaries } from "../src/v3-command-kernel.js";
+
+const sleep = (milliseconds: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 
 interface CleanupContext {
   after(callback: () => void | Promise<void>): void;
@@ -68,6 +75,103 @@ async function writeCommand(
     "utf8",
   );
 }
+
+test("sidebar stop drains in-flight polling once and remains stopped", async (context) => {
+  const fixture = await createFixture(context);
+  let releasePoll: () => void = () => undefined;
+  const pollReleased = new Promise<void>((resolve) => {
+    releasePoll = resolve;
+  });
+  let reportPollStarted: () => void = () => undefined;
+  const pollStarted = new Promise<void>((resolve) => {
+    reportPollStarted = resolve;
+  });
+  let pollCount = 0;
+  fixture.coordinator.pollOnce = async () => {
+    pollCount += 1;
+    reportPollStarted();
+    await pollReleased;
+  };
+  fixture.coordinator.start();
+  await Promise.race([
+    pollStarted,
+    sleep(1_000).then(() => {
+      throw new Error("Sidebar poll did not start within the test deadline.");
+    }),
+  ]);
+
+  const stopped = fixture.coordinator.stop();
+  const repeatedStop = fixture.coordinator.stop();
+
+  assert.strictEqual(stopped, repeatedStop);
+  assert.ok(stopped instanceof Promise);
+  let settled = false;
+  void stopped.then(() => {
+    settled = true;
+  });
+  await sleep(10);
+  assert.equal(settled, false);
+  releasePoll();
+  await stopped;
+  const status = await fs.readFile(
+    fixture.config.paths.sidebarClientStatusFile,
+    "utf8",
+  );
+  assert.match(status, /state=stopped/u);
+  assert.match(status, new RegExp(`processId=${process.pid}`, "u"));
+  await sleep(150);
+  assert.equal(pollCount, 1);
+});
+
+test(
+  "sidebar atomic status writes survive transient Windows file contention",
+  async (context) => {
+    const directory = await fs.mkdtemp(
+      path.join(os.tmpdir(), "synthv-sidebar-status-contention-"),
+    );
+    context.after(async () => {
+      await fs.rm(directory, { recursive: true, force: true });
+    });
+    const statusFile = path.join(directory, "client-status.txt");
+    await fs.writeFile(statusFile, "old", "utf8");
+    let targetUnlinkAttempts = 0;
+    let renameAttempts = 0;
+    const operations = {
+      writeFile: fs.writeFile,
+      async unlink(filePath: string) {
+        if (filePath === statusFile && targetUnlinkAttempts++ === 0) {
+          const error = new Error(
+            "simulated Windows file contention",
+          ) as NodeJS.ErrnoException;
+          error.code = "EBUSY";
+          throw error;
+        }
+        return fs.unlink(filePath);
+      },
+      async rename(source: string, destination: string) {
+        if (renameAttempts++ === 0) {
+          await fs.writeFile(destination, "competing writer", "utf8");
+          const error = new Error(
+            "simulated Windows rename contention",
+          ) as NodeJS.ErrnoException;
+          error.code = "EPERM";
+          throw error;
+        }
+        return fs.rename(source, destination);
+      },
+    };
+
+    await sidebarCoordinatorTesting.writeTextAtomically(
+      statusFile,
+      "new",
+      operations,
+    );
+
+    assert.equal(targetUnlinkAttempts, 2);
+    assert.equal(renameAttempts, 2);
+    assert.equal(await fs.readFile(statusFile, "utf8"), "new");
+  },
+);
 
 test("sidebar request can be read and acknowledged by publishing a preview", async (context) => {
   const fixture = await createFixture(context);
@@ -148,6 +252,12 @@ test("sidebar applies a confirmed preview through the existing IPC client", asyn
 
   await fixture.coordinator.pollOnce();
 
+  assert.deepEqual(
+    recentTraceSummaries(1)[0]?.stages.filter((stage) =>
+      ["contextResolved", "verified"].includes(stage),
+    ),
+    ["contextResolved", "verified"],
+  );
   assert.deepEqual(fixture.calls, [
     {
       action: "set_track_mixer",
@@ -235,6 +345,44 @@ test("sidebar keeps a failed preview visible with a public error", async (contex
     code: "INTERNAL_ERROR",
     message: "simulated failure",
   });
+});
+
+test("sidebar build mismatch blocks an approved preview before project IPC", async (context) => {
+  const fixture = await createFixture(context);
+  await fs.writeFile(
+    fixture.config.paths.sidebarRuntimeStatusFile,
+    [
+      "synthv-agent-bridge-sidebar-runtime-v3",
+      "buildId=old-sidebar-build",
+      `updatedAtEpochMs=${Date.now()}`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const preview = await fixture.coordinator.publishPreview({
+    summary: "Set track gain.",
+    action: "set_track_mixer",
+    payload: {
+      trackIndex: 1,
+      trackFingerprint: "main-group:uuid",
+      gainDecibel: -3,
+    },
+  });
+  await writeCommand(
+    fixture.config.paths.sidebarCommandFile,
+    "apply",
+    preview.planId,
+  );
+
+  await fixture.coordinator.pollOnce();
+
+  assert.equal(fixture.calls.length, 0);
+  const panelText = await fs.readFile(
+    fixture.config.paths.sidebarPreviewTextFile,
+    "utf8",
+  );
+  assert.match(panelText, /status=error/u);
+  assert.match(panelText, /BUILD_MISMATCH/u);
 });
 
 test("sidebar can cancel a queued request and clear bounded history", async (context) => {

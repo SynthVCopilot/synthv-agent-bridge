@@ -34,10 +34,22 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 > changing Vocals, capture the new Vocal's complete panel or type all of its
 > singing-style names again; do not reuse the previous Vocal's list.
 
-> Status: **v0.1.5 pre-release**. The protocol, safety guards, broad official
-> scripting-API coverage, an optional native side-panel workflow, guarded transactions,
-> and first musical semantic tools are implemented. Test on copies of important
-> projects.
+> Status: **v0.2.0 / protocol v3 (reduced-stable surface)**. The six-tool semantic Facade,
+> typed Query Contexts, compact Command outcomes, component build-coherence
+> checks, Query Projector, common Command Kernel, semantic write-policy
+> catalog, aggregate tuning, and dependent transaction recovery are
+> implemented. Release validation has fresh evidence for 17/17 Query,
+> 9/9 UI, and 31/38 write Actions. Seven clone/transaction/harmony paths with
+> native-host risk are marked experimental and disabled before project IPC;
+> no write Action remains pending. Human listening, the Stage 3 functional
+> write/Undo matrix, and the user-approved one-hour soak (200 writes, 3,400
+> reads, 10 reloads) passed. The post-fix resource-monitor rerun was explicitly
+> waived for this release and remains documented as follow-up risk rather than
+> being represented as a pass. Test writes only on saved working copies.
+
+See the [v3 architecture](docs/architecture-v3.md),
+[development plan](docs/v3-development-plan.md), and
+[SV2 API coverage matrix](docs/sv2-api-coverage-v3.md).
 
 ## What it can do
 
@@ -53,6 +65,12 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 | Timing, editor, and playback | Convert seconds, quarter notes, and blicks; edit tempo/time signatures; control selection, viewport, clipboard, grid snapping, coordinates, mixer, and playback. |
 | Safe editing | Protect writes with fresh fingerprints, typed/scope-bound `contextId` values, and Guard Tokens; fully preflight independent transaction steps, resolve forward dependencies just in time, create one SynthV undo record, and optionally retain a guarded rollback plan. |
 | Review and local privacy | Review, apply, dismiss, or cancel guarded previews in the optional native side panel. File IPC stays local: the Bridge does not parse `.svp` files, open a network port, or call an AI API. |
+
+> To avoid reproducible SynthV 2.2.1 native crashes, the current stable surface rejects
+> isolated Group clone, Note Group/Track/Track-shell clone, harmony Track, and
+> transaction apply/rollback before project IPC. The table describes the full
+> design surface, not current availability of those experimental paths. Linked
+> Group-reference clone remains available.
 
 ## Responsibility boundaries
 
@@ -177,7 +195,7 @@ verification, and the first guarded tuning edit.
 ### 1. Build the MCP server
 
 ```bash
-git clone https://github.com/zhoupengjie/synthv-agent-bridge.git
+git clone https://github.com/SynthVCopilot/synthv-agent-bridge.git
 cd synthv-agent-bridge
 npm install
 npm run build
@@ -279,7 +297,8 @@ See [docs/sidebar.md](docs/sidebar.md).
 ### 5. Verify the connection
 
 Open an MCP-enabled conversation and ask it to call `sv_status`, followed by
-`sv_read` with `action: "get_project_info"`. A healthy status contains:
+`sv_query` with `action: "get_project_info"` and
+`contextMode: "readOnly"`. A healthy status contains:
 
 ```json
 {
@@ -288,50 +307,56 @@ Open an MCP-enabled conversation and ask it to call `sv_status`, followed by
 }
 ```
 
-## MCP v2 tools
+## MCP v3 tools
 
-The default MCP surface exposes eight stable tools. Individual SynthV actions
+The public MCP surface exposes six stable tools. Individual SynthV actions
 and their full schemas are returned just in time by `sv_describe`, rather than
 placing every action schema in the model context.
 
 | Tool | Purpose |
 |---|---|
-| `sv_status` | Read Bridge/host status, ping, or hot-reload the Lua executor. |
-| `sv_describe` | List actions or return schemas for up to 16 requested actions. |
-| `sv_read` | Run a read action with optional projection, Dense rows, and `contextId` reuse. |
-| `sv_edit` | Run a validated project write with a minimal acknowledgement by default. |
-| `sv_delete` | Run an explicitly destructive delete/clear action. |
-| `sv_transaction` | Apply or roll back a transaction; step payloads may carry `contextId`. |
+| `sv_status` | Read connection, Session, capability, trace, and component-build status. |
+| `sv_describe` | List actions or return one compact Query/Command/UI/Review schema. |
+| `sv_query` | Run a read projection and create a `readOnly` or `writeIntent` Context. |
+| `sv_command` | Run validated edit, delete, clone, import, or bounded batch commands. |
 | `sv_ui` | Control selection, viewport, clipboard, dialogs, snapping, coordinates, or playback. |
-| `sv_sidebar` | Read the optional panel task/status or publish a guarded preview. |
+| `sv_review` | Publish or inspect an optional Sidebar preview; the user applies or dismisses it inside SynthV. |
 
 The normal tuning sequence is:
 
 1. Call `sv_describe` for unfamiliar actions.
-2. Read fresh state with `sv_read`.
-3. Reuse the returned `contextId` in `sv_edit`, `sv_delete`, another scoped
-   read, or a transaction step.
-4. Read again after `UNKNOWN_CONTEXT` or any `STALE_*` result.
+2. Read current state with `sv_query`; use `contextMode: "writeIntent"` before
+   a project command.
+3. Reuse the returned `contextId` in one `sv_command`.
+4. Query again after an unknown Context, Session change, or any `STALE_*`
+   result.
 
 `contextId` stores only locators and concurrency guards in bounded Node memory.
 Each handle is bound to a target kind and source scope. Reusing it with an
 incompatible action, or combining it with a conflicting explicit locator or
 guard, fails closed instead of silently retargeting the call. Locator-only
-reads do not mint write-capable Contexts. A Context does not cache mutable note,
-voice, selection, or automation content; SynthV still checks every complete
-fingerprint before creating an undo record.
+`readOnly` Contexts do not authorize writes. A `writeIntent` Context is minted
+only from a fresh host read. SynthV still checks every complete private
+fingerprint before creating an Undo record.
 
 Phrase reads accept an `include` projection over `notes`, `voice`,
 `automation`, `analysis`, `recommendations`, `pitchAnalysis`, `selection`, and
-`diagnostics`. The v2 default is `notes`, `voice`, and `analysis`. Results with
+`diagnostics`. The v3 default is `notes`, `voice`, and `analysis`. Results with
 at least 24 notes use a column/row representation when `dense: "auto"`; use
-`dense: "never"` for ordinary objects. V2 note rows omit derivable absolute
+`dense: "never"` for ordinary objects. V3 note rows omit derivable absolute
 end positions and report `noteDefaults.absolutePitch: "pitch"` when equal
 absolute/local pitches were omitted.
 
+Collection reads are bounded by default and return page/continuation metadata.
+This includes Tracks, library Groups, time-axis marks, Track Groups/notes, computed
+performance data, and Smart Pitch controls. Automation defaults to a compact
+full-curve summary and returns point arrays only for an explicitly requested
+closed range. An unscoped default Query above the 20,000-character response
+budget fails with narrowing guidance instead of flooding the Agent context.
+
 ### Action catalog
 
-These actions are routed internally through the eight MCP v2 tools. They are
+These actions are routed internally through the six MCP v3 tools. They are
 not registered as standalone MCP tools; request their current schemas through
 `sv_describe` only when needed.
 
@@ -349,17 +374,17 @@ not registered as standalone MCP tools; request their current schemas through
 | `convert_pitch` | Read | Convert MIDI pitch and frequency and identify black keys. |
 | `get_project_info` | Read | Project, timing, playback, host, and current editor location. |
 | `inspect_score_file` | Read | Inspect an explicitly supplied local MusicXML or SMF MIDI file in Node, return a SHA-256 file guard and selectable parts/voices/staves or tracks/channels, and preview a bounded monophonic lane without changing SynthV. |
-| `get_time_axis` | Read | All tempo/time-signature marks and a safe-write fingerprint. |
+| `get_time_axis` | Read | Bounded, independently paged tempo/time-signature marks; private full-state guards are captured behind Contexts. |
 | `convert_time` | Read | Convert seconds, quarter notes, or blicks through the current tempo map, with optional Blick-grid rounding. |
 | `set_time_axis` | Destructive | Add, replace, or remove tempo/time-signature marks. |
-| `list_tracks` | Read | Track summaries, group counts, note counts, and mixer state. |
-| `list_note_groups` | Read | Reusable library groups, UUIDs, fingerprints, and reference counts. |
+| `list_tracks` | Read | A bounded page of Track summaries, Group/note counts, and mixer state. |
+| `list_note_groups` | Read | A bounded page of reusable library Group summaries and reference counts; private identities and guards remain Context-backed. |
 | `create_note_group` | Write | Create an optionally populated reusable library group. |
 | `clone_note_group` | Write | Deep-clone a track or library group into the library. |
 | `delete_note_group` | Destructive | Delete a library group and all references to it. |
 | `add_group_reference` | Write | Place a library group on a track. |
 | `clone_group_reference` | Write | Make a linked or deep-copied reference on another track. |
-| `get_track_notes` | Read | Groups, UUIDs, notes, attributes, offsets, and safe-write fingerprints. |
+| `get_track_notes` | Read | Independently bounded Group and note pages with attributes and offsets; private Group/note guards remain Context-backed. |
 | `get_group_voice` | Read | Typed group voice defaults, Vocal Modes, experimental Unison fields, and target selection context. |
 | `get_note_phoneme_data` | Read | User/computed phonemes, phoneset overrides, per-phoneme attributes, and note selection state, with optional compact note-index or seconds-range filtering. |
 | `get_phrase_context` | Read | One compact, write-ready selected/ranged phrase read with note and automation Guard Tokens, voice/Vocal Modes, diagnostics, and recommendation-only review targets. |
@@ -458,7 +483,7 @@ All track, group, and note indices are **1-based**, matching the SynthV Lua API.
 - Compact write responses contain counts and replacement Guard Tokens instead
   of complete notes or automation curves.
 
-Guard Tokens are opaque and live only in the current MCP server process. MCP v2
+Guard Tokens are opaque and live only in the current MCP server process. MCP v3
 automatically detects a changed SynthV/Bridge session token and clears every
 cached context and Guard Token. A write then returns
 `SYNTHV_SESSION_CHANGED`; read the target again and build the write from its
@@ -620,23 +645,25 @@ modifies the project or installed files.
 
 - One request may be in flight at a time.
 - A client-side timeout is ambiguous: SynthV may still finish the operation. The processing marker remains until the Lua host completes, and the agent should read the current project before deciding whether to retry a write.
-- The side panel holds one pending preview at a time. That preview may contain
-  either one write or one `apply_transaction` batch.
-- Generic transactions reject conflicting writes to the same guarded scope.
-  A later step may use an earlier result through a complete-field `$result`
-  reference. Independent steps are fully preflighted before writing; dependent
-  steps are resolved and checked just in time because their targets do not yet
-  exist during the first pass. Index-shifting track/library-group deletes must
-  be the only step.
+- The current build classifies isolated Group clone, Note Group/Track/
+  Track-shell clone, harmony Track, and transaction apply/rollback as
+  experimental and rejects them before project IPC. Linked Group-reference
+  clone remains available.
+- The side panel holds one pending preview at a time; previews targeting those
+  experimental paths fail before project IPC too.
+- The generic transaction schema and Fake Host implementation remain for
+  diagnosis: they reject conflicting guarded scopes, support complete-field
+  `$result` references, and perform full/just-in-time preflight for independent
+  and dependent steps. Public transaction apply/rollback is not runnable in
+  the current build.
 - `atomicity: "singleUndoRecord"` means one SynthV recovery boundary, not
   automatic rollback.
   An independent preflight failure makes no project changes. A dependent
   validation or unexpected host failure can occur after earlier steps have
   written; when the error reports `undoRequired`, immediately use
   **Edit > Undo** once before rereading or retrying.
-- Rollback plans are held in Bridge memory for the current project/session and
-  are lost when the Bridge reloads or SynthV closes. A rollback is a new
-  guarded write and is refused if its fingerprints are stale.
+- Rollback-plan design remains project/Session-bound; current
+  `rollback_transaction` is experimental-disabled together with apply.
 - The panel cannot initiate a Codex turn by itself. **Copy & queue** writes a
   local request and puts a handoff prompt on the clipboard for the user to paste.
 - SynthV's public scripting API does not expose an Undo command. The panel shows
@@ -644,8 +671,9 @@ modifies the project or installed files.
   **Ctrl+Z**, with **Edit > Undo** as the focus-independent fallback.
 - SynthV's public scripting API does not expose project save, audio rendering,
   selecting an installed singer database by display name, reading Vocal
-  identity, or Voice Panel scale/mode settings. `clone_track_shell` can
-  host-clone a source track's main Vocal context without naming it.
+  identity, or Voice Panel scale/mode settings. The `clone_track_shell` schema
+  describes host-cloned main-Vocal inheritance, but the current host-clone path
+  is disabled after native crashes and still cannot name that Vocal.
 - Local score support is intentionally import-only and bounded. It accepts
   absolute local `.xml`, `.musicxml`, `.mxl`, `.mid`, or `.midi` paths after
   explicit inspection and rights confirmation. It rejects URLs, `.svp`,
