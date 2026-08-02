@@ -39,6 +39,11 @@ The Agent may analyze lyrics, propose phrasing, choose exact note/phoneme/
 automation targets, and provide explicit values. It must not guess a Vocal or
 untouched Vocal Mode names. It reads only the intended target, prefers one
 related batch, and rereads after stale-state or session-change errors.
+When the user requests token-saving mode, an ordinary successful command with
+`verified: true` does not need a second Agent-level post-write query unless the
+next operation depends on fresh state. This does not weaken TypeScript or Lua
+validation, host postcondition verification, or mandatory recovery/UI/Demo
+reads.
 Before score import it asks the user to identify an authorized local source,
 inspects the selectable lane and overlap diagnostics, and requests import only
 after explicit rights confirmation. It must not treat search results, an online

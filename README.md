@@ -133,6 +133,11 @@ tell the user:
   working copy once, and shows a small preview before writing. Fresh reads,
   guards, preflight, and verification stay internal. Undo guidance appears only
   when an actual result reports `undoRequired: true`.
+- Users may request **token-saving mode**. For an ordinary command that returns
+  `verified: true`, the Agent then skips its extra independent post-write query.
+  The fresh target read and all Bridge-side validation and host postcondition
+  checks remain enabled; required recovery, dependent-step, UI-state, and Demo
+  reads are not skipped.
 
 When Vocal Mode information is needed, a concise prompt from the user is
 sufficient:

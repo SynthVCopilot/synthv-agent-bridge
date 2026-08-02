@@ -167,6 +167,15 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
   when it is relevant. Show SynthV Undo guidance only after an execution result
   actually reports `undoRequired: true`, and do not repeat resolved onboarding
   later in the same conversation.
+- If the user explicitly requests token-saving mode, omit a separate
+  Agent-level post-write `sv_query` after an ordinary `sv_command` succeeds
+  with `verified: true`, unless a later operation needs fresh state. This mode
+  skips only the redundant independent reread. It must not disable the fresh
+  target read, Context/Guard checks, TypeScript validation, Lua preflight or
+  host postcondition verification, UI actions' required actual-state results,
+  the bundled Demo's declared final verification, or recovery reads after
+  stale/session-change errors or `undoRequired`. Describe it as skipping the
+  extra independent post-write reread, never as disabling verification.
 
 ## Checks
 
