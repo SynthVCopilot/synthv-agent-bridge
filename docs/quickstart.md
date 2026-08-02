@@ -157,57 +157,22 @@ safety rules, undo boundaries, and machine-readable template.
 ## 7. Make the first tuning edit
 
 > [!IMPORTANT]
-> Because SynthV's official scripting API cannot read the current Vocal
-> identity or enumerate untouched default-only singing style (Vocal Mode) names
-> and parameters, first select a Note Group, then select or assign the Vocal you
-> want to use for that Group. Only then attach a screenshot of its complete
-> singing-style panel or type every style exactly as shown; the names cannot
-> appear before a singer is selected. If no suitable Note Group exists or the
-> Vocal Modes are not visible, first create—or ask the Agent to create—one
-> temporary note in one temporary non-main Note Group at a harmless location,
-> select that Group and its Vocal, then capture the complete panel. After
-> changing Vocals, capture the new Vocal's complete panel or type all of its
-> singing-style names again; do not reuse the previous Vocal's list.
+> SynthV's official scripting API cannot read the current Vocal identity or
+> enumerate untouched default-only singing style (Vocal Mode) names and
+> parameters. When a request uses or changes Vocal Modes, select the intended
+> Note Group and Vocal, then attach the complete panel screenshot or type every
+> style exactly as shown. Explicit mechanical edits that do not depend on
+> singing styles do not require this handoff. Provide the information again
+> after changing Vocals.
 
-Before the first tuning write in a conversation, the Agent presents this
-onboarding once.
+The Agent does not show a fixed onboarding checklist. It asks only for missing
+information needed for the current request: the intended target and effect,
+anything that must remain unchanged, and Vocal Mode information when applicable.
+It briefly suggests saving a working copy and shows a small preview before
+writing. Fresh reads, guards, preflight, and verification remain internal.
+Undo guidance appears only if an actual result reports `undoRequired: true`.
 
-### How to use
-
-1. Save the project or create a working copy.
-2. Select the intended Note Group in SynthV, then select or assign its intended
-   Vocal and provide that Vocal's singing styles as described above. If no
-   suitable Note Group exists or the Vocal Modes are hidden, create—or ask the
-   Agent to create—the temporary note and Note Group described above, select
-   that Group and its Vocal, then send the complete panel screenshot or exact
-   style names.
-3. Select a short lyric phrase, typically two to eight bars, and state the
-   intended style and anything that must remain unchanged.
-4. Let the Agent read fresh state and show a small, reviewable plan.
-5. Apply and listen to the phrase-level style before asking for word-level
-   pronunciation, timing, pitch-transition, pitch-curve, and expression work.
-6. Do not edit the same target while a Bridge write is running. To undo, focus
-   the main editor and press **Ctrl+Z**, or choose **Edit → Undo**.
-
-### Preflight checklist
-
-- [ ] The project is saved or a working copy exists.
-- [ ] The intended Note Group is selected in SynthV.
-- [ ] The intended Vocal is selected or assigned for that Note Group.
-- [ ] Because of the official API limitation, the complete singing-style panel
-      screenshot or every exact singing-style name has been provided; if the
-      Vocal Modes were hidden, a temporary note and Note Group were created
-      first, then that Group and its Vocal were selected to make the parameters
-      appear.
-- [ ] If the Vocal changed, the new Vocal's complete panel or exact
-      singing-style names were provided again.
-- [ ] A short lyric phrase or note range is selected.
-- [ ] The intended style and content that must remain unchanged are stated.
-- [ ] The same target will not be edited manually while the Bridge writes.
-
-The Agent does not display a second checklist after publishing the preview.
-
-After the checklist is complete, start with a read-only request:
+A useful first read-only request is:
 
 ```text
 Read the currently selected notes. Summarize their lyrics, pitches, timing, and
@@ -277,34 +242,11 @@ For later sessions:
 1. Open the SynthV project and save a working copy.
 2. Start **SynthV Agent Bridge**.
 3. Open or reconnect a Codex task that has the MCP server enabled.
-4. Select the intended Note Group and its singer. If this is the first Vocal
-   Mode edit for that singer, attach a screenshot of the complete Vocal Mode
-   panel or type every exact mode name.
-5. Select one lyric phrase and ask Codex to establish its overall singing style
-   with the identified Vocal Modes. Review the preview, apply it, and listen
-   before continuing.
-6. Once the phrase-level style is approved, ask Codex to fine-tune the phrase
-   word by word. Keep each pass focused on supported details such as
-   pronunciation, phoneme timing, note timing, pitch transitions, pitch curves,
-   loudness, tension, breathiness, or other requested parameters.
-7. Review, apply, and listen after each bounded pass, then continue phrase by
-   phrase.
-
-Recommended prompt for the phrase-level style pass:
-
-```text
-The current singer's Vocal Modes are: <exact names from the panel>. Read the
-selected lyric phrase and propose an overall singing style using only those
-names. Publish a reviewable preview and do not start word-level fine-tuning yet.
-```
-
-After listening and confirming the style:
-
-```text
-Keep the approved overall style. Read the selected phrase again, then fine-tune
-it word by word. Show the planned pronunciation, timing, pitch-transition,
-pitch-curve, and expression changes before applying them.
-```
+4. Select the intended target and tell Codex the result you want. Mention
+   anything that must remain unchanged. If the request uses Vocal Modes, also
+   select the Vocal and provide its complete panel screenshot or exact mode
+   names.
+5. Review the small preview, apply it, and listen to the result.
 
 ## Updating an existing installation
 

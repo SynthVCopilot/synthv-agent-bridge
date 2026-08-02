@@ -40,7 +40,7 @@ Codex 在每个阶段开始前打印一个简短小标题：
    `SynthV Agent Demo - 小星星` 的独立非主 Group。它不修改已有音符、
    歌词、时值、自动化、轨道或 Group。
 3. 用户选择这个 Demo Group，再选择或分配要使用的 Vocal，然后截图完整
-   Vocal Mode 面板，或按照面板准确输入全部唱法名称。
+   唱法（Vocal Mode）面板，或按照面板准确输入全部唱法名称。
 4. 这一步无法省略：SynthV 官方脚本 API 无法读取当前 Vocal 身份，也无法
    枚举从未调整、仍为默认值的唱法名称。Codex 不得猜测或绕过。
 5. Codex 重新读取 Demo Group，只把用户提供的准确唱法名称映射到模板中的

@@ -6,6 +6,8 @@ A local [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server 
 
 The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse or rewrite `.svp` files, open a network port, or call an AI API by itself.
 
+**Video demo:** [Watch SynthV Agent Bridge on Bilibili](https://www.bilibili.com/video/BV1kU3P6LEoF)
+
 > New here? Follow the [Quickstart](docs/quickstart.md). Codex can handle most
 > setup steps for you, including environment checks, Node.js installation when
 > permitted, dependency installation, the build, SynthV script installation,
@@ -119,30 +121,21 @@ tell the user:
   that the Agent is about to change, the Agent will compactly reread only that
   target. Unrelated edits do not require a reread.
 - SynthV's scripting API does not expose the current singer identity or
-  enumerate untouched default-only Vocal Mode names and parameters. Before the
-  first tuning write, the Agent must ask the user to select the intended Note
-  Group, select or assign its intended Vocal, and then either list every exact
-  singing style (Vocal Mode), preserving spelling and capitalization, or attach
-  a screenshot of the complete Vocal Mode panel. Without a selected singer,
-  its singing-style names cannot appear.
-- The Agent must not perform a tuning write until this information is provided.
-  If no suitable Note Group exists or the Vocal Modes are not visible, the only
-  permitted bootstrap write is one temporary note in one temporary non-main
-  Note Group, created solely to make the singing-style parameters available.
-  The user then selects that Group and its Vocal. The Agent must stop and
-  request the complete panel screenshot or exact style names. The identified
-  styles are reused only for the same Vocal. After the Vocal changes, the Agent
-  requires a new complete-panel screenshot or every exact style name for the
-  new Vocal.
-- Before the first tuning write, the Agent must present one concise
-  **How to use** and one preflight checklist covering save/backup, Vocal and
-  singing-style onboarding, target phrase, intended style and preserved
-  content, fresh-read/plan/review behavior, phrase-level style before word-level
-  tuning, concurrent-edit safety, and undo. It must not show another checklist
-  after publishing the preview.
+  enumerate untouched default-only Vocal Mode names and parameters. Only when a
+  request uses or changes Vocal Modes, the Agent asks the user to select the
+  intended Note Group and Vocal, then provide every exact singing style or a
+  screenshot of the complete Vocal Mode panel. Explicit mechanical edits that
+  do not depend on singing styles do not require this handoff. After the Vocal
+  changes, the styles must be provided again before another Vocal-Mode-dependent
+  write.
+- The Agent does not display a fixed **How to use** section or preflight
+  checklist. It asks only for missing user-owned decisions, suggests saving a
+  working copy once, and shows a small preview before writing. Fresh reads,
+  guards, preflight, and verification stay internal. Undo guidance appears only
+  when an actual result reports `undoRequired: true`.
 
-The Agent must give this notice once, not before every edit. A concise prompt
-from the user is sufficient:
+When Vocal Mode information is needed, a concise prompt from the user is
+sufficient:
 
 ```text
 Current singer Vocal Modes: Airy, Bright, Cool, Dark, Emotional, Power, Solid,

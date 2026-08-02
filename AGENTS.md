@@ -45,6 +45,10 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
     emotion, style, singer identity, or which notes deserve emphasis.
   - SynthV remains the project-state authority; the user remains the final
     listening and artistic authority.
+- When communicating with the user in Chinese, introduce the UI term as
+  `唱法（Vocal Mode）` on first mention and use `唱法` afterward. Do not use a
+  bare `Vocal Mode` in user-facing Chinese unless quoting an exact SynthV label
+  is necessary.
 - Treat Note Group content as shared across every reference. Group-content
   writes default to `sharedGroupPolicy=reject`; when the fresh reference count
   is greater than one, require the caller to explicitly choose
@@ -130,35 +134,39 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
   `apply_group_tuning` batch, an independent verification read, and loop
   playback. Account for exactly the five declared inter-phrase gaps and no
   within-phrase gap or overlap.
-- Before the first tuning write in a conversation, the Agent must ask the user
-  to select the intended Note Group in SynthV, select or assign the intended
-  Vocal (singer/voice database) for that Group, and then either attach a
-  screenshot of its complete Vocal Mode panel or type every Vocal Mode name
-  exactly as shown, preserving spelling and capitalization. A singer must be
-  selected before its Vocal Mode names can appear. Do not guess Vocal Mode names
-  or proceed with a tuning write until the user provides this information.
-  After the user changes Vocals, require a new complete-panel screenshot or
-  every singing-style name for the new Vocal; never reuse the previous Vocal's
-  list. Explain that this is required because SynthV's official scripting API
-  cannot read the current Vocal identity or enumerate untouched default-only
-  Vocal Mode names and parameters. If no suitable Note Group exists or the
-  Vocal Modes are not visible yet, the user or Agent may create one temporary
-  note in one temporary non-main Note Group at a harmless location solely to
-  make the singing-style parameters available. The user must then select that
-  Note Group and select or assign its Vocal. This bootstrap edit is the only
-  exception for an ordinary tuning request. Explicitly requested bundled Demo
-  score creation is a separate opt-in construction workflow, but it must also
-  stop after creating its isolated Group and ask the user to screenshot the
-  complete panel or type every singing-style name before any tuning write.
-- Before that first tuning write, present one concise **How to use** and one
-  **Preflight checklist**. Cover saving a working copy, selecting the Vocal,
-  providing its singing styles because of the official API limitation,
-  selecting a short lyric phrase, stating the intended style and preserved
-  content, fresh-read/plan/review behavior, confirming phrase-level style before
-  word-level pronunciation/timing/pitch-transition/pitch-curve/expression work,
-  avoiding concurrent edits to the same target, and SynthV undo guidance. Do
-  not display a second checklist after publishing the preview, and do not repeat
-  the onboarding later in the same conversation.
+- Only when the requested tuning will use or modify Vocal Modes, ask the user
+  before the first such write to select the intended Note Group in SynthV,
+  select or assign its intended Vocal (singer/voice database), and then either
+  attach a screenshot of the complete Vocal Mode panel or type every Vocal Mode
+  name exactly as shown, preserving spelling and capitalization. Do not require
+  this handoff for explicit mechanical edits that do not depend on singing
+  styles. A singer must be selected before its Vocal Mode names can appear. Do
+  not guess Vocal Mode names or perform a Vocal-Mode-dependent write until the
+  user provides this information. After the user changes Vocals, require a new
+  complete-panel screenshot or every singing-style name before another
+  Vocal-Mode-dependent write; never reuse the previous Vocal's list. Explain the
+  official API limitation in at most one concise sentence. If no suitable Note
+  Group exists or the Vocal Modes are not visible yet, the user or Agent may
+  create one temporary note in one temporary non-main Note Group at a harmless
+  location solely to make the singing-style parameters available. The user must
+  then select that Note Group and select or assign its Vocal. This bootstrap edit
+  is the only exception for an ordinary Vocal-Mode-dependent request. Explicitly
+  requested bundled Demo score creation is a separate opt-in construction
+  workflow, but it must also stop after creating its isolated Group and ask the
+  user to screenshot the complete panel or type every singing-style name before
+  any tuning write.
+- Do not present a fixed **How to use** section or **Preflight checklist**.
+  Before a write, request only user-owned information that is still missing for
+  the current request: the intended target and effect, anything that must remain
+  unchanged, and the Vocal Mode handoff above when applicable. Suggest saving a
+  working copy in one short sentence if the user has not already acknowledged
+  it. Keep fresh reads, guards, preflight, protected writes, and independent
+  verification as internal behavior; show the user only a small reviewable
+  preview. Mention concurrent-edit safety only while a write is pending or
+  running. Offer phrase-level-before-word-level tuning as optional advice only
+  when it is relevant. Show SynthV Undo guidance only after an execution result
+  actually reports `undoRequired: true`, and do not repeat resolved onboarding
+  later in the same conversation.
 
 ## Checks
 

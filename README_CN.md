@@ -9,6 +9,8 @@
 Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重写
 `.svp` 文件，不会打开网络端口，也不会自行调用 AI API。
 
+**视频演示：** [在哔哩哔哩观看 SynthV Agent Bridge 演示](https://www.bilibili.com/video/BV1kU3P6LEoF)
+
 > 第一次使用？请参阅[中文快速开始](docs/quickstart_cn.md)。环境检查、
 > 依赖与 Node.js 安装、构建、SynthV 脚本安装、MCP 注册和诊断等大部分
 > 工作都可以交给 Codex 完成；系统级安装可能需要用户授权。
@@ -29,7 +31,7 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 > 音符组选择要使用的 Vocal（歌手/声库），然后截图完整唱法（Vocal Mode）
 > 面板，或按照面板中的原始拼写和大小写准确输入该 Vocal 的全部唱法；没有
 > 选择歌手时不会出现唱法名称。如果没有合适的音符组或暂时看不到
-> Vocal Modes，可由用户或 Agent 先在工程任意安全位置创建一个临时音符和
+> 唱法面板，可由用户或 Agent 先在工程任意安全位置创建一个临时音符和
 > 一个临时非主音符组，再选中该音符组并选择歌手，使唱法参数显示出来；
 > 随后截图完整唱法面板，再继续调音。更换 Vocal 后，必须重新截图新 Vocal
 > 的完整唱法面板，或重新输入它的全部唱法名称，不能沿用上一个 Vocal 的
@@ -54,9 +56,9 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 |---|---|
 | 工程检查 | 读取工程元数据、轨道、库 Group、音符、选区、速度/拍号图、计算音素与音高、自动化、混音器状态和编辑器上下文。 |
 | 音符与歌词 | 添加、编辑、删除、克隆、移调或人性化受保护音符；匹配歌词，并编辑语言、歌唱/说唱类型、时值、微调和音符属性。 |
-| Voice 与音素 | 读取和编辑 Group Voice、Vocal Mode 轴、实验性 Unison 字段、音素集覆盖、音节时值、发音，以及单音素时值或强度。 |
+| Voice 与音素 | 读取和编辑 Group Voice、唱法（Vocal Mode）轴、实验性 Unison 字段、音素集覆盖、音节时值、发音，以及单音素时值或强度。 |
 | 音高与表情 | 调整音高过渡和音高曲线；管理 Smart Pitch 控制和 AI Retake；应用 Scoop、Falloff、Vibrato、Crescendo 或 Breathiness 预设。 |
-| 自动化 | 读取、添加、替换、采样、简化或清除音高偏差、响度、张力、气声、发声、性别和 Vocal Mode 曲线。 |
+| 自动化 | 读取、添加、替换、采样、简化或清除音高偏差、响度、张力、气声、发声、性别和唱法（Vocal Mode）曲线。 |
 | 轨道、Group 与和声 | 创建、克隆、复用、更新或删除库 Group、Group 引用和轨道；创建宿主克隆 Vocal 上下文的空白模板轨；并创建受音域约束的和声轨。共享 Group 内容写入默认安全失败，除非明确确认要影响全部引用。 |
 | 本地曲谱导入 | 检查明确提供的本地 MusicXML（`.xml`、`.musicxml`、`.mxl`）或 SMF MIDI（`.mid`、`.midi`），再通过受保护音符写入路径导入一个已确认权利的单旋律声部。不接受 URL 或 `.svp`。 |
 | 时序、编辑器与播放 | 转换秒、四分音符和 blick；编辑速度/拍号；控制选区、视口、剪贴板、网格吸附、坐标、混音器和播放。 |
@@ -108,27 +110,21 @@ SynthV 保存结果，用户负责最终听感判断。
   小标题，并因官方 API 限制在选择 Vocal、提供全部唱法时暂停一次。
 - 在 AI 编辑前保存重要工作；Bridge 写入期间不要同时修改同一个目标。
 - 如果用户撤销或手动修改了 Agent 即将处理的音符、Group、Voice 或
-  Vocal Mode，Agent 会只重新读取该目标。无关修改不需要重新读取。
+  唱法（Vocal Mode），Agent 会只重新读取该目标。无关修改不需要重新读取。
 - SynthV 脚本 API 不公开当前歌手身份，也无法枚举仍保持默认值、从未调整
-  过的唱法（Vocal Mode）名称和参数。修改唱法前，Agent 必须要求用户先
-  选择目标音符组，再为该音符组选择歌手，然后按原始拼写和大小写列出面板
-  中的全部唱法，或提供完整唱法面板截图；没有选择歌手时不会出现唱法名称。
-- 如果没有合适的音符组或暂时看不到 Vocal Modes，唯一允许的初始化写入
-  是由用户或 Agent 创建一个临时音符和一个临时非主音符组。用户随后必须
-  选中该音符组并选择歌手，仅用于使唱法参数显示出来。参数出现后，Agent
-  必须暂停并索要完整面板截图或全部准确唱法名称，之后才能继续调音。
-- 同一歌手可复用已经识别的名称；更换歌手后，必须重新提供新 Vocal 的
-  完整面板截图或重新输入其全部准确唱法名称，不能沿用原列表。
-- 第一次调音写入前，Agent 必须显示一次简短的 **How to use** 和一份调音前
-  Checklist，涵盖保存/备份、Vocal 与唱法、目标歌词、预期风格和保留内容、
-  最新读取/计划/审核、先确定整段唱法再逐字精调、并发编辑安全和撤销。
-  发布预览后不再显示第二份 Checklist。
+  过的唱法（Vocal Mode）名称和参数。只有请求会使用或修改唱法时，
+  Agent 才要求用户选择目标音符组和 Vocal，并提供完整面板截图或全部准确
+  唱法名称；不依赖唱法的明确机械编辑不需要这一步。更换 Vocal 后，下一次
+  涉及唱法的写入前必须重新提供新 Vocal 的信息。
+- Agent 不再显示固定的 **How to use** 或调音前 Checklist。它只询问当前
+  请求仍缺少的用户决策，简短建议保存工作副本，并在写入前展示小型预览。
+  最新读取、Guard、预检和独立验证属于内部机制；只有实际结果返回
+  `undoRequired: true` 时才显示撤销指导。
 
-Agent 每次对话只需给出一次提示，不必在每次编辑前重复。用户可以提供
-如下简短提示：
+需要唱法信息时，用户可以提供如下简短提示：
 
 ```text
-当前歌手的唱法（Vocal Modes）：Airy、Bright、Cool、Dark、Emotional、Power、
+当前歌手的唱法（Vocal Mode）：Airy、Bright、Cool、Dark、Emotional、Power、
 Solid、Sweet。
 ```
 
@@ -350,9 +346,9 @@ Guard，会安全失败，而不会静默改换目标。`readOnly` Context 不�
 | `add_group_reference` | 写入 | 在轨道上放置库 Group。 |
 | `clone_group_reference` | 写入 | 在另一轨道上创建链接或深度复制的引用。 |
 | `get_track_notes` | 读取 | 读取 Group、UUID、音符、属性、偏移和安全写入指纹。 |
-| `get_group_voice` | 读取 | 读取类型化 Group Voice 默认值、Vocal Mode、实验性 Unison 字段和目标选区上下文。 |
+| `get_group_voice` | 读取 | 读取类型化 Group Voice 默认值、唱法（Vocal Mode）、实验性 Unison 字段和目标选区上下文。 |
 | `get_note_phoneme_data` | 读取 | 读取用户/计算音素、音素集覆盖、单音素属性和音符选区状态，可选紧凑音符索引或秒范围过滤。 |
-| `get_phrase_context` | 读取 | 一次紧凑、可直接写入的选中/范围乐句读取，包含音符与自动化 Guard Token、Voice/Vocal Mode、诊断和仅供建议的审核目标。 |
+| `get_phrase_context` | 读取 | 一次紧凑、可直接写入的选中/范围乐句读取，包含音符与自动化 Guard Token、Voice/唱法（Vocal Mode）、诊断和仅供建议的审核目标。 |
 | `get_selection` | 读取 | 读取选中的 Group、音符、Smart Pitch 控制和指定自动化点。 |
 | `set_selection` | 控制 | 替换、添加、删除或清空编辑器选区，并返回 SynthV 实际报告的选区。 |
 | `get_computed_group_data` | 读取 | 读取计算音素/说唱属性和可选音高采样。 |
@@ -362,7 +358,7 @@ Guard，会安全失败，而不会静默改换目标。`readOnly` Context 不�
 | `clone_track_shell` | 写入 | 通过宿主克隆把源轨主 Group 的 Vocal 上下文带到一条已验证为空的轨道，同时移除音符、Smart Pitch、已知自动化、非主 Group，并默认重置混音器。API 无法读取或命名继承到的 Vocal 身份。 |
 | `delete_track` | 破坏性 | 删除经过指纹验证且不是最后一条的轨道。 |
 | `update_group` | 写入 | 修改人声/乐器引用状态和受支持的人声属性。 |
-| `set_group_voice` | 写入 | 使用指纹验证更新类型化 Voice、Vocal Mode 和经宿主验证的实验性 Unison，可选当前 Group 保护。 |
+| `set_group_voice` | 写入 | 使用指纹验证更新类型化 Voice、唱法（Vocal Mode）和经宿主验证的实验性 Unison，可选当前 Group 保护。 |
 | `apply_group_tuning` | 破坏性 | 完整预检后，在一个撤销记录中应用同一 Group 的 Voice/唱法、音符/音素及多条自动化调音；若宿主在执行期意外失败，重试前必须先在 SynthV 中撤销一次。 |
 | `delete_group_reference` | 破坏性 | 删除非主人声或乐器引用。 |
 | `import_monophonic_score` | 写入 | 通过受保护 `add_notes` 从刚检查且已确认使用权的本地 MusicXML/MIDI 单旋律声部导入最多 512 个音符；SHA-256 必须仍匹配，源速度只返回审核而不自动应用。 |
@@ -410,7 +406,7 @@ Guard，会安全失败，而不会静默改换目标。`readOnly` Context 不�
 
 - 乐句调音前优先使用 `get_phrase_context`。没有显式作用域时，它可以在
   无需先读取选区的情况下定位当前钢琴卷帘 Group，并优先使用选中音符；
-  一次请求即可组合紧凑音高/时值/音素音符、Group Voice/Vocal Mode 和
+  一次请求即可组合紧凑音高/时值/音素音符、Group Voice/唱法（Vocal Mode）和
   有界自动化摘要。嵌套音符与自动化指纹会变成短 Guard Token。
 - 乐句诊断会识别时值重叠、大音程跳进、长音、适合换气的间隙和密集短音，
   不会编辑工程。`pitchAnalysisFrames` 可选汇总计算轮廓，而不返回原始帧。
@@ -484,8 +480,8 @@ Setter。在不兼容宿主上真正修改模式，会在创建撤销记录前�
 Codex Agent 规则要求按以下顺序执行：
 
 1. 乐句调音时，在编辑前立即调用 `get_phrase_context`。对于 Group Voice
-   或 Vocal Mode，调用不带定位器的 `get_group_voice`，以当前钢琴卷帘
-   Group 为目标。V2 默认只返回参数、Vocal Mode、目标索引和 `contextId`；
+   或唱法（Vocal Mode），调用不带定位器的 `get_group_voice`，以当前钢琴卷帘
+   Group 为目标。V2 默认只返回参数、唱法、目标索引和 `contextId`；
    只有诊断时才请求完整字段。其他工作只读取拥有预期变更的对象。
 2. 展示或在内部构建一个小型、便于审核的变更。
 3. 复制最新适用的 Group/引用 UUID 和指纹、轨道指纹、自动化/时间轴指纹，
