@@ -331,15 +331,6 @@ const COMMAND_POLICIES: Readonly<Record<string, V3CommandPolicy>> = {
     postconditionStrategy: "sessionTokenChange",
     transactionEligibility: "notEligible",
   },
-  sidebar_publish_preview: {
-    category: "review",
-    targetAggregates: ["ReviewState"],
-    contextKinds: [],
-    ownershipPolicies: ["reviewState"],
-    expectedEffectPolicy: "notApplicable",
-    postconditionStrategy: "reviewStateSnapshot",
-    transactionEligibility: "notEligible",
-  },
   host_clipboard: uiCommand(),
   show_dialog: uiCommand(),
   get_selection: uiCommand(),
@@ -382,8 +373,6 @@ const INFRASTRUCTURE_ACTIONS = new Set([
   "get_host_info",
   "ping",
   "reload_bridge",
-  "sidebar_get_request",
-  "sidebar_publish_preview",
   "sidebar_status",
 ]);
 
@@ -392,7 +381,6 @@ const TRUSTED_READ_ACTIONS = new Set([
   "bridge_status",
   "get_host_info",
   "ping",
-  "sidebar_get_request",
   "sidebar_status",
 ]);
 

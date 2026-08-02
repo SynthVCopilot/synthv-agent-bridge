@@ -16,14 +16,6 @@ export interface BridgePaths {
   readonly installFile: string;
   readonly lockFile: string;
   readonly sessionFile: string;
-  readonly sidebarInstructionFile: string;
-  readonly sidebarPreviewFile: string;
-  readonly sidebarPreviewTextFile: string;
-  readonly sidebarCommandFile: string;
-  readonly sidebarCommandProcessingFile: string;
-  readonly sidebarActivityFile: string;
-  readonly sidebarHistoryFile: string;
-  readonly sidebarStateFile: string;
   readonly sidebarClientStatusFile: string;
   readonly sidebarRuntimeStatusFile: string;
 }
@@ -103,14 +95,6 @@ export function loadConfig(
       installFile: `${prefix}.install.json`,
       lockFile: `${prefix}.lock`,
       sessionFile: `${prefix}.session.json`,
-      sidebarInstructionFile: `${prefix}.sidebar.instruction.txt`,
-      sidebarPreviewFile: `${prefix}.sidebar.preview.json`,
-      sidebarPreviewTextFile: `${prefix}.sidebar.preview.txt`,
-      sidebarCommandFile: `${prefix}.sidebar.command.txt`,
-      sidebarCommandProcessingFile: `${prefix}.sidebar.command.processing.txt`,
-      sidebarActivityFile: `${prefix}.sidebar.activity.txt`,
-      sidebarHistoryFile: `${prefix}.sidebar.history.json`,
-      sidebarStateFile: `${prefix}.sidebar.state.txt`,
       sidebarClientStatusFile: `${prefix}.sidebar.client-status.txt`,
       sidebarRuntimeStatusFile: `${prefix}.sidebar.runtime-status.txt`,
     },

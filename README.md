@@ -66,7 +66,7 @@ See the [v3 architecture](docs/architecture-v3.md),
 | Local score import | Inspect an explicitly supplied local MusicXML (`.xml`, `.musicxml`, `.mxl`) or SMF MIDI (`.mid`, `.midi`) file, then import one rights-confirmed monophonic lane through the guarded note-write path. URLs and `.svp` files are not accepted. |
 | Timing, editor, and playback | Convert seconds, quarter notes, and blicks; edit tempo/time signatures; control selection, viewport, clipboard, grid snapping, coordinates, mixer, and playback. |
 | Safe editing | Protect writes with fresh fingerprints, typed/scope-bound `contextId` values, and Guard Tokens; fully preflight independent transaction steps, resolve forward dependencies just in time, create one SynthV undo record, and optionally retain a guarded rollback plan. |
-| Review and local privacy | Review, apply, dismiss, or cancel guarded previews in the optional native side panel. File IPC stays local: the Bridge does not parse `.svp` files, open a network port, or call an AI API. |
+| Connection and local privacy | Monitor Bridge/MCP heartbeats and hot-reload an online Bridge from the optional native side panel. File IPC stays local: the Bridge does not parse `.svp` files, open a network port, or call an AI API. |
 
 > To avoid reproducible SynthV 2.2.1 native crashes, the current stable surface rejects
 > isolated Group clone, Note Group/Track/Track-shell clone, harmony Track, and
@@ -215,9 +215,10 @@ The installer copies these files into a `SynthV Agent Bridge` subfolder of the d
 
 Alternatively, set `SYNTHV_SCRIPTS_DIR` to the scripts directory before running
 `npm run install:synthv`. The installer creates a `SynthV Agent Bridge`
-subfolder. When the side-panel file changed, choose **Scripts → Rescan**.
-SynthV then loads **SynthV Agent** as a custom side-panel section. Rescan stops
-persistent scripts, so afterward run **Start SynthV Agent Bridge** once.
+subfolder. When the side-panel file changes, close and reopen SynthV so it
+reloads **SynthV Agent** as a custom side-panel section. **Scripts → Rescan**
+may leave an already-rendered panel layout unchanged. After reopening, run
+**Start SynthV Agent Bridge** once.
 
 The Bridge and every ordinary MCP read/write tool work without the side panel.
 For a core-only installation, add `--without-sidebar`; this skips the optional
@@ -231,9 +232,10 @@ If a hot-reload-capable Bridge session is already running, the installer asks
 it to load the copied Lua file and waits for a new session heartbeat. This uses
 the Bridge's file IPC and Lua `loadfile()`—not UI automation or hooks. Use
 `--no-reload` to copy without requesting a reload. The first installation of a
-hot-reload-capable version must still be started manually once. A required
-side-panel rescan also stops the current Bridge and therefore needs one manual
-start afterward. SynthV may reuse cached menu-script code after a project or
+hot-reload-capable version must still be started manually once. A changed
+side-panel layout requires closing and reopening SynthV, so the Bridge also
+needs one manual start afterward. SynthV may reuse cached menu-script code
+after a project or
 app restart, so when the Bridge runtime itself changed, the installer also
 asks for one **Scripts → Rescan** before the next manual start. Hot reload keeps
 the current session usable until then.
@@ -246,7 +248,11 @@ In Synthesizer V Studio, run:
 Scripts → SynthV Agent Bridge → Start SynthV Agent Bridge
 ```
 
-The script remains active and writes a heartbeat while SynthV is running. To stop it, run **Stop SynthV Agent Bridge**, or use SynthV's **Abort All Running Scripts** command.
+The script remains active and writes a heartbeat while SynthV is running. To
+stop only the Bridge, run **Stop SynthV Agent Bridge**; the side panel remains
+alive and shows `B offline`. SynthV's **Abort All Running Scripts** also stops
+the side panel itself, so the already-rendered panel freezes and neither its
+status nor its buttons can update. Reopen SynthV afterward to restore it.
 
 ### 4. Connect an MCP host
 
@@ -267,30 +273,15 @@ modifying the user's global Codex configuration.
 
 A complete TOML example is available at [examples/codex-config.toml](examples/codex-config.toml). Other local MCP hosts can use the same `node .../dist/src/cli.js` command when they support **STDIO** servers.
 
-### Optional native side-panel workflow
+### Optional native connection panel
 
-The v0.1.4 panel is an optional local review console. It deliberately keeps the
-Bridge network-free and does not call an AI API itself. It starts in a compact
-layout showing connection/task state; **Show details** exposes context,
-instruction, activity, and history controls. A pending preview is surfaced
-automatically even while compact:
-
-1. Select notes or a Group in SynthV and enter an instruction in
-   **SynthV Agent**.
-2. Click **Copy & queue**. The panel stores the request in the local IPC
-   directory and copies a handoff prompt to the host clipboard.
-3. Paste the prompt into the connected Codex task.
-4. Codex reads fresh SynthV state and publishes one fingerprint-guarded write
-   or complete transaction back to the panel, including structured changes and
-   risks.
-5. Review the preview in SynthV, then click **Apply** or **Dismiss**.
-
-Apply commands are consumed by the Node coordinator and sent through the same
-serialized `FileIpcClient` used by MCP tools. The side panel never edits project
-objects directly. SynthV's public scripting API can create undo records but
-cannot invoke Undo. After a successful Bridge write, click the main editor and
-use **Ctrl+Z**, or choose **Edit > Undo** when focus is still in the side panel.
-See [docs/sidebar.md](docs/sidebar.md).
+The side panel shows Bridge (`B`) and MCP (`M`) connection states on separate
+rows plus **Restart Bridge**. It does not collect instructions, preview changes,
+or apply edits. `B` becomes online only after the panel observes a new
+heartbeat, and Restart Bridge waits for a replacement Session. A permanent
+warning explains that **Abort All Running Scripts** freezes the displayed
+states; use the dedicated Stop command when only the Bridge should stop. Start
+an offline Bridge from the Scripts menu. See [docs/sidebar.md](docs/sidebar.md).
 
 ### 5. Verify the connection
 
@@ -318,7 +309,7 @@ placing every action schema in the model context.
 | `sv_query` | Run a read projection and create a `readOnly` or `writeIntent` Context. |
 | `sv_command` | Run validated edit, delete, clone, import, or bounded batch commands. |
 | `sv_ui` | Control selection, viewport, clipboard, dialogs, snapping, coordinates, or playback. |
-| `sv_review` | Publish or inspect an optional Sidebar preview; the user applies or dismisses it inside SynthV. |
+| `sv_review` | Read optional Sidebar connection and runtime status. |
 
 The normal tuning sequence is:
 
@@ -361,9 +352,7 @@ not registered as standalone MCP tools; request their current schemas through
 | Action | Access | Purpose |
 |---|---:|---|
 | `bridge_status` | Read | Read the heartbeat without requiring a round trip. |
-| `sidebar_get_request` | Read | Read the latest instruction and selection summary queued by the native side panel. |
-| `sidebar_status` | Read | Read Bridge/MCP diagnostics, task state, IPC path, recent summaries, and the latest coordinator error. |
-| `sidebar_publish_preview` | Control | Publish one complete guarded write or transaction, structured changes, and risks for confirmation in SynthV. |
+| `sidebar_status` | Read | Read the MCP heartbeat and optional native side-panel runtime status. |
 | `ping` | Read | Test the complete Node → Lua → Node path. |
 | `reload_bridge` | Control | Reload the installed Lua Bridge in the current script session. |
 | `get_host_info` | Read | SynthV host version, OS, language, project, and IPC information. |
@@ -475,9 +464,8 @@ All track, group, and note indices are **1-based**, matching the SynthV Lua API.
   verbose `fingerprint`.
 - Compact automation reads return `guardToken`; pass it as
   `expectedGuardToken` to `set_automation_points`.
-- These Guard Tokens also work inside `apply_transaction` steps and
-  `sidebar_publish_preview` payloads; they are resolved before the plan reaches
-  file IPC.
+- These Guard Tokens also work inside `apply_transaction` steps; they are
+  resolved before the request reaches file IPC.
 - Compact write responses contain counts and replacement Guard Tokens instead
   of complete notes or automation curves.
 
@@ -647,8 +635,6 @@ modifies the project or installed files.
   Track-shell clone, harmony Track, and transaction apply/rollback as
   experimental and rejects them before project IPC. Linked Group-reference
   clone remains available.
-- The side panel holds one pending preview at a time; previews targeting those
-  experimental paths fail before project IPC too.
 - The generic transaction schema and Fake Host implementation remain for
   diagnosis: they reject conflicting guarded scopes, support complete-field
   `$result` references, and perform full/just-in-time preflight for independent
@@ -662,11 +648,8 @@ modifies the project or installed files.
   **Edit > Undo** once before rereading or retrying.
 - Rollback-plan design remains project/Session-bound; current
   `rollback_transaction` is experimental-disabled together with apply.
-- The panel cannot initiate a Codex turn by itself. **Copy & queue** writes a
-  local request and puts a handoff prompt on the clipboard for the user to paste.
-- SynthV's public scripting API does not expose an Undo command. The panel shows
-  the latest write and directs the user to click the main editor before using
-  **Ctrl+Z**, with **Edit > Undo** as the focus-independent fallback.
+- The optional side panel is connection-only. Requests, review, and Undo
+  guidance remain in the Agent conversation and SynthV editor.
 - SynthV's public scripting API does not expose project save, audio rendering,
   selecting an installed singer database by display name, reading Vocal
   identity, or Voice Panel scale/mode settings. The `clone_track_shell` schema

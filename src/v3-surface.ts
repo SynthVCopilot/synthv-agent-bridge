@@ -70,8 +70,6 @@ const STATUS_OPERATIONS = {
 } as const;
 
 const SIDEBAR_OPERATIONS = {
-  get: "sidebar_get_request",
-  publish: "sidebar_publish_preview",
   status: "sidebar_status",
 } as const;
 
@@ -1858,51 +1856,20 @@ export function registerV3InternalAdapters(
   registerTool(
     V3_INTERNAL_ADAPTER_NAMES.review,
     {
-      title: "Use SynthV Sidebar",
-      description:
-        "Read sidebar requests/status or publish one guarded preview for confirmation.",
+      title: "Read SynthV Sidebar Status",
+      description: "Read the optional connection-only Sidebar runtime status.",
       inputSchema: {
-        operation: z.enum(["get", "status", "publish"]),
-        args: argsSchema,
-        contextId: contextIdSchema,
+        operation: z.literal("status").default("status"),
       },
       annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
+        readOnlyHint: true,
         openWorldHint: false,
       },
     },
     async (input) => {
       try {
         const action = SIDEBAR_OPERATIONS[input.operation];
-        let args = { ...input.args };
-        if (input.operation === "publish") {
-          const sessionChange = await observeSession();
-          if (sessionChange !== undefined) {
-            throw sessionChangedError(sessionChange);
-          }
-          const previewAction = optionalString(args.action);
-          const payload = optionalRecord(args.payload, "args.payload");
-          if (previewAction !== undefined && payload !== undefined) {
-            assertV3CapabilityEnabled(previewAction, payload);
-            const expandedPayload =
-              previewAction === "apply_transaction"
-                ? expandTransactionContexts({ ...payload }, contexts)
-                : expandContext(
-                    previewAction,
-                    { ...payload },
-                    input.contextId,
-                    contexts,
-                    "writeIntent",
-                  );
-            args = {
-              ...args,
-              payload: expandedPayload,
-            };
-          }
-        }
-        return await invokeActionTool(definitions, action, args);
+        return await invokeActionTool(definitions, action, {});
       } catch (error) {
         return errorResult(error);
       }

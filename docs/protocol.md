@@ -17,7 +17,7 @@ The server registers exactly six tools:
 | `sv_query` | Read-only projection, pagination, and typed Context creation |
 | `sv_command` | Project edit, delete, clone, import, and bounded batch commands |
 | `sv_ui` | Selection, navigation, playback, dialogs, and clipboard |
-| `sv_review` | Publish or inspect Sidebar previews; user confirmation/dismissal occurs in SynthV |
+| `sv_review` | Read optional Sidebar connection and runtime status |
 
 Detailed SynthV actions are private catalog entries. Arbitrary Lua method
 execution is not supported.

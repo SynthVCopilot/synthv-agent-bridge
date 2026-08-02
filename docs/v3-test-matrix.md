@@ -185,7 +185,7 @@ Fresh v3 real-host evidence used for the `0.2.0` release decision:
 | Query projection | SynthV 2.2.1 Pro standalone; 17/17 Query actions passed with bounded projections and no private locator/Guard leak |
 | UI | 9/9 UI actions passed with actual selection, viewport, clipboard/dialog, snap/coordinate, playback, and playhead readback; all temporary state restored |
 | Mixer Command | `0 dB → -3 dB` returned `changed`, one Undo and verified readback; repeating `-3 dB` returned `alreadySatisfied`, zero Undo; one Edit-menu Undo restored `0 dB` |
-| Sidebar review | Preview did not mutate; Apply muted Track 1 with one Undo; one Edit-menu Undo restored mute off while gain remained `0 dB` |
+| Sidebar status | Connection-only panel reported separate B/M rows; Restart Bridge requested a hot reload without touching project content |
 | Linked clone | Source UUID was shared intentionally, fresh reference count increased, and one Undo removed only the new reference; the formal Stage 3 loop passed 30/30 writes with 30 visible Undos and complete baseline restoration |
 | Note and structure writes | guarded edit/delete/transform, Track add/update/delete, Group/reference add/update/delete, library Group create/delete, time-axis, metadata, and local score import all passed authoritative readback and visible Undo recovery |
 | Native clone risk | isolated Group-reference clone followed by Undo reproduced `0xc0000005` three times at the same fault offset; Track shell reproduced `0xc0000409` once |

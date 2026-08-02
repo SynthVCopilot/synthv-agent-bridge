@@ -10,11 +10,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { loadConfig } from "../src/config.js";
 import { LOCAL_ACTIONS } from "../src/local-actions.js";
 import { BRIDGE_ACTIONS } from "../src/protocol.js";
-import { TRANSACTION_STEP_ACTIONS } from "../src/sidebar-coordinator.js";
 import {
   createServer,
   TRACK_DISPLAY_COLOR_PATTERN,
 } from "../src/server.js";
+import { transactionEligibleActionNames } from "../src/v3-command-policy.js";
 import { V3_INTERNAL_ADAPTER_NAMES } from "../src/v3-surface.js";
 
 test("track color schema accepts public RGB and native ARGB forms", () => {
@@ -42,17 +42,15 @@ test("every protocol action has exactly one internal action definition", async (
       .filter(
         (name) =>
           name !== "bridge_status" &&
-          name !== "sidebar_get_request" &&
-          name !== "sidebar_status" &&
-          name !== "sidebar_publish_preview",
+          name !== "sidebar_status",
       )
       .sort(),
     [...BRIDGE_ACTIONS, ...LOCAL_ACTIONS].sort(),
   );
 });
 
-test("Vocal template track creation is available to transactions and sidebar previews", () => {
-  assert.ok(TRANSACTION_STEP_ACTIONS.includes("clone_track_shell"));
+test("Vocal template track creation is available to transactions", () => {
+  assert.ok(transactionEligibleActionNames().includes("clone_track_shell"));
 });
 
 test("MCP tool text results use compact JSON", async () => {
@@ -132,6 +130,20 @@ test("v3 exposes six semantic tools under a 6 KB metadata budget", async () => {
     )?.properties;
     assert.match(JSON.stringify(statusProperties?.operation), /diagnostics/u);
     assert.ok(statusProperties?.level !== undefined);
+
+    const reviewTool = tools.tools.find((tool) => tool.name === "sv_review");
+    const reviewProperties = (
+      reviewTool?.inputSchema as {
+        readonly properties?: Record<string, unknown>;
+      }
+    )?.properties;
+    assert.deepEqual(Object.keys(reviewProperties ?? {}), ["operation"]);
+    assert.match(JSON.stringify(reviewProperties?.operation), /status/u);
+    assert.doesNotMatch(
+      JSON.stringify(reviewProperties?.operation),
+      /publish|apply|dismiss/u,
+    );
+    assert.equal(reviewTool?.annotations?.readOnlyHint, true);
 
     const diagnosticsResult = await client.callTool({
       name: "sv_status",

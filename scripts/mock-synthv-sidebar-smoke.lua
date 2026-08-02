@@ -1,4 +1,4 @@
--- Minimal SynthV host mock for the native side-panel lifecycle.
+-- Minimal SynthV host mock for the connection-only native side panel.
 
 local sidebarScript = assert(os.getenv("SIDEBAR_SCRIPT"), "SIDEBAR_SCRIPT is required")
 local ipcDirectory = assert(os.getenv("SYNTHV_AGENT_BRIDGE_DIR"), "SYNTHV_AGENT_BRIDGE_DIR is required")
@@ -18,14 +18,22 @@ local function readFile(path)
     return content
 end
 
-local now = os.time() * 1000
-writeFile(
-    prefix .. ".status.json",
-    string.format(
-        '{"state":"running","updatedAtEpochMs":%d,"bridgeVersion":"0.2.0","executorBuildId":"sv3-lua-0.2.0-6"}\n',
-        now
+local fakeNowSeconds = os.time()
+os.time = function() return fakeNowSeconds end
+local now = fakeNowSeconds * 1000
+
+local function writeBridgeStatus(updatedAt, sessionToken)
+    writeFile(
+        prefix .. ".status.json",
+        string.format(
+            '{"state":"running","updatedAtEpochMs":%d,"bridgeVersion":"0.2.0","sessionToken":"%s"}\n',
+            updatedAt,
+            sessionToken
+        )
     )
-)
+end
+
+writeBridgeStatus(now, "session-1")
 writeFile(
     prefix .. ".sidebar.client-status.txt",
     table.concat({
@@ -36,19 +44,8 @@ writeFile(
         ""
     }, "\n")
 )
-writeFile(
-    prefix .. ".sidebar.state.txt",
-    table.concat({
-        "synthv-agent-bridge-sidebar-state-v1",
-        "status=idle",
-        "updatedAtEpochMs=" .. tostring(now),
-        ""
-    }, "\n")
-)
 
 local widgetCount = 0
-local failTaskStateOnce =
-    os.getenv("SIDEBAR_TEST_FAIL_TASK_STATE_ONCE") == "1"
 local failBridgeStatusOnce =
     os.getenv("SIDEBAR_TEST_FAIL_BRIDGE_STATUS_ONCE") == "1"
 
@@ -64,10 +61,6 @@ local function makeWidgetValue()
         if failBridgeStatusOnce and widgetIndex == 1 then
             failBridgeStatusOnce = false
             error("simulated Bridge-status WidgetValue failure")
-        end
-        if failTaskStateOnce and widgetIndex == 3 then
-            failTaskStateOnce = false
-            error("simulated task-state WidgetValue failure")
         end
         self.value = value
     end
@@ -92,54 +85,7 @@ local function makeWidgetValue()
     return widget
 end
 
-local noteOne = {}
-function noteOne:getPitch() return 60 end
-function noteOne:getOnset() return 0 end
-function noteOne:getEnd() return 705600000 end
-
-local noteTwo = {}
-function noteTwo:getPitch() return 67 end
-function noteTwo:getOnset() return 705600000 end
-function noteTwo:getEnd() return 1411200000 end
-
-local selection = {}
-function selection:getSelectedNotes() return { noteOne, noteTwo } end
-function selection:getSelectedPitchControls() return { {} } end
-function selection:getSelectedGroups() return {} end
-function selection:registerSelectionCallback(callback) self.selectionCallback = callback end
-function selection:registerClearCallback(callback) self.clearCallback = callback end
-
-local arrangementSelection = {}
-function arrangementSelection:getSelectedGroups() return {} end
-function arrangementSelection:registerSelectionCallback(callback) self.selectionCallback = callback end
-function arrangementSelection:registerClearCallback(callback) self.clearCallback = callback end
-
-local group = {}
-function group:getName() return "Verse" end
-
-local reference = {}
-function reference:getIndexInParent() return 1 end
-function reference:isInstrumental() return false end
-function reference:getTarget() return group end
-function reference:getTimeOffset() return 0 end
-function reference:getPitchOffset() return 0 end
-
-local track = {}
-function track:getIndexInParent() return 1 end
-function track:getName() return "Lead" end
-
-local editor = {}
-function editor:getCurrentTrack() return track end
-function editor:getCurrentGroup() return reference end
-function editor:getSelection() return selection end
-
-local arrangement = {}
-function arrangement:getSelection() return arrangementSelection end
-
 local scheduledCallback = nil
-local clipboard = nil
-local lastMessage = nil
-local sidePanelRefreshCount = 0
 SV = {}
 function SV:getHostInfo()
     return {
@@ -151,132 +97,75 @@ function SV:create(kind)
     assert(kind == "WidgetValue")
     return makeWidgetValue()
 end
-function SV:getMainEditor() return editor end
-function SV:getArrangement() return arrangement end
-function SV:blick2Quarter(value) return value / 1411200000 end
-function SV:setHostClipboard(value) clipboard = value end
-function SV:showMessageBoxAsync(_title, message) lastMessage = message end
+function SV:showMessageBoxAsync() end
 function SV:setTimeout(_milliseconds, callback) scheduledCallback = callback end
-function SV:refreshSidePanel() sidePanelRefreshCount = sidePanelRefreshCount + 1 end
 
 assert(loadfile(sidebarScript))()
 
-if os.getenv("SIDEBAR_TEST_FAIL_TASK_STATE_ONCE") == "1" then
-    local failedRuntime = readFile(prefix .. ".sidebar.runtime-status.txt")
-    assert(
-        failedRuntime:find("state=error", 1, true),
-        "refresh failure was not reported in runtime status"
-    )
-    assert(
-        failedRuntime:find("failureStage=taskState", 1, true),
-        "runtime status did not identify the failed refresh stage"
-    )
-    assert(scheduledCallback, "refresh failure stopped the sidebar poll")
-    local retry = scheduledCallback
-    scheduledCallback = nil
-    retry()
-    local recoveredRuntime = readFile(prefix .. ".sidebar.runtime-status.txt")
-    assert(
-        recoveredRuntime:find("state=running", 1, true),
-        "a successful retry did not restore running runtime status"
-    )
-    print("CASE:sidebar-refresh-failure-contained")
-end
-
 if os.getenv("SIDEBAR_TEST_FAIL_BRIDGE_STATUS_ONCE") == "1" then
     local failedRuntime = readFile(prefix .. ".sidebar.runtime-status.txt")
-    assert(
-        failedRuntime:find("state=error", 1, true),
-        "Bridge-status failure was not reported in runtime status"
-    )
-    assert(
-        failedRuntime:find("failureStage=status", 1, true),
-        "runtime status did not identify the failed status stage"
-    )
-    assert(scheduledCallback, "Bridge-status failure stopped the sidebar poll")
-    local retry = scheduledCallback
-    scheduledCallback = nil
-    retry()
+    assert(failedRuntime:find("state=error", 1, true), "status failure was not reported")
+    assert(scheduledCallback, "status failure stopped polling")
+    scheduledCallback()
     local recoveredRuntime = readFile(prefix .. ".sidebar.runtime-status.txt")
-    assert(
-        recoveredRuntime:find("state=running", 1, true),
-        "Bridge-status retry did not restore running runtime status"
-    )
+    assert(failedRuntime ~= recoveredRuntime, "successful retry did not update runtime status")
     print("CASE:sidebar-bridge-status-retried")
 end
 
 local clientInfo = getClientInfo()
 assert(clientInfo.type == "SidePanelSection", "side panel client type was not registered")
-assert(clientInfo.versionNumber == 7, "side panel version number was not updated")
+assert(clientInfo.versionNumber == 10, "side panel version number was not updated")
 
 local state = getSidePanelSectionState()
 assert(state.title:find("0.2.0", 1, true), "side panel title has no version")
-assert(#state.rows == 4, "side panel did not start in compact mode")
+assert(#state.rows == 7, "connection-only side panel layout changed unexpectedly")
 
-local bridgeStatusWidget = state.rows[2].columns[1].value
-local clientStatusWidget = state.rows[2].columns[2].value
-local taskStateWidget = state.rows[3].columns[1].value
-local diagnosticsWidget = state.rows[3].columns[2].value
-assert(bridgeStatusWidget.value:find("B 0.2.0", 1, true), "Bridge heartbeat was not displayed")
-assert(clientStatusWidget.value:find("M 0.2.0", 1, true), "MCP heartbeat was not displayed")
-assert(taskStateWidget.value:find("Idle", 1, true), "task state was not displayed")
-diagnosticsWidget.callback()
-assert(lastMessage and lastMessage:find("IPC:", 1, true), "diagnostics did not show the IPC path")
-
-local layoutWidget = state.rows[4].columns[1].value
-assert(layoutWidget.callback, "compact layout toggle was not registered")
-layoutWidget.callback()
-assert(sidePanelRefreshCount == 1, "expanding the side panel did not refresh its layout")
-state = getSidePanelSectionState()
-assert(#state.rows == 15, "expanded side panel omitted detailed rows")
-local selectionWidget = state.rows[6].columns[1].value
-assert(selectionWidget.value:find("2 notes", 1, true), "selected notes were not summarized")
-assert(selectionWidget.value:find("C4", 1, true), "selected pitch range was not summarized")
-
-local instructionWidget = state.rows[8].columns[1].value
-local submitWidget = state.rows[9].columns[1].value
-instructionWidget:emit("Transpose the selected notes down three semitones.")
-assert(submitWidget.enabled, "submit button did not enable for a non-empty instruction")
-assert(submitWidget.callback, "submit callback was not registered")
-submitWidget.callback()
+local bridgeStatusWidget = state.rows[1].columns[1].value
+local clientStatusWidget = state.rows[2].columns[1].value
+local restartBridgeWidget = state.rows[3].columns[1].value
+assert(bridgeStatusWidget.value:find("checking", 1, true), "cached heartbeat appeared online")
+assert(clientStatusWidget.value:find("MCP (M)", 1, true), "MCP heartbeat was not displayed")
+assert(state.rows[3].columns[1].text == "Restart Bridge", "Bridge restart button was not displayed")
 assert(
-    readFile(prefix .. ".sidebar.instruction.txt"):find("instruction%-begin"),
-    "sidebar instruction was not queued"
+    state.rows[4].text == "After aborting all running scripts,",
+    "first Stop All warning line changed unexpectedly"
 )
-assert(clipboard and clipboard:find("sidebar_get_request", 1, true), "Codex handoff was not copied")
-
-layoutWidget = state.rows[4].columns[1].value
-layoutWidget.callback()
-assert(sidePanelRefreshCount == 2, "collapsing the side panel did not refresh its layout")
-state = getSidePanelSectionState()
-assert(#state.rows == 4, "collapsed side panel retained detailed rows")
-
-local planId = "550e8400-e29b-41d4-a716-446655440000"
-writeFile(
-    prefix .. ".sidebar.preview.txt",
-    table.concat({
-        "synthv-agent-bridge-sidebar-preview-v1",
-        "planId=" .. planId,
-        "status=pending",
-        "Awaiting confirmation",
-        "Transpose two selected notes.",
-        ""
-    }, "\n")
+assert(
+    state.rows[5].text == "status stays at its last result and is unreliable.",
+    "second Stop All warning line changed unexpectedly"
 )
-assert(scheduledCallback, "side panel poll was not scheduled")
+assert(
+    state.rows[6].text == "Use Stop SynthV Agent Bridge",
+    "first dedicated Stop guidance line changed unexpectedly"
+)
+assert(
+    state.rows[7].text == "to stop only the Bridge.",
+    "second dedicated Stop guidance line changed unexpectedly"
+)
+assert(not restartBridgeWidget.enabled, "Bridge restart enabled before a live handshake")
+
+fakeNowSeconds = fakeNowSeconds + 4
+assert(scheduledCallback, "Bridge handshake timeout was not scheduled")
 scheduledCallback()
-assert(sidePanelRefreshCount == 3, "pending preview did not surface in compact mode")
-state = getSidePanelSectionState()
-assert(#state.rows == 7, "compact side panel did not expose pending preview actions")
+assert(bridgeStatusWidget.value:find("offline", 1, true), "cached heartbeat did not expire")
 
-local previewWidget = state.rows[6].columns[1].value
-local applyWidget = state.rows[7].columns[1].value
-assert(previewWidget.value:find("Transpose two", 1, true), "preview was not displayed")
-assert(applyWidget.enabled, "Apply was not enabled for a connected pending preview")
-assert(applyWidget.callback, "Apply callback was not registered")
-applyWidget.callback()
-local command = readFile(prefix .. ".sidebar.command.txt")
-assert(command:find("operation=apply", 1, true), "Apply command was not written")
-assert(command:find("planId=" .. planId, 1, true), "Apply command lost its plan ID")
+writeBridgeStatus(now + 5000, "session-1")
+scheduledCallback()
+assert(bridgeStatusWidget.value:find("Bridge (B)", 1, true), "new heartbeat was not displayed")
+assert(restartBridgeWidget.enabled, "Bridge restart did not enable after a live handshake")
 
+restartBridgeWidget.callback()
+assert(
+    readFile(prefix .. ".reload"):find("synthv%-agent%-bridge%-reload%-v1"),
+    "Bridge restart request was not written"
+)
+assert(bridgeStatusWidget.value:find("restarting", 1, true), "restart state was not displayed")
+assert(not restartBridgeWidget.enabled, "Bridge restart remained enabled during restart")
+
+writeBridgeStatus(now + 6000, "session-2")
+scheduledCallback()
+assert(bridgeStatusWidget.value:find("Bridge (B)", 1, true), "restart handshake did not complete")
+assert(restartBridgeWidget.enabled, "restart did not re-enable after the new session")
+
+assert(widgetCount == 3, "connection-only side panel created hidden legacy widgets")
 print("Mock SynthV sidebar smoke test passed")

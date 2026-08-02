@@ -14,12 +14,11 @@
 
 ## v0.1.4 — side panel, transactions, and semantic helpers
 
-- Persistent SynthV side-panel connection and current-selection summaries.
-- Network-free instruction queue with clipboard handoff to Codex.
-- Structured write/transaction preview with task states, Apply/Dismiss/Cancel,
-  recent summaries, diagnostics, and native Ctrl+Z guidance.
-- MCP tools for reading queued requests, publishing guarded previews, and
-  inspecting panel diagnostics.
+- Introduced a persistent SynthV side panel. Its original selection,
+  instruction, preview, Apply/Dismiss, and task-history experiment was later
+  removed; the current panel is connection-only with **Restart Bridge**.
+- The current `sv_review` operation reports read-only panel status. Plans are
+  reviewed in the Agent conversation and approved writes use `sv_command`.
 - Complete preflight of independent write steps followed by one undo record,
   plus in-session guarded rollback.
 - Range-constrained harmony tracks, deterministic note humanization, expression

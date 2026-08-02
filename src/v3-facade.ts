@@ -116,16 +116,13 @@ function withBuildIdentity(
   const root = asRecord(value, "status result");
   const executorBuildId = executorBuildIdFromStatus(root);
   const executorMatched = executorBuildId === EXECUTOR_BUILD_ID;
-  const sidebarMatchedOrInactive = sidebar.state !== "mismatch";
   return {
     traceId: traceIdForCurrentOperation(),
     ...root,
     build: BUILD_IDENTITY,
     coherence: {
       state:
-        !sidebarMatchedOrInactive
-          ? "mismatch"
-          : executorBuildId === undefined
+        executorBuildId === undefined
           ? "unknown"
           : executorMatched
             ? "matched"
@@ -133,14 +130,14 @@ function withBuildIdentity(
       expectedExecutorBuildId: EXECUTOR_BUILD_ID,
       actualExecutorBuildId: executorBuildId ?? null,
       sidebar,
-      writesAllowed: executorMatched && sidebarMatchedOrInactive,
+      sidebarRequiredForWrites: false,
+      writesAllowed: executorMatched,
     },
   };
 }
 
 async function assertCoherentExecutor(
   internals: ReadonlyMap<string, CollectedTool>,
-  getSidebarBuildIdentity: () => Promise<SidebarBuildIdentity>,
 ): Promise<void> {
   const statusResult = await invokeCollected(
     internals,
@@ -164,18 +161,6 @@ async function assertCoherentExecutor(
         expectedExecutorBuildId: EXECUTOR_BUILD_ID,
         actualExecutorBuildId: actual ?? null,
         requiredAction: "reinstall_or_reload_bridge",
-      },
-    );
-  }
-  const sidebar = await getSidebarBuildIdentity();
-  if (sidebar.state === "mismatch") {
-    throw new BridgeError(
-      "The active SynthV Sidebar build does not match the MCP server; project writes are blocked.",
-      "BUILD_MISMATCH",
-      {
-        expectedSidebarBuildId: BUILD_IDENTITY.sidebar.buildId,
-        actualSidebarBuildId: sidebar.buildId ?? null,
-        requiredAction: "reinstall_or_reload_sidebar",
       },
     );
   }
@@ -493,7 +478,7 @@ export function registerV3Facade(
       runWithTrace(async () => {
         try {
           assertPublicCommandOperation(input.action, input.args);
-          await assertCoherentExecutor(internals, getSidebarBuildIdentity);
+          await assertCoherentExecutor(internals);
         } catch (error) {
           return jsonResult(failedOutcome(error, "freshRead"), true);
         }
@@ -580,33 +565,18 @@ export function registerV3Facade(
   registerTool(
     "sv_review",
     {
-      title: "Review SynthV Change",
-      description:
-        "Read review state or publish one guarded Sidebar preview. User confirmation remains inside SynthV.",
+      title: "SynthV Sidebar Status",
+      description: "Read the optional connection-only SynthV Sidebar status.",
       inputSchema: {
-        operation: z.enum(["get", "status", "publish"]),
-        args: argsSchema,
-        contextId: contextIdSchema,
+        operation: z.literal("status").default("status"),
       },
       annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
+        readOnlyHint: true,
         openWorldHint: false,
       },
     },
     async (input) =>
       runWithTrace(async () => {
-        if (input.operation === "publish") {
-          try {
-            await assertCoherentExecutor(
-              internals,
-              getSidebarBuildIdentity,
-            );
-          } catch (error) {
-            return jsonResult(failedOutcome(error, "freshRead"), true);
-          }
-        }
         const result = await invokeCollected(
           internals,
           V3_INTERNAL_ADAPTER_NAMES.review,

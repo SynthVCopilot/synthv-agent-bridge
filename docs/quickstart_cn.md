@@ -185,21 +185,15 @@ Bridge 写入期间不要手动修改同一个目标。每次成功写入通常�
 SynthV 撤销记录。需要撤销时，先点击主编辑区再按 **Ctrl+Z**，或者选择
 **编辑 → 撤销**。
 
-## 8. 可选的侧边栏审核流程
+## 8. 可选的连接侧边栏
 
-**SynthV Agent** 侧边栏可以让用户明确确认后再执行：
-
-1. 在 SynthV 中选中音符或 Group。
-2. 在侧边栏输入要求。
-3. 点击 **Copy & queue**。
-4. 把复制的交接提示粘贴到 Codex。
-5. Codex 读取最新状态并发布受保护的修改预览。
-6. 在 SynthV 中检查修改内容和风险。
-7. 点击 **Apply** 执行，或点击 **Dismiss** 放弃。
-8. 试听结果，撤销或继续处理下一乐句。
-
-侧边栏不会自己联系 Codex；用户仍然需要把复制的交接提示粘贴到 Codex
-任务中。
+**SynthV Agent** 侧边栏分行显示 `B`（Bridge）和 `M`（MCP），并提供
+整行的 **重启 Bridge** 按钮。它不接收编辑指令，也不会执行工程修改。
+重启按钮不可用表示面板尚未确认
+Bridge 在线；请从 **脚本 → SynthV Agent Bridge → Start SynthV Agent
+Bridge** 启动。面板会固定提示：中止所有运行脚本后，状态会停留在最后
+一次结果，状态不可信；建议使用 Stop SynthV Agent Bridge 单独停止
+Bridge。所有请求和方案审核继续在 Codex 任务中进行。
 
 ## 9. 唱法（Vocal Mode）修改
 
@@ -233,7 +227,7 @@ SynthV 脚本 API 无法读取当前歌手身份，也无法列出尚未启用�
 3. 打开或重新连接已启用 MCP 的 Codex 任务。
 4. 选择目标并告诉 Codex 想要的效果；有不能修改的内容也请一并说明。如果
    请求会使用唱法，再选择 Vocal，并提供完整面板截图或准确唱法名称。
-5. 审核小型预览，应用后试听结果。
+5. 在 Codex 中审核小型方案，应用后试听结果。
 
 ## 更新已有安装
 
@@ -247,8 +241,9 @@ npm run install:synthv -- --target "/Synthesizer V Studio 2/脚本目录"
 npm run doctor -- --target "/Synthesizer V Studio 2/脚本目录"
 ```
 
-如果安装器提示运行时或侧边栏发生变化，请执行 **脚本 → 重新扫描**，然后
-再次启动 **SynthV Agent Bridge**。
+如果安装器提示 Bridge 运行时发生变化，请执行 **脚本 → 重新扫描**，然后
+再次启动 **SynthV Agent Bridge**。如果侧边栏发生变化，请先关闭并重新打开
+SynthV，再启动 Bridge；单独重新扫描可能不会重绘已经加载的侧边栏。
 
 ## 快速排障
 
@@ -256,8 +251,7 @@ npm run doctor -- --target "/Synthesizer V Studio 2/脚本目录"
 |---|---|
 | Bridge 状态 `B` 离线 | 在 SynthV 中运行 **Start SynthV Agent Bridge**。 |
 | MCP 状态 `M` 离线 | 重启或重新连接 Codex 任务。 |
-| 侧边栏缺失或版本不对 | 执行 **脚本 → 重新扫描**，然后重新启动 Bridge。 |
+| 侧边栏缺失或版本不对 | 关闭并重新打开 SynthV，然后启动 Bridge；单独重新扫描可能不会重绘已经加载的侧边栏。 |
 | 找不到 `node` 或 `npm` | 让 Codex 安装 Node.js LTS，然后重启终端或 Codex。 |
 | 写入返回 `STALE_*` | 只重新读取目标，不要重复提交旧请求。 |
 | 写入返回 `SYNTHV_SESSION_CHANGED` | SynthV 或 Bridge 已重启，缓存 Context 已自动清除。重新读取目标后，用新 Context 继续。 |
-| `Ctrl+Z` 撤销了侧边栏文字 | 先点击主编辑区，或使用 **编辑 → 撤销**。 |

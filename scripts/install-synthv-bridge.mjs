@@ -323,7 +323,7 @@ if (!suppliedTarget) {
     );
   } else if (sidebarChanged) {
     console.log(
-      "The side-panel script changed. Choose Scripts → Rescan in SynthV; Rescan stops persistent scripts, so then run Scripts → SynthV Agent Bridge → Start SynthV Agent Bridge once.",
+      "The side-panel script changed. Close and reopen SynthV to reload the native side-panel layout; Rescan alone may leave an already-rendered panel unchanged. Then run Scripts → SynthV Agent Bridge → Start SynthV Agent Bridge once.",
     );
   } else {
     console.log(

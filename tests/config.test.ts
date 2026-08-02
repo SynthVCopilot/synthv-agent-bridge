@@ -22,32 +22,14 @@ test("loadConfig builds all IPC paths from a shared directory", () => {
   assert.equal(config.paths.reloadFile.endsWith("synthv-agent-bridge.reload"), true);
   assert.equal(config.paths.installFile.endsWith("synthv-agent-bridge.install.json"), true);
   assert.equal(
-    config.paths.sidebarInstructionFile.endsWith(
-      "synthv-agent-bridge.sidebar.instruction.txt",
+    config.paths.sidebarClientStatusFile.endsWith(
+      "synthv-agent-bridge.sidebar.client-status.txt",
     ),
     true,
   );
   assert.equal(
-    config.paths.sidebarPreviewFile.endsWith(
-      "synthv-agent-bridge.sidebar.preview.json",
-    ),
-    true,
-  );
-  assert.equal(
-    config.paths.sidebarCommandFile.endsWith(
-      "synthv-agent-bridge.sidebar.command.txt",
-    ),
-    true,
-  );
-  assert.equal(
-    config.paths.sidebarHistoryFile.endsWith(
-      "synthv-agent-bridge.sidebar.history.json",
-    ),
-    true,
-  );
-  assert.equal(
-    config.paths.sidebarStateFile.endsWith(
-      "synthv-agent-bridge.sidebar.state.txt",
+    config.paths.sidebarRuntimeStatusFile.endsWith(
+      "synthv-agent-bridge.sidebar.runtime-status.txt",
     ),
     true,
   );

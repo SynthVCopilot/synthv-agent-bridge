@@ -30,6 +30,12 @@ This repository contains a TypeScript MCP stdio server and a persistent Synthesi
   `sv_review`. Detailed
   SynthV action handlers are internal definitions exposed just in time through
   `sv_describe`; do not expose them as standalone MCP tools.
+- Keep the optional native Sidebar connection-only: it may display Bridge/MCP
+  status and request an online Bridge reload, but it must not collect editing
+  instructions, publish previews, apply/dismiss writes, show task history, or
+  mutate project objects. Keep `sv_review` read-only and limited to Sidebar
+  runtime status; user review stays in the Agent conversation and confirmed
+  project writes go through `sv_command`.
 - Keep the responsibility boundary enforceable in code:
   - The Agent and user own intent, lyric/emotion/style interpretation, target
     choice, Vocal/Vocal Mode onboarding, and the requested musical values.

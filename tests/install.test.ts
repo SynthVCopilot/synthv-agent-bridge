@@ -275,6 +275,8 @@ test("offline installation never claims that hot reload succeeded", async (conte
   assert.match(result.stdout, /Bridge is not currently connected/u);
   assert.doesNotMatch(result.stdout, /Hot reload updated the current session/u);
   assert.match(result.stdout, /Choose Scripts → Rescan/u);
+  assert.match(result.stdout, /Close and reopen SynthV/u);
+  assert.match(result.stdout, /Rescan alone may leave/u);
   const installedDirectory = path.join(
     fixture,
     "scripts",

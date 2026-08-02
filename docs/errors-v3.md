@@ -18,7 +18,6 @@ raw fingerprint, lyrics, phoneme text, complete note list, or curve array.
 | `PROTOCOL_MISMATCH`, `BUILD_MISMATCH`, `BUILD_COHERENCE_UNKNOWN` | accepted/freshRead | No | Reinstall/reload the complete v3 component set |
 | `HOST_POSTCONDITION_FAILED` | verified | Possible | If `undoRequired`, perform exactly one SynthV Undo, then reread |
 | `PROJECT_WRITE_EXECUTION_FAILED`, `HOST_WRITE_FAILED` | mutated | Possible | Follow `undoRequired`; never blind-retry |
-| `SIDEBAR_PREVIEW_STALE` | contextResolved/review | No | Republish the preview from fresh state |
 | `INTERNAL_ERROR` | any | As reported | Use `traceId` and support diagnostics; follow Undo guidance |
 
 `expected` and `actual` raw fingerprints are private diagnostics. Public stale

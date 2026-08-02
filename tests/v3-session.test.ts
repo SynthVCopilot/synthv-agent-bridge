@@ -90,7 +90,7 @@ function toolJson(result: unknown): Record<string, unknown> {
   return JSON.parse(text as string) as Record<string, unknown>;
 }
 
-test("v3 public command returns a bounded structured failure for an unknown action", async (context) => {
+test("v3 public command ignores an optional Sidebar mismatch", async (context) => {
   const directory = await fs.mkdtemp(
     path.join(os.tmpdir(), "synthv-v3-unknown-command-test-"),
   );
@@ -103,6 +103,18 @@ test("v3 public command returns a bounded structured failure for an unknown acti
     directory,
   );
   await writeStatus(config, "session-unknown-command");
+  await fs.writeFile(
+    config.paths.sidebarRuntimeStatusFile,
+    [
+      "synthv-agent-bridge-sidebar-runtime-v3",
+      "state=running",
+      "version=0.1.4",
+      "buildId=old-optional-sidebar",
+      `updatedAtEpochMs=${Date.now()}`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();
   const server = createServer(config);

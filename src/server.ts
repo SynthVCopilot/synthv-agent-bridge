@@ -16,7 +16,6 @@ import {
   compactPhraseContextGuards,
   compactTransactionGuards,
   resolveAutomationGuardPayload,
-  resolveGuardedActionPayload,
   resolvePhraseCursorPayload,
   resolvePhonemeGuardPayload,
   resolveTransactionGuardPayload,
@@ -35,13 +34,14 @@ import {
   type LocalScoreImportResult,
   type ScorePreview,
 } from "./score-import.js";
-import {
-  SIDEBAR_PREVIEW_ACTIONS,
-  SidebarCoordinator,
-  TRANSACTION_STEP_ACTIONS,
-} from "./sidebar-coordinator.js";
+import { SidebarStatusMonitor } from "./sidebar-status-monitor.js";
 import { registerV3Facade } from "./v3-facade.js";
-import { assertV3CommandPolicyCatalog } from "./v3-command-policy.js";
+import {
+  assertV3CommandPolicyCatalog,
+  transactionEligibleActionNames,
+} from "./v3-command-policy.js";
+
+const TRANSACTION_STEP_ACTIONS = transactionEligibleActionNames();
 
 const indexSchema = z.number().int().min(1);
 const blickSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
@@ -444,13 +444,6 @@ const trackMixerInputSchema = z
     { message: "At least one mixer field must be changed." },
   );
 
-const sidebarPreviewChangeSchema = z.object({
-  label: z.string().min(1).max(200),
-  before: z.string().max(1000).optional(),
-  after: z.string().max(1000).optional(),
-  count: z.number().int().min(0).optional(),
-});
-
 const transactionStepSchema = z.object({
   action: z.enum(TRANSACTION_STEP_ACTIONS),
   payload: z
@@ -687,7 +680,7 @@ async function runTool(operation: () => Promise<unknown>): Promise<CallToolResul
 export function createServer(config: BridgeConfig): McpServer {
   const client = new FileIpcClient(config);
   const guardTokens = new GuardTokenStore();
-  const sidebar = new SidebarCoordinator(config, client);
+  const sidebar = new SidebarStatusMonitor(config);
   const server = new McpServer(
     {
       name: SERVER_NAME,
@@ -696,7 +689,7 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     {
       instructions:
-        "Use sv_describe for unfamiliar capabilities. Query only the intended target with contextMode=writeIntent before sv_command. Indices are 1-based. Guards remain private, shared Group content fails closed, and one logical command uses one SynthV Undo boundary. Use sv_review for optional Sidebar confirmation.",
+        "Use sv_describe for unfamiliar capabilities. Query only the intended target with contextMode=writeIntent before sv_command. Indices are 1-based. Guards remain private, shared Group content fails closed, and one logical command uses one SynthV Undo boundary. sv_review reports the optional Sidebar runtime status.",
     },
   );
   const actionTools = new Map<string, RegisteredTool>();
@@ -760,113 +753,18 @@ export function createServer(config: BridgeConfig): McpServer {
   );
 
   server.registerTool(
-    "sidebar_get_request",
-    {
-      title: "Get SynthV Sidebar Request",
-      description:
-        "Read the latest instruction and selection summary submitted from the native SynthV side panel. After reading current project state, publish one guarded write preview instead of applying the edit directly.",
-      inputSchema: {},
-      annotations: {
-        readOnlyHint: true,
-        openWorldHint: false,
-      },
-    },
-    async () => runTool(async () => sidebar.getInstruction()),
-  );
-
-  server.registerTool(
     "sidebar_status",
     {
       title: "Inspect SynthV Sidebar Status",
       description:
-        "Read Bridge/MCP diagnostics, the current sidebar task state, IPC location, recent summaries, and the latest coordinator error.",
+        "Read the MCP heartbeat and optional native side-panel runtime status.",
       inputSchema: {},
       annotations: {
         readOnlyHint: true,
         openWorldHint: false,
       },
     },
-    async () => runTool(async () => sidebar.getDiagnostics()),
-  );
-
-  server.registerTool(
-    "sidebar_publish_preview",
-    {
-      title: "Publish SynthV Sidebar Preview",
-      description:
-        "Publish one fully specified, fingerprint-guarded SynthV write or transaction for review in the native side panel. This does not edit the project; the user must click Apply in SynthV.",
-      inputSchema: {
-        requestId: z
-          .string()
-          .min(1)
-          .max(200)
-          .optional()
-          .describe("Request ID returned by sidebar_get_request."),
-        summary: z
-          .string()
-          .min(1)
-          .max(1000)
-          .describe("Concise human-readable description of the complete edit."),
-        details: z
-          .string()
-          .max(8000)
-          .optional()
-          .describe("Optional review details, safety constraints, and expected changes."),
-        changes: z
-          .array(sidebarPreviewChangeSchema)
-          .max(100)
-          .optional()
-          .describe(
-            "Structured before/after/count rows shown in the SynthV preview.",
-          ),
-        risks: z
-          .array(z.string().min(1).max(1000))
-          .max(100)
-          .optional()
-          .describe(
-            "Staleness, selection, range, or other review warnings shown prominently.",
-          ),
-        action: z.enum(SIDEBAR_PREVIEW_ACTIONS),
-        payload: z
-          .record(z.string(), z.unknown())
-          .describe(
-            "Complete Bridge payload, including all current UUIDs and fingerprints required by the selected write action.",
-          ),
-        replace: z
-          .boolean()
-          .default(false)
-          .describe("Replace an existing pending preview when true."),
-      },
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: false,
-        idempotentHint: false,
-        openWorldHint: false,
-      },
-    },
-    async (input) =>
-      runTool(async () => {
-        const payload =
-          input.action === "apply_transaction"
-            ? resolveTransactionGuardPayload(input.payload, guardTokens)
-            : resolveGuardedActionPayload(
-                input.action,
-                input.payload,
-                guardTokens,
-              );
-        return sidebar.publishPreview({
-          ...(input.requestId === undefined
-            ? {}
-            : { requestId: input.requestId }),
-          summary: input.summary,
-          ...(input.details === undefined ? {} : { details: input.details }),
-          ...(input.changes === undefined ? {} : { changes: input.changes }),
-          ...(input.risks === undefined ? {} : { risks: input.risks }),
-          action: input.action,
-          payload,
-          replace: input.replace,
-        });
-      }),
+    async () => runTool(async () => sidebar.getStatus()),
   );
 
   server.registerTool(

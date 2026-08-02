@@ -436,8 +436,6 @@ local STOP_FILE = PREFIX .. ".stop"
 local RELOAD_FILE = PREFIX .. ".reload"
 local INSTALL_FILE = PREFIX .. ".install.json"
 local SESSION_FILE = PREFIX .. ".session.json"
-local SIDEBAR_ACTIVITY_FILE = PREFIX .. ".sidebar.activity.txt"
-local SIDEBAR_HISTORY_FILE = PREFIX .. ".sidebar.history.json"
 
 math.randomseed(os.time() + math.floor(os.clock() * 1000000))
 local SESSION_TOKEN = string.format("%d-%d-%06d", os.time(), math.floor(os.clock() * 1000000), math.random(0, 999999))
@@ -794,41 +792,6 @@ end
 
 local function isoTimestamp()
     return os.date("!%Y-%m-%dT%H:%M:%SZ")
-end
-
-local function writeSidebarActivity(action)
-    local now = os.time() * 1000
-    local history = readJson(SIDEBAR_HISTORY_FILE)
-    if not json.isArray(history) then history = json.array() end
-    history[#history + 1] = {
-        id = SESSION_TOKEN .. "-" .. tostring(now),
-        status = "success",
-        action = action,
-        summary = action,
-        updatedAtEpochMs = now
-    }
-    while #history > 20 do table.remove(history, 1) end
-    writeJsonAtomically(SIDEBAR_HISTORY_FILE, history)
-
-    local lines = {
-        "synthv-agent-bridge-sidebar-activity-v1",
-        "status=success",
-        "action=" .. action,
-        "updatedAtEpochMs=" .. tostring(now),
-        "最近操作：已完成",
-        action,
-        "撤销：先点击 SynthV 主编辑区，再按 Ctrl+Z；也可使用“编辑 → 撤销”。"
-    }
-    if #history > 1 then
-        lines[#lines + 1] = ""
-        lines[#lines + 1] = "历史："
-        for index = math.max(1, #history - 5), #history - 1 do
-            lines[#lines + 1] = "✓ " .. tostring(history[index].summary)
-        end
-    end
-    lines[#lines + 1] = ""
-    local content = table.concat(lines, "\n")
-    writeFileAtomically(SIDEBAR_ACTIVITY_FILE, content)
 end
 
 local function normalizeError(errorValue)
@@ -12266,7 +12229,6 @@ local function processRequestFile()
                 and processedPayload
                 and (processedPayload.operation == "set" or processedPayload.operation == "remove")))
         then
-            writeSidebarActivity(processedAction)
         end
         writeResponse(requestId, traceId, true, resultOrError, telemetry)
     else

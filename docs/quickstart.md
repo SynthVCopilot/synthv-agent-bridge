@@ -199,21 +199,15 @@ Do not manually change the same target while a Bridge write is running. Each
 successful write normally creates one SynthV undo record. To undo, focus the
 main editor and press **Ctrl+Z**, or choose **Edit → Undo**.
 
-## 8. Optional side-panel review flow
+## 8. Optional connection side panel
 
-The **SynthV Agent** side panel provides explicit confirmation:
-
-1. Select notes or a Group in SynthV.
-2. Enter an instruction in the side panel.
-3. Click **Copy & queue**.
-4. Paste the copied handoff prompt into Codex.
-5. Let Codex read fresh state and publish a guarded preview.
-6. Review the changes and risks in SynthV.
-7. Click **Apply** or **Dismiss**.
-8. Listen to the result and undo or continue with the next phrase.
-
-The side panel does not contact Codex by itself; the copied handoff prompt must
-be pasted into a Codex task.
+The **SynthV Agent** side panel shows Bridge (`B`) and MCP (`M`) on separate
+rows plus **Restart Bridge**. It does not accept editing instructions or apply
+project changes. A disabled Restart Bridge button means the panel has not confirmed a live
+Bridge; start it from **Scripts → SynthV Agent Bridge → Start SynthV Agent
+Bridge**. Its permanent warning explains that Abort All Running Scripts freezes
+the displayed states. Continue giving requests and reviewing plans in the
+Codex task.
 
 ## 9. Vocal Mode edits
 
@@ -246,7 +240,7 @@ For later sessions:
    anything that must remain unchanged. If the request uses Vocal Modes, also
    select the Vocal and provide its complete panel screenshot or exact mode
    names.
-5. Review the small preview, apply it, and listen to the result.
+5. Review the small plan in Codex, apply it, and listen to the result.
 
 ## Updating an existing installation
 
@@ -260,8 +254,10 @@ npm run install:synthv -- --target "/path/to/Synthesizer V Studio 2/scripts"
 npm run doctor -- --target "/path/to/Synthesizer V Studio 2/scripts"
 ```
 
-If the installer reports that the runtime or side panel changed, choose
-**Scripts → Rescan**, then start **SynthV Agent Bridge** again.
+If the installer reports that the Bridge runtime changed, choose **Scripts →
+Rescan**, then start **SynthV Agent Bridge** again. If the side panel changed,
+close and reopen SynthV before starting the Bridge; Rescan alone may leave an
+already-rendered panel layout unchanged.
 
 ## Quick troubleshooting
 
@@ -269,8 +265,7 @@ If the installer reports that the runtime or side panel changed, choose
 |---|---|
 | Bridge status (`B`) is offline | Run **Start SynthV Agent Bridge** in SynthV. |
 | MCP status (`M`) is offline | Restart or reconnect the Codex task. |
-| Side panel is missing or outdated | Run **Scripts → Rescan**, then restart the Bridge. |
+| Side panel is missing or outdated | Close and reopen SynthV, then start the Bridge. Rescan alone may not redraw an already-loaded panel. |
 | `node` or `npm` is not found | Ask Codex to install Node.js LTS, then restart the terminal/Codex. |
 | A write returns `STALE_*` | Read only the target again; do not retry the old payload. |
 | A write returns `SYNTHV_SESSION_CHANGED` | SynthV or the Bridge restarted; cached contexts were cleared automatically. Read the target again, then continue from the fresh context. |
-| Undo affects a side-panel text field | Focus the main editor first, or use **Edit → Undo**. |

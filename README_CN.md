@@ -63,7 +63,7 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 | 本地曲谱导入 | 检查明确提供的本地 MusicXML（`.xml`、`.musicxml`、`.mxl`）或 SMF MIDI（`.mid`、`.midi`），再通过受保护音符写入路径导入一个已确认权利的单旋律声部。不接受 URL 或 `.svp`。 |
 | 时序、编辑器与播放 | 转换秒、四分音符和 blick；编辑速度/拍号；控制选区、视口、剪贴板、网格吸附、坐标、混音器和播放。 |
 | 安全编辑 | 使用最新指纹、带类型/作用域的 `contextId` 和 Guard Token 保护写入；完整预检独立事务步骤，按需解析正向依赖；创建一个 SynthV 撤销记录，并可选保留受保护回滚计划。 |
-| 审核与本地隐私 | 在可选原生侧边栏中审核、应用、放弃或取消受保护预览。文件 IPC 保持本地：Bridge 不解析 `.svp` 文件、不打开网络端口，也不调用 AI API。 |
+| 连接与本地隐私 | 在可选原生侧边栏中监视 Bridge/MCP 心跳并热重载在线 Bridge。文件 IPC 保持本地：Bridge 不解析 `.svp` 文件、不打开网络端口，也不调用 AI API。 |
 
 > 当前稳定能力面为避免已复现的 SynthV 2.2.1 原生崩溃，在工程 IPC 前禁用
 > isolated Group clone、Note Group/Track/Track-shell clone、和声轨以及
@@ -199,9 +199,9 @@ npm run install:synthv -- --target "/Synthesizer V Studio 2/脚本目录"
 
 也可以在运行 `npm run install:synthv` 前，把 `SYNTHV_SCRIPTS_DIR` 设置为
 脚本目录。安装器会创建 `SynthV Agent Bridge` 子文件夹。侧边栏文件发生
-变化时，请选择 **脚本 → 重新扫描**。SynthV 随后会把 **SynthV Agent**
-加载为自定义侧边栏区域。重新扫描会停止常驻脚本，因此之后需要再次运行
-一次 **Start SynthV Agent Bridge**。
+变化时，请关闭并重新打开 SynthV，让它重新加载 **SynthV Agent** 自定义
+侧边栏区域。单独执行 **脚本 → 重新扫描** 可能会保留已经绘制的旧布局。
+重新打开后，需要再次运行一次 **Start SynthV Agent Bridge**。
 
 Bridge 和所有普通 MCP 读写工具都不依赖侧边栏。如果只需核心安装，可
 添加 `--without-sidebar`；它会跳过可选侧边栏，但不会删除已有安装：
@@ -213,8 +213,8 @@ npm run install:synthv -- --target "/脚本目录" --without-sidebar
 如果支持热重载的 Bridge 会话正在运行，安装器会请求它加载复制后的 Lua
 文件，并等待新的会话心跳。此流程使用 Bridge 的文件 IPC 和 Lua
 `loadfile()`，不使用 UI 自动化或 Hook。使用 `--no-reload` 可以只复制而
-不请求重载。首次安装支持热重载的版本时，仍需手动启动一次。侧边栏需要
-重新扫描时，当前 Bridge 也会停止，因此扫描后必须再次手动启动。工程或
+不请求重载。首次安装支持热重载的版本时，仍需手动启动一次。侧边栏布局
+发生变化时，需要关闭并重新打开 SynthV，因此也要再次手动启动 Bridge。工程或
 应用重启后，SynthV 可能复用缓存的菜单脚本代码；所以 Bridge 运行时本身
 发生变化时，安装器也会要求在下次手动启动前执行一次
 **脚本 → 重新扫描**。在此之前，热重载会保持当前会话可用。
@@ -227,9 +227,10 @@ npm run install:synthv -- --target "/脚本目录" --without-sidebar
 脚本 → SynthV Agent Bridge → Start SynthV Agent Bridge
 ```
 
-SynthV 运行期间，该脚本会保持活动并写入心跳。需要停止时，运行
-**Stop SynthV Agent Bridge**，或使用 SynthV 的**中止所有正在运行的脚本**
-命令。
+SynthV 运行期间，该脚本会保持活动并写入心跳。只停止 Bridge 时，请运行
+**Stop SynthV Agent Bridge**；侧边栏会继续运行并显示 B 离线。SynthV 的
+**中止所有正在运行的脚本**也会终止侧边栏本身，所以残留面板会冻结，状态和
+按钮都无法再更新；发生这种情况后请重新打开 SynthV。
 
 ### 4. 连接 MCP 宿主
 
@@ -252,26 +253,15 @@ startup_timeout_sec = 120
 **STDIO** 服务器的本地 MCP 宿主也可以使用同一条
 `node .../dist/src/cli.js` 命令。
 
-### 可选的原生侧边栏工作流
+### 可选的原生连接面板
 
-v0.1.4 侧边栏是可选的本地审核控制台。它有意保持 Bridge 不联网，也不会
-自行调用 AI API。它以紧凑布局启动，显示连接/任务状态；**Show details**
-可以展开上下文、指令、活动和历史记录控件。即使处于紧凑模式，待确认
-预览也会自动显示：
-
-1. 在 SynthV 中选中音符或 Group，并在 **SynthV Agent** 中输入指令。
-2. 点击 **Copy & queue**。面板会把请求写入本地 IPC 目录，并把交接提示
-   复制到宿主剪贴板。
-3. 把提示粘贴到已连接的 Codex 任务。
-4. Codex 读取最新 SynthV 状态，并把一个带指纹保护的写入或完整事务发送
-   回面板，其中包含结构化变更和风险。
-5. 在 SynthV 中审核预览，然后点击 **Apply** 或 **Dismiss**。
-
-Apply 命令由 Node 协调器消费，并通过 MCP 工具使用的同一个串行
-`FileIpcClient` 发送。侧边栏绝不会直接编辑工程对象。SynthV 公开脚本 API
-可以创建撤销记录，但不能调用撤销。Bridge 成功写入后，请点击主编辑区并
-使用 **Ctrl+Z**；如果焦点仍在侧边栏，也可以选择
-**编辑 → 撤销**。参阅 [docs/sidebar.md](docs/sidebar.md)。
+侧边栏分行显示 Bridge（`B`）和 MCP（`M`）连接状态，并提供整行的
+**重启 Bridge** 按钮。
+它不再接收指令、展示变更预览或执行写入。面板只有观察到新心跳后才会把
+`B` 显示为在线；重启按钮会等待新的 Session。面板会固定提示：中止所有
+运行脚本后，状态会停留在最后一次结果，状态不可信；建议使用 Stop SynthV
+Agent Bridge 单独停止 Bridge。离线 Bridge 仍需从脚本菜单运行 Start。参阅
+[docs/sidebar.md](docs/sidebar.md)。
 
 ### 5. 验证连接
 
@@ -297,7 +287,7 @@ Apply 命令由 Node 协调器消费，并通过 MCP 工具使用的同一个串
 | `sv_query` | 执行读取投影，并创建 `readOnly` 或 `writeIntent` Context。 |
 | `sv_command` | 执行经过验证的编辑、删除、复制、导入或有界批处理。 |
 | `sv_ui` | 控制选区、视口、剪贴板、对话框、吸附、坐标或播放。 |
-| `sv_review` | 发布或检查可选侧边栏预览；由用户在 SynthV 中应用或放弃。 |
+| `sv_review` | 读取可选侧边栏的连接和运行状态。 |
 
 正常调音顺序：
 
@@ -328,9 +318,7 @@ Guard，会安全失败，而不会静默改换目标。`readOnly` Context 不�
 | 操作 | 权限 | 用途 |
 |---|---:|---|
 | `bridge_status` | 读取 | 无需往返即可读取心跳。 |
-| `sidebar_get_request` | 读取 | 读取原生侧边栏排队的最新指令和选区摘要。 |
-| `sidebar_status` | 读取 | 读取 Bridge/MCP 诊断、任务状态、IPC 路径、近期摘要和最新协调器错误。 |
-| `sidebar_publish_preview` | 控制 | 发布一项完整受保护写入或事务、结构化变更和风险，供用户在 SynthV 中确认。 |
+| `sidebar_status` | 读取 | 读取 MCP 心跳和可选原生侧边栏运行状态。 |
 | `ping` | 读取 | 测试完整的 Node → Lua → Node 链路。 |
 | `reload_bridge` | 控制 | 在当前脚本会话中重载已安装的 Lua Bridge。 |
 | `get_host_info` | 读取 | 读取 SynthV 宿主版本、操作系统、语言、工程和 IPC 信息。 |
@@ -438,8 +426,8 @@ Guard，会安全失败，而不会静默改换目标。`readOnly` Context 不�
   `fingerprint`。
 - 紧凑自动化读取返回 `guardToken`；把它作为 `expectedGuardToken` 传给
   `set_automation_points`。
-- 这些 Guard Token 也可用于 `apply_transaction` 步骤和
-  `sidebar_publish_preview` 负载；计划到达文件 IPC 前会先完成解析。
+- 这些 Guard Token 也可用于 `apply_transaction` 步骤；请求到达文件 IPC
+  前会先完成解析。
 - 紧凑写入响应返回数量和替换后的 Guard Token，而不是完整音符或自动化
   曲线。
 
@@ -615,11 +603,8 @@ Codex 配置。添加 `--json` 可获得机器可读输出。它不会修改工�
   **编辑 → 撤销**。
 - 回滚计划设计仍绑定当前工程/会话；当前 `rollback_transaction` 与 apply
   一起处于实验性禁用状态。
-- 面板无法自行启动 Codex 回合。**Copy & queue** 会写入本地请求，并把
-  交接提示复制到剪贴板，仍需用户粘贴。
-- SynthV 公开脚本 API 不提供 Undo 命令。面板会显示最新写入，并提示用户
-  先点击主编辑区再按 **Ctrl+Z**；无论焦点在哪里都可使用
-  **编辑 → 撤销**。
+- 可选侧边栏仅显示连接状态。请求、审核和撤销指导都留在 Agent 对话与
+  SynthV 编辑器中。
 - SynthV 公开脚本 API 不支持工程保存、音频渲染、按显示名称选择已安装
   歌手数据库、读取 Vocal 身份或 Voice Panel 音阶/模式设置。
   `clone_track_shell` 的 schema 描述宿主克隆 Vocal 上下文语义，但当前宿主

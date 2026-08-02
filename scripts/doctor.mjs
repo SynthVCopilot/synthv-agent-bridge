@@ -334,7 +334,6 @@ record(
 const residualFiles = [];
 for (const suffix of [
   ".processing.json",
-  ".sidebar.command.processing.txt",
   ".reload",
   ".stop",
 ]) {

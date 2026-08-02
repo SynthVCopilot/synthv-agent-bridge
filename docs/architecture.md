@@ -22,8 +22,8 @@ MCP client (Codex / compatible local stdio host)
        Current SynthV project and UI
 
   SynthVAgentSidebar.lua (optional native panel)
-                 │ instruction/preview/command text sideband
-                 └──────── TypeScript sidebar coordinator
+                 │ connection heartbeats + reload request
+                 └──────── TypeScript sidebar status monitor
 ```
 
 The TypeScript process never parses or rewrites `.svp` files. Its optional local
@@ -47,23 +47,17 @@ The channel contains a single in-flight transaction:
 - `synthv-agent-bridge.session.json`
 - `synthv-agent-bridge.stop`
 
-The optional v0.1.4 side panel uses a separate local sideband:
+The optional side panel now uses only two status files:
 
-- `synthv-agent-bridge.sidebar.instruction.txt`
-- `synthv-agent-bridge.sidebar.preview.json` (Node-private structured plan)
-- `synthv-agent-bridge.sidebar.preview.txt` (display-only panel text)
-- `synthv-agent-bridge.sidebar.command.txt`
-- `synthv-agent-bridge.sidebar.activity.txt`
 - `synthv-agent-bridge.sidebar.client-status.txt`
-- `synthv-agent-bridge.sidebar.state.txt`
-- `synthv-agent-bridge.sidebar.history.json`
+- `synthv-agent-bridge.sidebar.runtime-status.txt`
 
-The panel never writes the project. An Apply click creates a sideband command;
-the TypeScript coordinator claims it and submits the stored action through the
-same serialized `FileIpcClient` and preferred v2 request channel as a normal
-MCP call.
-None of these sideband files or the panel script is required for the core
-stdio server, file IPC executor, reads, writes, transactions, or Guard checks.
+It reads the Bridge heartbeat, shows the Bridge (`B`) and MCP (`M`) connection
+states, and can write the ordinary `.reload` flag for **Restart Bridge**. It does
+not read project objects or carry instructions, previews, write commands, or
+task history. Review stays in the Agent conversation and writes use
+`sv_command`. The panel and these status files are not required for core MCP,
+file IPC, reads, writes, transactions, or Guard checks.
 
 The Node side serializes calls and owns the lock. It writes requests using a temporary file plus rename. The Lua side claims a request by renaming it to the processing filename, executes it on SynthV's script thread, and publishes one correlated response.
 

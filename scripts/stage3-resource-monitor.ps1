@@ -34,7 +34,6 @@ $ipcPrefix = [IO.Path]::Combine($ipcDirectory, "synthv-agent-bridge")
 $statusFile = "$ipcPrefix.status.json"
 $residualSuffixes = @(
     ".processing.json",
-    ".sidebar.command.processing.txt",
     ".reload",
     ".stop"
 )

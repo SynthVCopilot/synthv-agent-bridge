@@ -10,10 +10,6 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { loadConfig } from "../src/config.js";
 import { createServer } from "../src/server.js";
 import {
-  SIDEBAR_PREVIEW_ACTIONS,
-  TRANSACTION_STEP_ACTIONS,
-} from "../src/sidebar-coordinator.js";
-import {
   assertV3CommandPolicyCatalog,
   commandPolicyActionNames,
   commandPolicyFor,
@@ -52,7 +48,7 @@ test("v3 command policy classifies every command with the required safety dimens
   );
 });
 
-test("v3 command policy explicitly classifies runtime and review-state mutations", () => {
+test("v3 command policy explicitly classifies runtime mutations", () => {
   assert.deepEqual(commandPolicyFor("reload_bridge"), {
     category: "runtime",
     targetAggregates: ["RuntimeState"],
@@ -60,15 +56,6 @@ test("v3 command policy explicitly classifies runtime and review-state mutations
     ownershipPolicies: ["runtimeState"],
     expectedEffectPolicy: "notApplicable",
     postconditionStrategy: "sessionTokenChange",
-    transactionEligibility: "notEligible",
-  });
-  assert.deepEqual(commandPolicyFor("sidebar_publish_preview"), {
-    category: "review",
-    targetAggregates: ["ReviewState"],
-    contextKinds: [],
-    ownershipPolicies: ["reviewState"],
-    expectedEffectPolicy: "notApplicable",
-    postconditionStrategy: "reviewStateSnapshot",
     transactionEligibility: "notEligible",
   });
 });
@@ -107,14 +94,8 @@ test("mixed Group commands declare every aggregate and ownership boundary", () =
   }
 });
 
-test("Sidebar transaction admission is derived from command policy eligibility", () => {
+test("transaction admission is derived from command policy eligibility", () => {
   const eligible = transactionEligibleActionNames();
-  assert.deepEqual(TRANSACTION_STEP_ACTIONS, eligible);
-  assert.deepEqual(SIDEBAR_PREVIEW_ACTIONS, [
-    ...eligible,
-    "apply_transaction",
-    "rollback_transaction",
-  ]);
   const eligibleSet = new Set<string>(eligible);
   assert.ok(eligibleSet.has("set_track_mixer"));
   assert.equal(eligibleSet.has("import_monophonic_score"), false);

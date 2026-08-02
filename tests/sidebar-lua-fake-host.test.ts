@@ -60,15 +60,6 @@ test("Sidebar Fake Host exercises the native panel lifecycle", (context) => {
   }
 });
 
-test("Sidebar refresh failures report their stage without stopping polling", (context) => {
-  const output = runSidebarFakeHost(context, {
-    SIDEBAR_TEST_FAIL_TASK_STATE_ONCE: "1",
-  });
-  if (output !== undefined) {
-    assert.match(output, /CASE:sidebar-refresh-failure-contained/u);
-  }
-});
-
 test("Sidebar retries a Bridge badge update after a transient widget failure", (context) => {
   const output = runSidebarFakeHost(context, {
     SIDEBAR_TEST_FAIL_BRIDGE_STATUS_ONCE: "1",
