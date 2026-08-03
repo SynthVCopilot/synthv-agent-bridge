@@ -1,4 +1,4 @@
-# Copy this table into ~/.codex/config.toml, then replace the absolute path.
+# Reference project-scoped Codex profile. Prefer the repository's .codex/config.toml.
 [mcp_servers.synthv-agent-bridge]
 command = "node"
 args = ["/absolute/path/to/synthv-agent-bridge/dist/src/cli.js"]

@@ -48,9 +48,10 @@ Before score import it asks the user to identify an authorized local source,
 inspects the selectable lane and overlap diagnostics, and requests import only
 after explicit rights confirmation. It must not treat search results, an online
 URL, or file availability as permission.
-The bundled Twinkle Star Demo remains Agent-owned orchestration: its explicit
-score and tuning recipe live in `examples/twinkle-star-demo.json`, while the
-MCP and Lua layers continue to validate and execute only supplied values.
+The Twinkle Star Demo remains Agent-owned orchestration: its explicit score and
+tuning recipe live with the portable `synthv-agent` skill in
+[`SynthVCopilot/SKILLS`](https://github.com/SynthVCopilot/SKILLS), while the MCP
+and Lua layers continue to validate and execute only supplied values.
 
 ### TypeScript MCP
 

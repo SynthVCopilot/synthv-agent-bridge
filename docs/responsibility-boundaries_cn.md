@@ -44,9 +44,10 @@ TypeScript 或 Lua 校验、宿主写后条件验证，也不会跳过恢复流�
 导入曲谱前，Agent 要求用户提供有权使用的本地来源，先检查可选声部和重叠
 诊断，只有获得明确权利确认后才请求导入。搜索结果、在线 URL 或文件可访问
 本身都不代表许可。
-内置《小星星》Demo 仍由 Agent 编排：明确的曲谱和调音模板位于
-`examples/twinkle-star-demo.json`，MCP 与 Lua 继续只校验和执行 Agent
-提供的数值。
+《小星星》Demo 仍由 Agent 编排：明确的曲谱和调音模板随可移植
+`synthv-agent` 技能存放在
+[`SynthVCopilot/SKILLS`](https://github.com/SynthVCopilot/SKILLS)，MCP 与 Lua
+继续只校验和执行 Agent 提供的数值。
 
 ### TypeScript MCP
 

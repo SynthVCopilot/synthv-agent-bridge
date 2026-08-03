@@ -14,6 +14,15 @@ const EXPECTED_PROTOCOL_VERSION = 3;
 const argumentsList = process.argv.slice(2);
 const jsonOutput = argumentsList.includes("--json");
 const targetFlagIndex = argumentsList.indexOf("--target");
+const hostFlagIndex = argumentsList.indexOf("--host");
+const selectedHost = hostFlagIndex >= 0 ? argumentsList[hostFlagIndex + 1] : "core";
+const supportedHosts = new Set(["core", "codex", "claude", "all"]);
+if (!supportedHosts.has(selectedHost)) {
+  process.stderr.write(
+    `Unsupported --host value ${JSON.stringify(selectedHost)}; use core, codex, claude, or all.\n`,
+  );
+  process.exit(2);
+}
 const suppliedTarget =
   targetFlagIndex >= 0
     ? argumentsList[targetFlagIndex + 1]
@@ -108,8 +117,8 @@ async function newestMtimeMs(files) {
 
 record(
   "package-version",
-  expectedVersion === "0.2.0" ? "ok" : "error",
-  `Package version is ${expectedVersion}; this release line must remain 0.2.0.`,
+  expectedVersion === "0.3.0" ? "ok" : "error",
+  `Package version is ${expectedVersion}; this release line must remain 0.3.0.`,
 );
 
 const componentBuildIdentity = await readComponentBuildIdentity(repositoryRoot);
@@ -168,7 +177,7 @@ record(
   buildFresh ? "ok" : "error",
   buildFresh
     ? "Compiled MCP build is present and newer than its runtime source inputs."
-    : "Compiled MCP build is missing or stale; run npm run build, then restart/reconnect the Codex MCP server.",
+    : "Compiled MCP build is missing or stale; run npm run build, then restart or reconnect the MCP host.",
   {
     buildInfoFile,
     buildMtimeMs: buildInfoStat?.mtimeMs ?? null,
@@ -293,7 +302,7 @@ record(
   "mcp-heartbeat",
   clientRunningAndFresh ? "ok" : "warning",
   clientStatus === null
-    ? "MCP sidebar heartbeat is missing; restart or reconnect the Codex MCP server."
+    ? "MCP sidebar heartbeat is missing; restart or reconnect the MCP host."
     : `MCP ${lineValue(clientStatus, "version") ?? "?"}, state ${
         lineValue(clientStatus, "state") ?? "unknown"
   }.`,
@@ -321,7 +330,7 @@ record(
     ? "A fresh running MCP process is required to verify its capability fingerprint."
     : capabilityMatches && runningBuildMatches
       ? "Running MCP build and capabilities match the current compiled build."
-      : "Running MCP build or capabilities are stale or unknown; restart/reconnect the Codex MCP server.",
+      : "Running MCP build or capabilities are stale or unknown; restart or reconnect the MCP host.",
   {
     expectedBuildFingerprint,
     runningBuildFingerprint: runningBuildFingerprint ?? null,
@@ -420,15 +429,36 @@ if (suppliedTarget) {
   );
 }
 
-const codexConfigPath = path.join(os.homedir(), ".codex", "config.toml");
-const codexConfig = await readText(codexConfigPath);
-record(
-  "codex-config",
-  codexConfig?.includes(SERVER_NAME) ? "ok" : "warning",
-  codexConfig?.includes(SERVER_NAME)
-    ? "Codex config contains a synthv-agent-bridge entry."
-    : `No synthv-agent-bridge entry was found in ${codexConfigPath}.`,
-);
+if (selectedHost === "codex" || selectedHost === "all") {
+  const codexConfigPath = path.join(repositoryRoot, ".codex", "config.toml");
+  const codexConfig = await readText(codexConfigPath);
+  record(
+    "codex-project-config",
+    codexConfig?.includes(SERVER_NAME) && codexConfig.includes("dist/src/cli.js")
+      ? "ok"
+      : "warning",
+    codexConfig?.includes(SERVER_NAME) && codexConfig.includes("dist/src/cli.js")
+      ? "Project-scoped Codex config contains the synthv-agent-bridge command."
+      : `No usable project-scoped synthv-agent-bridge entry was found in ${codexConfigPath}.`,
+  );
+}
+
+if (selectedHost === "claude" || selectedHost === "all") {
+  const claudeConfigPath = path.join(repositoryRoot, ".mcp.json");
+  const claudeConfig = await readJson(claudeConfigPath);
+  const claudeServer = claudeConfig?.mcpServers?.[SERVER_NAME];
+  const claudeConfigMatches =
+    claudeServer?.command === "node" &&
+    Array.isArray(claudeServer.args) &&
+    claudeServer.args.includes("dist/src/cli.js");
+  record(
+    "claude-project-config",
+    claudeConfigMatches ? "ok" : "warning",
+    claudeConfigMatches
+      ? "Project-scoped Claude Code config contains the synthv-agent-bridge command."
+      : `No usable project-scoped synthv-agent-bridge entry was found in ${claudeConfigPath}.`,
+  );
+}
 
 try {
   await access(ipcDirectory);
@@ -446,6 +476,7 @@ if (jsonOutput) {
     `${JSON.stringify(
       {
         version: expectedVersion,
+        host: selectedHost,
         ok: !checks.some((check) => check.status === "error"),
         checks,
       },

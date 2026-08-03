@@ -8,20 +8,17 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 
 **Video demo:** [Watch SynthV Agent Bridge on Bilibili](https://www.bilibili.com/video/BV1kU3P6LEoF)
 
-> New here? Follow the [Quickstart](docs/quickstart.md). Codex can handle most
-> setup steps for you, including environment checks, Node.js installation when
-> permitted, dependency installation, the build, SynthV script installation,
-> MCP registration, and diagnostics.
+> New here? Follow the host-neutral [Quickstart](docs/quickstart.md), then choose
+> the [Codex](docs/hosts/codex.md) or
+> [Claude Code](docs/hosts/claude-code.md) project profile.
 > 中文用户请参阅[中文快速开始](docs/quickstart_cn.md)；环境检查、依赖与
-> Node.js 安装、构建、SynthV 脚本安装、MCP 注册和诊断等大部分工作都可以
-> 交给 Codex 完成。
+> Node.js 安装、构建、SynthV 脚本安装与诊断均不依赖具体 Agent 宿主。
 
 > [!TIP]
-> First connection? Reply **`Run the Twinkle Star demo.`** Codex will explain
-> each stage with a short heading, create an isolated 42-note Demo Group, pause
-> once for you to select its Vocal and provide every exact Vocal Mode name,
-> then automatically tune, verify, and loop the song. Existing project material
-> is not modified. See the [guided Demo](docs/twinkle-star-demo.md).
+> The optional guided Twinkle Star demo and Agent operating rules are now
+> maintained in the separate
+> [`synthv-copilot` skill plugin](https://github.com/SynthVCopilot/SKILLS).
+> This Runtime repository contains no startup prompt or mandatory Agent workflow.
 
 > [!IMPORTANT]
 > Because SynthV's official scripting API cannot read the current Vocal
@@ -36,7 +33,8 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 > changing Vocals, capture the new Vocal's complete panel or type all of its
 > singing-style names again; do not reuse the previous Vocal's list.
 
-> Status: **v0.2.0 / protocol v3 (reduced-stable surface)**. The six-tool semantic Facade,
+> Status: **v0.3.0 / protocol v3 (reduced-stable surface)**. This release separates
+> the host-neutral Runtime from portable Agent skills while keeping the six-tool semantic Facade,
 > typed Query Contexts, compact Command outcomes, component build-coherence
 > checks, Query Projector, common Command Kernel, semantic write-policy
 > catalog, aggregate tuning, and dependent transaction recovery are
@@ -153,7 +151,7 @@ panel.
 ## Architecture
 
 ```text
-Codex / another local stdio MCP host
+Codex / Claude Code / another local stdio MCP host
                     │
                     │ MCP over stdio
                     ▼
@@ -179,7 +177,7 @@ notes through the same guarded Lua `add_notes` path. It never parses `.svp`.
 
 - Synthesizer V Studio **2 Pro 2.1.2 or later**.
 - Node.js **20.10 or later**.
-- An MCP host that supports local stdio servers, such as Codex CLI or another compatible local client.
+- An MCP host that supports local stdio servers. Codex and Claude Code have maintained project profiles in this repository.
 
 This project targets the scripting environment in Synthesizer V Studio 2 Pro; it does not target the Basic edition.
 
@@ -187,8 +185,9 @@ This project targets the scripting environment in Synthesizer V Studio 2 Pro; it
 
 New users can follow the end-to-end [Quickstart](docs/quickstart.md) or
 [中文快速开始](docs/quickstart_cn.md). It covers cloning the repository,
-Codex-assisted Node.js setup, script installation, MCP registration, connection
-verification, and the first guarded tuning edit.
+Node.js setup, script installation, host-specific MCP registration, and
+connection verification. Agent skills and guided musical workflows are installed
+separately from [`SynthVCopilot/SKILLS`](https://github.com/SynthVCopilot/SKILLS).
 
 ### 1. Build the MCP server
 
@@ -256,22 +255,14 @@ status nor its buttons can update. Reopen SynthV afterward to restore it.
 
 ### 4. Connect an MCP host
 
-#### Codex
+Both maintained adapters launch the same `node dist/src/cli.js` Runtime and keep
+registration scoped to this project:
 
-The repository includes a project-scoped `.codex/config.toml`:
+- [Codex profile](docs/hosts/codex.md): `.codex/config.toml`
+- [Claude Code profile](docs/hosts/claude-code.md): `.mcp.json`
 
-```toml
-[mcp_servers.synthv-agent-bridge]
-command = "node"
-args = ["dist/src/cli.js"]
-startup_timeout_sec = 120
-```
-
-Trust and open the repository root, build it, then restart Codex or start a new
-task. This keeps the MCP registration scoped to this project and avoids
-modifying the user's global Codex configuration.
-
-A complete TOML example is available at [examples/codex-config.toml](examples/codex-config.toml). Other local MCP hosts can use the same `node .../dist/src/cli.js` command when they support **STDIO** servers.
+Other local MCP hosts can use the same command when they support **STDIO**
+servers. No installer or Doctor command writes user-global host configuration.
 
 ### Optional native connection panel
 
@@ -513,7 +504,7 @@ false success.
 
 ## Safe editing workflow
 
-The Codex Agent rules require this sequence:
+Any Agent host performing a guarded write should use this sequence:
 
 1. For phrase tuning, call `get_phrase_context` immediately before editing.
    For Group Voice or Vocal Modes, call `get_group_voice` with no locator to
@@ -589,12 +580,12 @@ When a custom IPC directory is used, create it before starting the SynthV script
 
 ### Windows and WSL
 
-The simplest setup is to run the MCP server with **Windows Node.js** when SynthV runs on Windows. When Codex runs inside WSL, point Node at the existing Windows temporary directory that SynthV uses by default:
+The simplest setup is to run the MCP server with **Windows Node.js** when SynthV runs on Windows. When the MCP host runs inside WSL, point Node at the existing Windows temporary directory that SynthV uses by default:
 
 - SynthV/Windows: leave `SYNTHV_AGENT_BRIDGE_DIR` unset so the script uses `%TEMP%`.
 - Node/WSL: set `SYNTHV_AGENT_BRIDGE_DIR=/mnt/c/Users/you/AppData/Local/Temp`.
 
-For a dedicated subdirectory, create it first and set equivalent Windows and WSL path spellings for the two processes. The SynthV GUI must inherit its Windows environment variable, so restart SynthV after changing it. The MCP server can receive its own value through the `env` table in Codex configuration.
+For a dedicated subdirectory, create it first and set equivalent Windows and WSL path spellings for the two processes. The SynthV GUI must inherit its Windows environment variable, so restart SynthV after changing it. The MCP server can receive its own value through the host project's MCP environment configuration.
 
 ## Development
 
@@ -621,11 +612,13 @@ For a local installation and connection report, run:
 npm run doctor -- --target "/path/to/Synthesizer V Studio 2/scripts"
 ```
 
-The doctor checks source/installed versions and exact script contents, compiled
-MCP freshness, the running MCP capability fingerprint, Bridge and MCP
-heartbeats, the resolved IPC directory, residual processing/control files, and
-Codex configuration. Add `--json` for machine-readable output. It never
-modifies the project or installed files.
+The default Doctor checks only host-neutral Runtime state: source/installed
+versions and exact script contents, compiled MCP freshness, running capability
+fingerprints, Bridge/MCP heartbeats, the resolved IPC directory, and residual
+processing/control files. Add `--host codex`, `--host claude`, or `--host all`
+to validate project profiles; add `--json` for machine-readable output. Doctor
+never reads or writes user-global host settings, the SynthV project, or installed
+files.
 
 ## Current limitations
 
@@ -666,7 +659,7 @@ modifies the project or installed files.
 - Expression presets are intentionally small building blocks, not phrase
   analysis or pronunciation-quality scoring.
 - The bridge has not yet been validated against every SynthV 2.x patch and every voice database.
-- ChatGPT does not connect directly to this local stdio server. Use Codex or another local MCP host; a future remote adapter would need explicit authentication and transport security.
+- A chat surface must be able to launch a trusted local stdio process to connect directly. Remote access would require a separate authenticated transport adapter.
 
 See [docs/roadmap.md](docs/roadmap.md).
 

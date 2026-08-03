@@ -35,7 +35,7 @@ async function writeIdentityFixture(
   await mkdir(path.join(repositoryRoot, "synthv"), { recursive: true });
   await writeFile(
     path.join(repositoryRoot, "package.json"),
-    `${JSON.stringify({ version: "0.2.0-test" })}\n`,
+    `${JSON.stringify({ version: "0.3.0-test" })}\n`,
     "utf8",
   );
   await writeFile(
@@ -218,7 +218,7 @@ test("core-only installation omits the optional sidebar without deleting one", a
   ) as Record<string, unknown>;
   assert.equal(installManifest.schemaVersion, 2);
   assert.equal(installManifest.protocolVersion, 3);
-  assert.equal(installManifest.packageVersion, "0.2.0");
+  assert.equal(installManifest.packageVersion, "0.3.0");
   assert.equal(
     installManifest.executorBuildId,
     EXECUTOR_BUILD_ID,

@@ -23,8 +23,8 @@
   plus in-session guarded rollback.
 - Range-constrained harmony tracks, deterministic note humanization, expression
   presets, and lyrics-to-note fitting.
-- A read-only doctor for installed versions, heartbeats, IPC state, and Codex
-  configuration.
+- A read-only doctor for installed versions, heartbeats, IPC state, and optional
+  project-scoped host profiles.
 
 ## Completed — official API coverage expansion and v3 migration
 
@@ -84,10 +84,12 @@ The native side panel remains an optional compact review console. Future work
 is limited to stability, compatibility, and interaction fixes; it is not a
 performance roadmap or a second SynthV editing interface.
 
-## Current — v0.2.0 reduced-stable maintenance
+## Current — v0.3.0 host-neutral Runtime maintenance
 
-- Keep the completed six-tool migration and 64/64 Action coverage checks from
-  drifting after the reduced-stable release.
+- Keep the completed six-tool migration, protocol v3, and 64/64 Action coverage
+  checks from drifting after the host/skill separation.
+- Maintain equal project-scoped Codex and Claude Code profiles without adding
+  host brands or Agent workflow prompts to Runtime code.
 - Preserve the completed Vocal onboarding, 31 verified write Actions, and
   passed human listening result for the integrated tuning scenario.
 - Keep the seven native-risk clone/transaction/harmony paths explicitly
@@ -95,7 +97,7 @@ performance roadmap or a second SynthV editing interface.
 - Preserve the completed Stage 3 read/reload/concurrency, reduced-capability,
   tracing A/B, write/Undo, listening, and one-hour functional-soak evidence.
 - Re-run the fixed settled-resource monitor as follow-up hardening; the user
-  explicitly waived it for v0.2.0, so no resource PASS is claimed.
+  explicitly waived it for the v0.2.0 baseline, so no resource PASS is claimed.
 - Keep Snapshot LRU disabled until traces prove repeated read projection is a
   significant cost.
 - Revisit the seven experimental paths only with new host versions and a fresh

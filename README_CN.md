@@ -11,19 +11,16 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 
 **视频演示：** [在哔哩哔哩观看 SynthV Agent Bridge 演示](https://www.bilibili.com/video/BV1kU3P6LEoF)
 
-> 第一次使用？请参阅[中文快速开始](docs/quickstart_cn.md)。环境检查、
-> 依赖与 Node.js 安装、构建、SynthV 脚本安装、MCP 注册和诊断等大部分
-> 工作都可以交给 Codex 完成；系统级安装可能需要用户授权。
-> English users: see the [Quickstart](docs/quickstart.md). Codex can handle
-> most setup steps, including environment checks, dependency and Node.js
-> installation, the build, SynthV script installation, MCP registration, and
-> diagnostics.
+> 第一次使用？请参阅宿主中立的[中文快速开始](docs/quickstart_cn.md)，再选择
+> [Codex](docs/hosts/codex.md) 或
+> [Claude Code](docs/hosts/claude-code.md) 项目配置。环境检查、依赖与 Node.js
+> 安装、构建、SynthV 脚本安装和核心诊断都不依赖具体 Agent 宿主。
+> English users: see the host-neutral [Quickstart](docs/quickstart.md).
 
 > [!TIP]
-> 第一次连接？回复 **`运行《小星星》Demo。`** Codex 会用简短小标题说明每个
-> 阶段，创建包含 42 个音符的独立 Demo Group；中途只需选择它的 Vocal 并
-> 提供全部准确唱法名称，随后会自动完成调音、回读验证和循环播放。Demo
-> 不修改工程原有内容。详见[引导式 Demo](docs/twinkle-star-demo_cn.md)。
+> 可选《小星星》引导式 Demo 与 Agent 操作规则已迁移到独立的
+> [`synthv-copilot` 技能插件](https://github.com/SynthVCopilot/SKILLS)。
+> Runtime 仓库不再携带启动提示或强制 Agent 工作流。
 
 > [!IMPORTANT]
 > 由于 SynthV 官方脚本 API 无法读取当前 Vocal 身份，也无法枚举从未调整、
@@ -37,7 +34,8 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 > 的完整唱法面板，或重新输入它的全部唱法名称，不能沿用上一个 Vocal 的
 > 列表。
 
-> 状态：**v0.2.0／协议 v3（收缩后的稳定能力面）**。六工具语义入口、类型化 Query
+> 状态：**v0.3.0／协议 v3（收缩后的稳定能力面）**。本版把宿主中立 Runtime
+> 与可移植 Agent 技能拆开，同时保持六工具语义入口、类型化 Query
 > Context、紧凑 Command 结果、组件构建一致性检查、统一命令内核和全部
 > 私有操作迁移已经完成。发布验证已有 17/17 Query、9/9 UI
 > 和 31/38 写 Action 已有当前构建真机证据；7 条发生原生宿主风险的
@@ -137,7 +135,7 @@ Solid、Sweet。
 ## 架构
 
 ```text
-Codex / 其他本地 stdio MCP 宿主
+Codex / Claude Code / 其他本地 stdio MCP 宿主
                     │
                     │ 基于 stdio 的 MCP
                     ▼
@@ -163,15 +161,16 @@ Codex / 其他本地 stdio MCP 宿主
 
 - Synthesizer V Studio **2 Pro 2.1.2 或更高版本**。
 - Node.js **20.10 或更高版本**。
-- 支持本地 stdio 服务器的 MCP 宿主，例如 Codex CLI 或其他兼容客户端。
+- 支持本地 stdio 服务器的 MCP 宿主；仓库同时维护 Codex 与 Claude Code 项目配置。
 
 本项目面向 Synthesizer V Studio 2 Pro 的脚本环境，不支持 Basic 版。
 
 ## 安装
 
 新用户可以按照完整的[中文快速开始](docs/quickstart_cn.md)操作；英文版见
-[Quickstart](docs/quickstart.md)。其中包含拉取仓库、由 Codex 协助配置
-Node.js、安装脚本、注册 MCP、验证连接和第一次受保护调音修改。
+[Quickstart](docs/quickstart.md)。其中包含拉取仓库、配置 Node.js、安装脚本、
+按宿主注册 MCP 和验证连接。Agent 技能与引导式音乐工作流从
+[`SynthVCopilot/SKILLS`](https://github.com/SynthVCopilot/SKILLS) 单独安装。
 
 ### 1. 构建 MCP 服务器
 
@@ -234,24 +233,14 @@ SynthV 运行期间，该脚本会保持活动并写入心跳。只停止 Bridge
 
 ### 4. 连接 MCP 宿主
 
-#### Codex
+两个正式适配都启动同一份 `node dist/src/cli.js` Runtime，并把注册限制在
+当前项目：
 
-仓库已经包含项目级 `.codex/config.toml`：
+- [Codex 配置](docs/hosts/codex.md)：`.codex/config.toml`
+- [Claude Code 配置](docs/hosts/claude-code.md)：`.mcp.json`
 
-```toml
-[mcp_servers.synthv-agent-bridge]
-command = "node"
-args = ["dist/src/cli.js"]
-startup_timeout_sec = 120
-```
-
-请在 Codex 中信任并打开仓库根目录，完成构建后重启 Codex 或新建任务。
-这样 MCP 注册只对当前项目生效，不会修改用户的全局 Codex 配置。
-
-完整 TOML 示例位于
-[examples/codex-config.toml](examples/codex-config.toml)。其他支持
-**STDIO** 服务器的本地 MCP 宿主也可以使用同一条
-`node .../dist/src/cli.js` 命令。
+其它支持 **STDIO** 的本地 MCP 宿主也可使用同一命令。安装器和 Doctor
+都不会写入用户全局宿主配置。
 
 ### 可选的原生连接面板
 
@@ -469,7 +458,7 @@ Setter。在不兼容宿主上真正修改模式，会在创建撤销记录前�
 
 ## 安全编辑工作流
 
-Codex Agent 规则要求按以下顺序执行：
+任何 Agent 宿主执行受保护写入时都应按以下顺序：
 
 1. 乐句调音时，在编辑前立即调用 `get_phrase_context`。对于 Group Voice
    或唱法（Vocal Mode），调用不带定位器的 `get_group_voice`，以当前钢琴卷帘
@@ -543,7 +532,7 @@ Node 服务器和 SynthV 脚本必须解析到**同一个物理 IPC 目录**。
 ### Windows 和 WSL
 
 SynthV 在 Windows 上运行时，最简单的配置是让 MCP 服务器使用
-**Windows Node.js**。Codex 在 WSL 中运行时，请把 Node 指向 SynthV 默认
+**Windows Node.js**。MCP 宿主在 WSL 中运行时，请把 Node 指向 SynthV 默认
 使用的现有 Windows 临时目录：
 
 - SynthV/Windows：不设置 `SYNTHV_AGENT_BRIDGE_DIR`，使脚本使用 `%TEMP%`。
@@ -552,7 +541,7 @@ SynthV 在 Windows 上运行时，最简单的配置是让 MCP 服务器使用
 
 如果使用专用子目录，请先创建目录，并为两个进程设置等价的 Windows 和
 WSL 路径写法。SynthV GUI 必须继承 Windows 环境变量，所以修改后需要重启
-SynthV。MCP 服务器可以通过 Codex 配置中的 `env` 表接收自己的值。
+SynthV。MCP 服务器可以通过宿主项目 MCP 配置中的环境变量表接收自己的值。
 
 ## 开发
 
@@ -578,10 +567,11 @@ Lua 文件，并通过模拟 SynthV 集成框架测试常驻 Bridge 和侧边栏
 npm run doctor -- --target "/Synthesizer V Studio 2/脚本目录"
 ```
 
-Doctor 会检查源码/安装版本、脚本准确内容、MCP 构建新鲜度、运行中 MCP 的
-能力指纹、Bridge 和 MCP 心跳、解析后的 IPC 目录、残留处理/控制文件以及
-Codex 配置。添加 `--json` 可获得机器可读输出。它不会修改工程或已安装
-文件。
+Doctor 默认只检查宿主中立 Runtime 状态：源码/安装版本、脚本准确内容、
+MCP 构建新鲜度、运行中能力指纹、Bridge/MCP 心跳、解析后的 IPC 目录和残留
+处理/控制文件。用 `--host codex`、`--host claude` 或 `--host all` 才检查
+项目配置；添加 `--json` 可获得机器可读输出。Doctor 不读取或写入用户全局
+宿主设置，也不修改 SynthV 工程或安装文件。
 
 ## 当前限制
 
@@ -621,8 +611,8 @@ Codex 配置。添加 `--json` 可获得机器可读输出。它不会修改工�
   只激活和删除默认 Take，或由自身生成并保存的 ID。
 - 表情预设是有意保持小型的构建块，不是乐句分析或发音质量评分工具。
 - Bridge 尚未在每一个 SynthV 2.x 补丁版本和每一个声库上验证。
-- ChatGPT 不能直接连接此本地 stdio 服务器。请使用 Codex 或其他本地 MCP
-  宿主；未来的远程适配器需要明确的身份验证和传输安全。
+- 只有能够启动可信本地 stdio 进程的聊天/Agent 界面才能直接连接；远程接入
+  需要另行设计带身份验证的传输适配器。
 
 参阅 [docs/roadmap.md](docs/roadmap.md)。
 

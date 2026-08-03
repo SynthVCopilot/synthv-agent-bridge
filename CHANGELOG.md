@@ -6,6 +6,13 @@ All notable changes will be documented in this file.
 
 - No unreleased changes.
 
+## 0.3.0 - 2026-08-03
+
+- Separated the host-neutral MCP Runtime from Agent skills and demo assets.
+- Added equal project-scoped connection profiles for Codex and Claude Code.
+- Made Doctor core-only by default with explicit host-profile checks.
+- Kept file IPC protocol v3 and the six public `sv_*` tools unchanged.
+
 ## 0.2.0-alpha.1 - 2026-07-30
 
 ### Breaking

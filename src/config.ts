@@ -3,7 +3,7 @@ import path from "node:path";
 
 export const PROTOCOL_VERSION = 3 as const;
 export const SERVER_NAME = "synthv-agent-bridge";
-export const SERVER_VERSION = "0.2.0";
+export const SERVER_VERSION = "0.3.0";
 
 export interface BridgePaths {
   readonly directory: string;

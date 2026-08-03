@@ -1,257 +1,148 @@
-# 快速开始
+# 中文快速开始
 
-[English](quickstart.md)
+本指南只安装宿主中立的 SynthV Agent Bridge Runtime，不安装 Agent 提示词，
+也不修改 Codex 或 Claude 的用户全局配置。
 
-本指南面向第一次使用的用户，从拉取项目开始，一直到完成第一次受保护的
-Synthesizer V 调音修改。协议细节和完整功能列表请参阅项目
-[README](../README.md)。
+## 1. 要求
 
-## 1. 拉取项目并用 Codex 打开
+- Synthesizer V Studio 2 Pro 2.1.2 或更高版本
+- Node.js 20.10 或更高版本
+- MCP 服务可运行在 Windows、macOS 或 Linux；SynthV 与 Lua 脚本必须能访问
+  同一个文件 IPC 目录
+- 支持本地 stdio 服务的 MCP 宿主
 
-```bash
-git clone https://github.com/zhoupengjie/synthv-agent-bridge.git
-cd synthv-agent-bridge
-```
+检查 Node 与 npm：
 
-在 Codex 桌面应用、Codex CLI 或支持 Codex 的编辑器中打开克隆后的
-`synthv-agent-bridge` 文件夹。
-
-接下来的安装可以直接交给 Codex：
-
-```text
-请安装并配置这个 SynthV Agent Bridge 项目。先检查是否有 Node.js 20.10
-或更高版本；如果没有或版本过低，请使用系统包管理器安装合适的 Node.js
-LTS，必要时向我申请权限。然后使用锁文件安装依赖、构建项目，把 SynthV
-脚本安装到我提供的脚本目录，检查仓库自带的项目级 MCP 配置，最后运行
-项目诊断。
-```
-
-Codex 可以执行环境检查和包管理器命令，但操作系统级安装可能需要联网、
-管理员授权，安装后也可能需要重启终端或 Codex，新的 `node` 命令才会生效。
-
-## 2. 检查 Node.js 并构建
-
-项目要求 Synthesizer V Studio 2 Pro 2.1.2 或更高版本，以及 Node.js
-20.10 或更高版本。项目不支持 Synthesizer V Studio Basic。
-
-```bash
+```powershell
 node --version
 npm --version
-npm ci
+```
+
+## 2. 拉取与构建
+
+可把仓库放在任意有权限的非系统盘或工作目录：
+
+```powershell
+git clone https://github.com/SynthVCopilot/synthv-agent-bridge.git D:\synthv-agent-bridge
+Set-Location D:\synthv-agent-bridge
+npm install
 npm run build
 ```
 
-如果缺少 Node.js，可以让 Codex 安装 LTS 版本。手动安装的常见备用命令：
-
-```powershell
-# Windows
-winget install --id OpenJS.NodeJS.LTS -e
-```
-
-```bash
-# 使用 Homebrew 的 macOS
-brew install node
-```
-
-新安装 Node.js 后，如果 `node --version` 仍然读取旧环境，请重启终端或
-Codex。
+`npm install` 会把 JavaScript 依赖写入仓库自己的 `node_modules`。MCP 服务入口为
+`dist/src/cli.js`。
 
 ## 3. 安装 SynthV 脚本
 
-在 Synthesizer V Studio 中选择 **脚本 → 打开脚本文件夹**，复制打开的
-目录路径，然后运行：
+在 SynthV 中选择 **脚本 → 打开脚本文件夹**，把这个准确目录传给：
 
-```bash
-npm run install:synthv -- --target "/Synthesizer V Studio 2/脚本目录"
+```powershell
+npm run install:synthv -- --target "C:\SynthV脚本目录"
 ```
 
-安装器会创建 `SynthV Agent Bridge` 子文件夹，其中包含 Bridge、停止命令
-和可选的原生侧边栏。
+若不需要可选连接侧边栏，只装核心脚本：
 
-Windows 中的脚本目录通常类似：
+```powershell
+npm run install:synthv -- --target "C:\SynthV脚本目录" --without-sidebar
+```
+
+安装器会在所选脚本目录下创建 `SynthV Agent Bridge`，复制常驻 Bridge、Stop
+命令与可选 Sidebar；它不会修改 SynthV 工程。
+
+在 SynthV 中执行 **脚本 → 重新扫描**，再运行：
 
 ```text
-C:\Users\<用户名>\AppData\Roaming\Dreamtonics\Synthesizer V Studio 2\scripts
-```
-
-请以 SynthV 实际打开的目录为准，不要直接假定示例路径适用于当前电脑。
-
-## 4. 加载项目级 MCP 配置
-
-仓库已经包含 `.codex/config.toml`：
-
-```toml
-[mcp_servers.synthv-agent-bridge]
-command = "node"
-args = ["dist/src/cli.js"]
-startup_timeout_sec = 120
-```
-
-不需要写入用户级 MCP 配置，也不需要填写绝对安装路径。请在 Codex 中信任
-并打开仓库根目录，完成构建后重启 Codex 或新建任务，让 Codex 加载项目
-配置。未被信任的项目不会加载项目级配置。
-
-## 5. 重新扫描并启动 Bridge
-
-在 Synthesizer V Studio 中依次执行：
-
-```text
-脚本 → 重新扫描
 脚本 → SynthV Agent Bridge → Start SynthV Agent Bridge
 ```
 
-重新扫描会停止常驻脚本，因此每次重新扫描后都要再次启动 Bridge。Bridge
-会持续运行，直到关闭 SynthV、执行停止脚本或中止所有正在运行的脚本。
+常驻脚本需保持运行。只停止 Bridge 时使用 **Stop SynthV Agent Bridge**；若还要
+保留可选 Sidebar，不要使用 **中止所有正在运行的脚本**。
 
-## 6. 验证连接
+## 4. 选择 MCP 宿主配置
 
-在已启用 MCP 的 Codex 任务中输入：
+两个正式配置启动的是同一份 Runtime。
 
-```text
-检查 SynthV Bridge 状态，然后读取当前工程信息。
-```
+### Codex
 
-正常的 `sv_status` 结果应包含：
+仓库已提供 `.codex/config.toml`。在 Codex 中打开并信任仓库根目录，构建后新建
+任务，让 MCP 进程加载当前编译版本。
 
-```json
-{
-  "connected": true,
-  "fresh": true
-}
-```
+详见 [Codex 宿主配置](hosts/codex.md)。
 
-也可以运行只读的本地诊断：
+### Claude Code
 
-```bash
-npm run doctor -- --target "/Synthesizer V Studio 2/脚本目录"
-```
+仓库已提供 `.mcp.json`。把仓库根目录作为 Claude Code 项目打开，并在提示时
+批准项目 MCP 服务。
 
-如果 Bridge 正常，但 MCP 心跳缺失，请重启或重新连接 Codex 任务。
+详见 [Claude Code 宿主配置](hosts/claude-code.md)。
 
-## 可选：运行引导式 Demo
+### 其它 stdio 宿主
 
-第一次连接正常后，Codex 会提供内置示例。输入：
+把工作目录设为仓库根目录并注册：
 
 ```text
-运行《小星星》Demo。
+node dist/src/cli.js
 ```
 
-Codex 会打印五个简短阶段小标题，在现有工程内容之后创建一个包含 42 个
-音符的独立非主 Group，并且不修改已有音符。曲谱创建后，请选择这个 Demo
-Group，为它选择或分配 Vocal，再发送完整唱法（Vocal Mode）面板截图，或
-准确输入面板中的全部唱法。由于官方 API 限制，这一次交接无法省略；之后的调音、
-音高曲线、回读验证和循环播放会自动完成。
+服务通过 stdin 接收 JSON-RPC；直接在普通交互终端启动不会出现命令提示符。
 
-完整流程、安全规则、撤销边界和机器可读模板参阅
-[《小星星》引导式 Demo](twinkle-star-demo_cn.md)。
+## 5. 诊断
 
-## 7. 完成第一次调音修改
+默认 Doctor 只检查宿主中立 Runtime：
 
-> [!IMPORTANT]
-> SynthV 官方脚本 API 无法读取当前 Vocal 身份，也无法枚举从未调整、仍为
-> 默认值的唱法（Vocal Mode）名称和参数。只有请求会使用或修改唱法
-> 时，才需要先选择目标音符组和 Vocal，并发送完整面板截图或准确输入全部
-> 唱法名称；不依赖唱法的明确机械编辑不需要这一步。更换 Vocal 后，下一次
-> 涉及唱法的写入前需要重新提供信息。
-
-Agent 不再显示固定的入门清单。它只询问当前请求仍缺少的信息：目标和预期
-效果、不能修改的内容，以及适用时的唱法信息。写入前只会简短建议
-保存工作副本并展示小型预览。最新读取、Guard、预检和独立验证属于内部机制；
-只有实际结果返回 `undoRequired: true` 时才显示撤销指导。
-
-第一次可以先进行只读检查：
-
-```text
-读取当前选中的音符，汇总歌词、音高、时值和计算音素。不要修改工程。
+```powershell
+npm run doctor -- --target "C:\SynthV脚本目录"
 ```
 
-确认读取正常后，再提出一个范围明确的修改：
+需要时再检查项目级宿主配置，不读取全局设置：
 
-```text
-重新读取当前选中的乐句，检查节奏和音高过渡，先展示一个便于审核的小型
-修改计划。不要修改歌词，也不要改变选区外的控制点。只使用本次读取返回
-的最新上下文执行修改。
+```powershell
+npm run doctor -- --host codex
+npm run doctor -- --host claude
+npm run doctor -- --host all --json
 ```
 
-Agent 的标准执行顺序是：
+Doctor 检查编译产物新鲜度、组件版本/构建身份、文件 IPC 可访问性、当前
+Bridge/MCP 心跳以及可选的已安装脚本内容；宿主参数只增加仓库项目配置检查。
+整个过程只读。
 
-1. 遇到不熟悉的 SynthV 操作时先读取操作说明。
-2. 只读取准备修改的目标。
-3. 根据最新状态形成小型、可审核的计划。
-4. 使用返回的 `contextId` 执行受保护的写入。
-5. 遇到 `STALE_*` 或 `UNKNOWN_CONTEXT` 时重新读取目标。
+若 MCP 宿主已经运行，而编译身份随后发生变化，请新建 Agent 任务或重新连接
+MCP，让它载入当前构建。
 
-Bridge 写入期间不要手动修改同一个目标。每次成功写入通常对应一个
-SynthV 撤销记录。需要撤销时，先点击主编辑区再按 **Ctrl+Z**，或者选择
-**编辑 → 撤销**。
+## 6. 通过 MCP 验证
 
-## 8. 可选的连接侧边栏
+Bridge 与 MCP 服务都运行后：
 
-**SynthV Agent** 侧边栏分行显示 `B`（Bridge）和 `M`（MCP），并提供
-整行的 **重启 Bridge** 按钮。它不接收编辑指令，也不会执行工程修改。
-重启按钮不可用表示面板尚未确认
-Bridge 在线；请从 **脚本 → SynthV Agent Bridge → Start SynthV Agent
-Bridge** 启动。面板会固定提示：中止所有运行脚本后，状态会停留在最后
-一次结果，状态不可信；建议使用 Stop SynthV Agent Bridge 单独停止
-Bridge。所有请求和方案审核继续在 Codex 任务中进行。
+1. 调用 `sv_status`，确认协议为 v3、Session 当前有效、组件身份一致。
+2. 调用 `sv_describe`，查看六个公开工具背后的内部动作。
+3. 在任何写入前，先用 `sv_query` 做只读工程摘要。
 
-## 9. 唱法（Vocal Mode）修改
+公开 MCP 能力面固定为六个工具：
 
-SynthV 脚本 API 无法读取当前歌手身份，也无法列出尚未启用的默认唱法
-（Vocal Mode）。对于从未进行过任何调整、仍然保持默认值的唱法，官方
-接口无法读取其名称和唱法参数。因此，返回空的唱法列表并不代表
-当前歌手没有唱法，而是 Bridge 无法通过官方接口发现这些仅包含默认值的
-唱法。
+- `sv_status`
+- `sv_describe`
+- `sv_query`
+- `sv_command`
+- `sv_ui`
+- `sv_review`
 
-第一次修改唱法前，请先选择目标音符组，再为该音符组选择歌手；没有选择
-歌手时不会出现唱法名称。然后选择一种方式：
+## 7. 可选 Agent 技能
 
-- 把面板中显示的所有唱法名称完整告诉 Codex，并保留原有拼写和大小写；或
-- 提供一张包含完整唱法（Vocal Mode）面板的截图。
+安全写入、调声、作曲编曲和作词指导从
+[`SynthVCopilot/SKILLS`](https://github.com/SynthVCopilot/SKILLS) 单独安装
+`synthv-copilot`。可选《小星星》Demo 也作为 Agent 拥有的参考资料存放在那里。
+安装技能不会安装或启动本 Runtime。
 
-如果没有合适的音符组或暂时看不到唱法面板，可由你或 Agent 在工程
-任意安全位置先创建一个临时音符和一个临时非主音符组，再选中该音符组并
-选择歌手，使唱法参数显示出来；随后截图完整唱法面板或准确输入全部唱法
-名称，再继续调音。
+## 更新
 
-完成首次识别后，只要没有更换歌手，Codex 就可以继续使用同一份唱法名称
-列表。更换歌手后，必须重新截图新 Vocal 的完整唱法面板，或重新输入其
-全部准确唱法名称，不能沿用上一个 Vocal 的列表。
+在干净工作区中：
 
-## 日常使用
-
-后续每次使用：
-
-1. 打开 SynthV 工程并保存一个工作副本。
-2. 启动 **SynthV Agent Bridge**。
-3. 打开或重新连接已启用 MCP 的 Codex 任务。
-4. 选择目标并告诉 Codex 想要的效果；有不能修改的内容也请一并说明。如果
-   请求会使用唱法，再选择 Vocal，并提供完整面板截图或准确唱法名称。
-5. 在 Codex 中审核小型方案，应用后试听结果。
-
-## 更新已有安装
-
-在项目目录中运行：
-
-```bash
+```powershell
 git pull --ff-only
-npm ci
+npm install
 npm run build
-npm run install:synthv -- --target "/Synthesizer V Studio 2/脚本目录"
-npm run doctor -- --target "/Synthesizer V Studio 2/脚本目录"
+npm run install:synthv -- --target "C:\SynthV脚本目录"
 ```
 
-如果安装器提示 Bridge 运行时发生变化，请执行 **脚本 → 重新扫描**，然后
-再次启动 **SynthV Agent Bridge**。如果侧边栏发生变化，请先关闭并重新打开
-SynthV，再启动 Bridge；单独重新扫描可能不会重绘已经加载的侧边栏。
-
-## 快速排障
-
-| 现象 | 处理方法 |
-|---|---|
-| Bridge 状态 `B` 离线 | 在 SynthV 中运行 **Start SynthV Agent Bridge**。 |
-| MCP 状态 `M` 离线 | 重启或重新连接 Codex 任务。 |
-| 侧边栏缺失或版本不对 | 关闭并重新打开 SynthV，然后启动 Bridge；单独重新扫描可能不会重绘已经加载的侧边栏。 |
-| 找不到 `node` 或 `npm` | 让 Codex 安装 Node.js LTS，然后重启终端或 Codex。 |
-| 写入返回 `STALE_*` | 只重新读取目标，不要重复提交旧请求。 |
-| 写入返回 `SYNTHV_SESSION_CHANGED` | SynthV 或 Bridge 已重启，缓存 Context 已自动清除。重新读取目标后，用新 Context 继续。 |
+按安装器提示重新扫描/启动 Bridge，再重新连接 MCP 宿主。编辑真实工程前重新
+运行 Doctor。

@@ -19,7 +19,11 @@ type DoctorCheck = {
   readonly status: "ok" | "warning" | "error";
 };
 
-function runDoctor(ipcDirectory: string, target?: string): {
+function runDoctor(
+  ipcDirectory: string,
+  target?: string,
+  host: "core" | "codex" | "claude" | "all" = "core",
+): {
   readonly status: number | null;
   readonly checks: DoctorCheck[];
 } {
@@ -28,6 +32,8 @@ function runDoctor(ipcDirectory: string, target?: string): {
     [
       path.resolve("scripts", "doctor.mjs"),
       "--json",
+      "--host",
+      host,
       ...(target === undefined ? [] : ["--target", target]),
     ],
     {
@@ -67,7 +73,7 @@ test("doctor accepts a fresh MCP capability fingerprint", async () => {
       [
         "synthv-agent-bridge-sidebar-client-status-v1",
         "state=running",
-        "version=0.2.0",
+        "version=0.3.0",
         `buildFingerprint=${SERVER_BUILD_FINGERPRINT}`,
         `capabilityFingerprint=${SERVER_CAPABILITY_FINGERPRINT}`,
         `updatedAtEpochMs=${Date.now()}`,
@@ -81,6 +87,23 @@ test("doctor accepts a fresh MCP capability fingerprint", async () => {
     assert.equal(result.status, 0);
     assert.equal(check(result.checks, "mcp-build").status, "ok");
     assert.equal(check(result.checks, "mcp-capabilities").status, "ok");
+    assert.equal(
+      result.checks.some((candidate) => candidate.name.includes("project-config")),
+      false,
+    );
+  } finally {
+    await rm(ipcDirectory, { recursive: true, force: true });
+  }
+});
+
+test("doctor validates both project-scoped host profiles on request", async () => {
+  const ipcDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "synthv-doctor-host-profiles-"),
+  );
+  try {
+    const result = runDoctor(ipcDirectory, undefined, "all");
+    assert.equal(check(result.checks, "codex-project-config").status, "ok");
+    assert.equal(check(result.checks, "claude-project-config").status, "ok");
   } finally {
     await rm(ipcDirectory, { recursive: true, force: true });
   }
@@ -99,7 +122,7 @@ test("doctor rejects a fresh MCP process from a different build", async () => {
       [
         "synthv-agent-bridge-sidebar-client-status-v1",
         "state=running",
-        "version=0.2.0",
+        "version=0.3.0",
         "buildFingerprint=stale-build",
         "capabilityFingerprint=stale-build",
         `updatedAtEpochMs=${Date.now()}`,

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "synthv-agent-bridge": {
+      "command": "node",
+      "args": [
+        "dist/src/cli.js"
+      ]
+    }
+  }
+}

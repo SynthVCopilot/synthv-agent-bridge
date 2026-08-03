@@ -90,7 +90,7 @@ async function liveActionCatalog() {
   const server = createServer(loadConfig({}, directory));
   const client = new Client({
     name: "synthv-v3-api-coverage",
-    version: "0.2.0",
+    version: "0.3.0",
   });
   try {
     await Promise.all([
