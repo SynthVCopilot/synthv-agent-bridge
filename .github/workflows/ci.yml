@@ -22,6 +22,10 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - run: npm ci --ignore-scripts
       - run: npm audit --omit=dev --audit-level=moderate
+      - name: Install Lua 5.4 for host integration tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install --yes -qq lua5.4
       - run: npm run check
 
   lua:
