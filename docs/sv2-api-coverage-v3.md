@@ -302,11 +302,11 @@ Actions, aggregate mismatches, blank evidence, or unknown real-host status.
       "class": "NoteGroupReference",
       "methods": "allSemantic",
       "methodGroups": [
-        {"methods":["getDuration","getEnd","getOnset","getPitchOffset","getTarget","getTimeOffset","getVoice","isInstrumental","isMain","isMuted"],"actions":["list_tracks","get_group_voice","get_phrase_context"]},
-        {"methods":["setMuted","setPitchOffset","setTarget","setTimeOffset","setTimeRange","setVoice"],"actions":["add_group_reference","clone_group_reference","update_group","set_group_voice","apply_group_tuning"]}
+        {"methods":["getDuration","getEnd","getOnset","getPitchOffset","getTarget","getTimeOffset","getVoice","isInstrumental","isMain","isMuted"],"actions":["list_tracks","get_group_voice","get_phrase_context","copy_group_voice"]},
+        {"methods":["setMuted","setPitchOffset","setTarget","setTimeOffset","setTimeRange","setVoice"],"actions":["add_group_reference","clone_group_reference","update_group","set_group_voice","copy_group_voice","apply_group_tuning"]}
       ],
       "publicTools": ["sv_query", "sv_command"],
-      "actions": ["list_tracks", "get_group_voice", "get_phrase_context", "add_group_reference", "clone_group_reference", "delete_group_reference", "update_group", "set_group_voice", "apply_group_tuning"],
+      "actions": ["list_tracks", "get_group_voice", "get_phrase_context", "add_group_reference", "clone_group_reference", "delete_group_reference", "update_group", "set_group_voice", "copy_group_voice", "apply_group_tuning"],
       "hostAdapter": "Lua GroupReference adapter",
       "preflight": "fresh Reference Guard and explicit linked/isolated ownership",
       "postcondition": "target association and reference-local state host reread",
@@ -520,6 +520,7 @@ Actions, aggregate mismatches, blank evidence, or unknown real-host status.
       {"action":"delete_track","aggregates":["TrackShell"],"preflight":"fresh Track Guard and final-Track refusal","postcondition":"hostReadback","automated":"policy and Fake Host","realHost":"verified"},
       {"action":"update_group","aggregates":["GroupContent","GroupReference"],"preflight":"fresh content/reference guards and sharing policy","postcondition":"hostReadback","automated":"policy and Fake Host","realHost":"verified"},
       {"action":"set_group_voice","aggregates":["GroupReference"],"preflight":"fresh Reference Guard and dynamic range validation","postcondition":"hostReadback","automated":"range and Fake Host","realHost":"verified"},
+      {"action":"copy_group_voice","aggregates":["GroupReference"],"preflight":"fresh source and target Group locators plus readable source Voice","postcondition":"hostReadback","automated":"voice-copy Fake Host matrix","realHost":"experimental"},
       {"action":"apply_group_tuning","aggregates":["GroupContent","GroupReference"],"preflight":"one complete Voice/note/Automation/Smart Pitch effect plan","postcondition":"hostReadback","automated":"aggregate Fake Host matrix","realHost":"verified"},
       {"action":"delete_group_reference","aggregates":["GroupReference"],"preflight":"fresh Reference Guard","postcondition":"hostReadback","automated":"policy and Fake Host","realHost":"verified"},
       {"action":"import_monophonic_score","aggregates":["GroupContent"],"preflight":"bounded local snapshot, rights confirmation and shared policy","postcondition":"hostReadback","automated":"score import contracts and Fake Host","realHost":"verified"},

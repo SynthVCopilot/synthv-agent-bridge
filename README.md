@@ -39,8 +39,10 @@ The bridge uses Synthesizer V's public Lua scripting API. It does **not** parse 
 > checks, Query Projector, common Command Kernel, semantic write-policy
 > catalog, aggregate tuning, and dependent transaction recovery are
 > implemented. Release validation has fresh evidence for 17/17 Query,
-> 9/9 UI, and 31/38 write Actions. Seven clone/transaction/harmony paths with
-> native-host risk are marked experimental and disabled before project IPC;
+> 9/9 UI, and 31/39 write Actions. Eight write Actions remain experimental:
+> seven native-risk clone/transaction/harmony paths stay disabled before
+> project IPC, while `copy_group_voice` reuses the verified Voice write path
+> and awaits its own real-host matrix;
 > no write Action remains pending. Human listening, the Stage 3 functional
 > write/Undo matrix, and the user-approved one-hour soak (200 writes, 3,400
 > reads, 10 reloads) passed. The post-fix resource-monitor rerun was explicitly
@@ -376,6 +378,7 @@ not registered as standalone MCP tools; request their current schemas through
 | `delete_track` | Destructive | Delete a fingerprint-verified non-final track. |
 | `update_group` | Write | Change vocal/instrumental reference state and supported vocal properties. |
 | `set_group_voice` | Write | Fingerprint-verified typed voice, Vocal Mode, and host-validated experimental Unison updates, with an optional current-Group guard. |
+| `copy_group_voice` | Write | Merge documented Voice parameters and Vocal Mode axes stored on the source into the target. Target-only modes and values absent from the source are preserved; this does not replace the full Voice snapshot or reset defaults. An empty selected source fails without writing. The response warns that singer/voicebank identity remains unreadable and requires manual selection in SynthV. |
 | `apply_group_tuning` | Destructive | Prevalidate and apply one same-Group Voice/Vocal Mode, note/phoneme, and multi-automation tuning pass in one undo record. Unexpected execution failures explicitly require one SynthV Undo before retrying. |
 | `delete_group_reference` | Destructive | Remove a non-main vocal or instrumental reference. |
 | `import_monophonic_score` | Write | Import at most 512 notes from one freshly inspected, rights-confirmed local MusicXML/MIDI lane through guarded `add_notes`; the SHA-256 guard must match and source tempo is reported but not applied. |

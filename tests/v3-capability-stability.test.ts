@@ -76,3 +76,20 @@ test("host clone actions that depend on unstable SynthV clone primitives fail cl
     );
   }
 });
+
+test("voice copy is available on the verified set_group_voice path but remains experimental", () => {
+  assert.doesNotThrow(() =>
+    assertV3CapabilityEnabled("copy_group_voice", {
+      sourceTrackIndex: 1,
+      sourceGroupIndex: 2,
+      trackIndex: 1,
+      groupIndex: 2,
+    }),
+  );
+  assert.deepEqual(describeV3CapabilityStability("copy_group_voice"), {
+    availability: "partiallyAvailable",
+    classification: "experimental",
+    reason:
+      "copy_group_voice reuses the verified set_group_voice write path and is awaiting its own real-host Voice-copy matrix.",
+  });
+});

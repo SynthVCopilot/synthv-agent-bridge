@@ -57,6 +57,8 @@ Tracks
 Voice
 
 - `set_group_voice`, `apply_group_tuning`
+- `copy_group_voice` — copies documented Voice parameters and Vocal Modes
+  between Group References; it does not change or identify the voicebank
 
 Notes
 

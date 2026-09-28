@@ -570,8 +570,8 @@ rejects them before project IPC. The API coverage checker enforces agreement
 between that live stability registry and the machine-readable evidence
 matrix.
 
-The current build has 17/17 Query and 9/9 UI actions verified, plus 31/38
-writes verified, 7/38 experimental, and 0/38 pending. Vocal onboarding, the
+The current build has 17/17 Query and 9/9 UI actions verified, plus 31/39
+writes verified, 8/39 experimental, and 0/39 pending. Vocal onboarding, the
 machine-verifiable tuning surface, and human listening are complete. Stage 3
 ordinary write/Undo and linked-clone/Undo repetition are complete. The
 user-approved one-hour dense functional soak also completed. The original

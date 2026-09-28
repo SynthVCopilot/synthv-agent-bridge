@@ -38,8 +38,9 @@ Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重
 > 与可移植 Agent 技能拆开，同时保持六工具语义入口、类型化 Query
 > Context、紧凑 Command 结果、组件构建一致性检查、统一命令内核和全部
 > 私有操作迁移已经完成。发布验证已有 17/17 Query、9/9 UI
-> 和 31/38 写 Action 已有当前构建真机证据；7 条发生原生宿主风险的
-> clone/transaction/harmony 路径已标记 experimental 并在工程 IPC 前禁用，
+> 和 31/39 写 Action 已有当前构建真机证据；8 条写 Action 仍为 experimental：
+> 7 条发生原生宿主风险的 clone/transaction/harmony 路径在工程 IPC 前禁用，
+> 新增的 `copy_group_voice` 复用已验证的 Voice 写入路径，等待独立真机矩阵，
 > 已无 pending 写 Action；人工听感、Stage 3 功能写入/Undo 矩阵，以及用户批准的
 > 一小时长稳（200 writes、3,400 reads、10 reloads）均已通过。用户明确豁免了修复后
 > 资源监控重跑；该项作为后续风险记录，不记为通过。工程写入只能在已保存的工作副本上测试。
@@ -340,6 +341,7 @@ Guard，会安全失败，而不会静默改换目标。`readOnly` Context 不�
 | `delete_track` | 破坏性 | 删除经过指纹验证且不是最后一条的轨道。 |
 | `update_group` | 写入 | 修改人声/乐器引用状态和受支持的人声属性。 |
 | `set_group_voice` | 写入 | 使用指纹验证更新类型化 Voice、唱法（Vocal Mode）和经宿主验证的实验性 Unison，可选当前 Group 保护。 |
+| `copy_group_voice` | 写入 | 将源组已存储的文档化 Voice 参数和唱法轴合并到目标组。目标独有唱法及源中未存储的值保持不变；不替换完整 Voice 快照，也不重置默认值。选定的源字段没有已存储值时拒绝写入。返回结果会提示：歌手/声库身份仍不可读取，需在 SynthV 中手动选择。 |
 | `apply_group_tuning` | 破坏性 | 完整预检后，在一个撤销记录中应用同一 Group 的 Voice/唱法、音符/音素及多条自动化调音；若宿主在执行期意外失败，重试前必须先在 SynthV 中撤销一次。 |
 | `delete_group_reference` | 破坏性 | 删除非主人声或乐器引用。 |
 | `import_monophonic_score` | 写入 | 通过受保护 `add_notes` 从刚检查且已确认使用权的本地 MusicXML/MIDI 单旋律声部导入最多 512 个音符；SHA-256 必须仍匹配，源速度只返回审核而不自动应用。 |

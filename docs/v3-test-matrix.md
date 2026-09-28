@@ -1,6 +1,6 @@
 # v3 Test Matrix
 
-Status: v0.2.0 reduced-stable baseline; seven native-risk writes remain experimental
+Status: v0.2.0 reduced-stable baseline; seven native-risk writes stay disabled and `copy_group_voice` awaits its real-host matrix
 
 Date: 2026-07-31
 
@@ -21,6 +21,8 @@ resource-monitor sampling bug, after which the user explicitly waived another
 one-hour rerun. That resource gate is therefore recorded as waived/not passed.
 The release decision is reduced stable because all seven host-risk paths are
 disabled before IPC, not because the resource evidence was reclassified.
+`copy_group_voice` is additionally experimental while it awaits its own
+real-host matrix, but it uses the already verified `set_group_voice` write path.
 
 The executable Stage 3 harness now covers the read, concurrent-request,
 Bridge-reload/Session-invalidation, reduced-capability fail-closed and trace
@@ -197,7 +199,7 @@ Fresh v3 real-host evidence used for the `0.2.0` release decision:
 
 The authoritative per-action status is the machine-readable `actionGroups`
 inventory in `docs/sv2-api-coverage-v3.md`. Current totals are 17 verified
-reads, 9 verified UI actions, 31 verified writes, 7 experimental writes, and
+reads, 9 verified UI actions, 31 verified writes, 8 experimental writes, and
 zero pending writes. No action is currently classified `unsupported`.
 
 The four native crashes are release evidence, not a fixed-host claim. The

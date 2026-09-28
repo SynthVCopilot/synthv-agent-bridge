@@ -1080,12 +1080,12 @@ local function extractJsonString(text,key)
     end
     error("unterminated JSON string field "..key)
 end
-local function callRaw(action,payload)
+local function callRaw(action,payload,executorBuildId)
     seq=seq+1
     local id=string.format("00000000-0000-4000-8000-%012d",seq)
     local trace=string.format("trace-%012d",seq)
     local f=assert(io.open(requestFile,"wb"))
-    f:write('{"v":3,"id":"'..id..'","t":"'..trace..'","b":"__SYNTHV_AGENT_EXECUTOR_BUILD_ID__","a":"'..action..'","p":'..payload..'}')
+    f:write('{"v":3,"id":"'..id..'","t":"'..trace..'","b":"'..escape(executorBuildId or "__SYNTHV_AGENT_EXECUTOR_BUILD_ID__")..'","a":"'..action..'","p":'..payload..'}')
     f:close()
     assert(scheduled,"bridge stopped unexpectedly")
     local callback=scheduled; scheduled=nil; callback()
@@ -2790,5 +2790,68 @@ do
 end
 end
 
-assert(project.undo==85,"expected 85 undo records, got "..project.undo)
+do
+project.tracks[2].refs[1].voice.paramLoudness=-3
+project.tracks[2].refs[1].voice.paramTension=0.25
+project.tracks[2].refs[1].voice.paramBreathiness=-0.1
+project.tracks[2].refs[1].voice.paramGender=0.2
+project.tracks[2].refs[1].voice.paramToneShift=-0.3
+project.tracks[2].refs[1].voice.vocalModeParams={Soft={pitch=25,timbre=40,pronunciation=15}}
+project.tracks[1].refs[1].voice.paramLoudness=4
+project.tracks[1].refs[1].voice.paramTension=-0.5
+project.tracks[1].refs[1].voice.vocalModeParams={Soft={pitch=1,timbre=2,pronunciation=3}}
+local targetVoiceRead=call("get_group_voice",'{"trackIndex":1,"groupIndex":1}')
+local targetVoiceFingerprint=extractJsonString(targetVoiceRead,"referenceFingerprint")
+local copyVoiceUndoBefore=project.undo
+local copyVoicePayload=
+    '{"sourceTrackIndex":2,"sourceGroupIndex":1,'..
+        '"trackIndex":1,"groupIndex":1,'..
+        '"referenceFingerprint":"'..escape(targetVoiceFingerprint)..'"}'
+local mismatchedCopy=callRaw(
+    "copy_group_voice",
+    copyVoicePayload,
+    "old-executor-build"
+)
+assert(mismatchedCopy:find('"code":"BUILD_MISMATCH"',1,true),"copy_group_voice must reject an executor build mismatch")
+assert(mismatchedCopy:find('"requiredAction":"reinstall_or_reload_bridge"',1,true),"copy_group_voice build mismatch must include recovery guidance")
+assert(project.undo==copyVoiceUndoBefore,"copy_group_voice build mismatch must not create an undo record")
+local targetAfterMismatch=call("get_group_voice",'{"trackIndex":1,"groupIndex":1}')
+assert(extractJsonString(targetAfterMismatch,"referenceFingerprint")==targetVoiceFingerprint,"copy_group_voice build mismatch must not mutate target Voice")
+print("CASE:copy-group-voice-build-mismatch")
+local copiedVoice=callWrite("copy_group_voice",copyVoicePayload)
+assert(project.undo==copyVoiceUndoBefore+1,"copy_group_voice must create one undo record")
+assert(project.tracks[1].refs[1].voice.paramLoudness==-3,"copy_group_voice did not copy loudness")
+assert(project.tracks[1].refs[1].voice.paramTension==0.25,"copy_group_voice did not copy tension")
+assert(project.tracks[1].refs[1].voice.vocalModeParams.Soft.pitch==25,"copy_group_voice did not copy Vocal Mode pitch")
+assert(project.tracks[1].refs[1].voice.vocalModeParams.Soft.timbre==40,"copy_group_voice did not copy Vocal Mode timbre")
+assert(copiedVoice:find('"copiedParameterCount":5',1,true),"copy_group_voice reported the wrong parameter count")
+assert(copiedVoice:find('"copiedVocalModeCount":1',1,true),"copy_group_voice reported the wrong Vocal Mode count")
+assert(copiedVoice:find('"voicebankIdentityReadable":false',1,true),"copy_group_voice overstated voicebank visibility")
+assert(copiedVoice:find('"manualVoicebankSelectionRequired":true',1,true),"copy_group_voice omitted the manual voicebank boundary")
+assert(copiedVoice:find('"code":"VOICE_COPY_MERGE_ONLY"',1,true),"copy_group_voice omitted the merge warning")
+assert(copiedVoice:find('"code":"MANUAL_VOICEBANK_SELECTION_REQUIRED"',1,true),"copy_group_voice omitted the public manual-review warning")
+print("CASE:copy-group-voice")
+
+project.tracks[2].refs[1].voice.paramGender=nil
+project.tracks[2].refs[1].voice.vocalModeParams.Soft.pronunciation=nil
+project.tracks[1].refs[1].voice.paramGender=0.6
+project.tracks[1].refs[1].voice.vocalModeParams.Soft.pronunciation=70
+project.tracks[1].refs[1].voice.vocalModeParams.Powerful={pitch=60,timbre=50,pronunciation=40}
+local sparseTargetRead=call("get_group_voice",'{"trackIndex":1,"groupIndex":1}')
+local sparseTargetFingerprint=extractJsonString(sparseTargetRead,"referenceFingerprint")
+local sparseCopy=callWrite("copy_group_voice",
+    '{"sourceTrackIndex":2,"sourceGroupIndex":1,"trackIndex":1,"groupIndex":1,'..
+    '"referenceFingerprint":"'..escape(sparseTargetFingerprint)..'"}')
+assert(project.tracks[1].refs[1].voice.paramGender==0.6,"copy_group_voice must preserve parameters absent from source")
+assert(project.tracks[1].refs[1].voice.vocalModeParams.Soft.pronunciation==70,"copy_group_voice must preserve axes absent from source")
+assert(project.tracks[1].refs[1].voice.vocalModeParams.Powerful.pitch==60,"copy_group_voice must preserve target-only modes")
+assert(project.tracks[1].refs[1].voice.vocalModeParams.Powerful.timbre==50,"copy_group_voice must preserve target-only mode timbre")
+assert(project.tracks[1].refs[1].voice.vocalModeParams.Powerful.pronunciation==40,"copy_group_voice must preserve target-only mode pronunciation")
+assert(sparseCopy:find('"copiedParameterCount":4',1,true),"copy_group_voice must count only stored parameters")
+assert(project.tracks[2].refs[1].voice.paramGender==nil,"copy_group_voice must not fill source defaults")
+assert(project.tracks[2].refs[1].voice.vocalModeParams.Powerful==nil,"copy_group_voice must not mutate source modes")
+print("CASE:copy-group-voice-preserves-unstored-fields")
+end
+
+assert(project.undo==87,"expected 87 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")

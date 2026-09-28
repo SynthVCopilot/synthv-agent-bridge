@@ -7907,6 +7907,135 @@ function handlers.set_group_voice(payload)
     return result
 end
 
+function handlers.copy_group_voice(payload)
+    payload = requireObject(payload, "payload")
+    local copyParameters =
+        optionalBoolean(payload.copyParameters, "copyParameters")
+    if copyParameters == nil then
+        copyParameters = true
+    end
+    local copyVocalModes =
+        optionalBoolean(payload.copyVocalModes, "copyVocalModes")
+    if copyVocalModes == nil then
+        copyVocalModes = true
+    end
+    if not copyParameters and not copyVocalModes then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "At least one of copyParameters or copyVocalModes must be true"
+        )
+    end
+    local _sourceProject, _sourceTrack, sourceTrackIndex, sourceReference,
+        _sourceGroup, sourceGroupIndex =
+        resolveGroup({
+            trackIndex = payload.sourceTrackIndex,
+            groupIndex = payload.sourceGroupIndex,
+            groupUuid = payload.sourceGroupUuid
+        })
+    local _targetProject, _targetTrack, targetTrackIndex, targetReference,
+        _targetGroup, targetGroupIndex =
+        resolveGroup({
+            trackIndex = payload.trackIndex,
+            groupIndex = payload.groupIndex,
+            groupUuid = payload.groupUuid
+        })
+    local sourceVoice = CLONE_STATE.requireState(function()
+        return sourceReference:getVoice()
+    end, "NoteGroupReference.getVoice")
+    if type(sourceVoice) ~= "table" then
+        raiseBridgeError(
+            "UNSUPPORTED_HOST_CAPABILITY",
+            "The source Group did not return readable Voice properties"
+        )
+    end
+
+    local parameters = {}
+    local parameterCount = 0
+    if copyParameters then
+        for publicName, definition in pairs(GROUP_VOICE_PARAMETERS) do
+            local value = sourceVoice[definition.hostKey]
+            if type(value) == "number" then
+                parameters[publicName] = value
+                parameterCount = parameterCount + 1
+            end
+        end
+    end
+
+    local vocalModes = json.array()
+    if copyVocalModes and type(sourceVoice.vocalModeParams) == "table" then
+        local modeNames = {}
+        for modeName, _value in pairs(sourceVoice.vocalModeParams) do
+            modeNames[#modeNames + 1] = modeName
+        end
+        table.sort(modeNames)
+        for index = 1, #modeNames do
+            local modeName = modeNames[index]
+            local mode = sourceVoice.vocalModeParams[modeName]
+            if type(mode) == "table" then
+                local update = { name = modeName }
+                if type(mode.pitch) == "number" then
+                    update.pitch = mode.pitch
+                end
+                if type(mode.timbre) == "number" then
+                    update.timbre = mode.timbre
+                end
+                if type(mode.pronunciation) == "number" then
+                    update.pronunciation = mode.pronunciation
+                end
+                if update.pitch ~= nil
+                    or update.timbre ~= nil
+                    or update.pronunciation ~= nil then
+                    vocalModes[#vocalModes + 1] = update
+                end
+            end
+        end
+    end
+
+    if next(parameters) == nil and #vocalModes == 0 then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "The source Group has no documented Voice parameters or Vocal Modes to copy"
+        )
+    end
+
+    local targetPayload = {
+        trackIndex = targetTrackIndex,
+        groupIndex = targetGroupIndex,
+        referenceFingerprint = requireString(
+            payload.referenceFingerprint,
+            "referenceFingerprint",
+            false
+        )
+    }
+    if parameterCount ~= 0 then
+        targetPayload.parameters = parameters
+    end
+    if #vocalModes ~= 0 then
+        targetPayload.vocalModes = vocalModes
+    end
+    local result = handlers.set_group_voice(targetPayload)
+    result.semanticAction = "copy_group_voice"
+    result.sourceTrackIndex = sourceTrackIndex
+    result.sourceGroupIndex = sourceGroupIndex
+    result.targetTrackIndex = targetTrackIndex
+    result.targetGroupIndex = targetGroupIndex
+    result.copiedParameterCount = parameterCount
+    result.copiedVocalModeCount = #vocalModes
+    result.voicebankIdentityReadable = false
+    result.manualVoicebankSelectionRequired = true
+    result.manualReviewWarnings = json.array({
+        {
+            code = "VOICE_COPY_MERGE_ONLY",
+            message = "Copies only stored source parameters and Vocal Mode axes; target values absent from the source are preserved."
+        },
+        {
+            code = "MANUAL_VOICEBANK_SELECTION_REQUIRED",
+            message = "Select and review the target voicebank manually in SynthV; this action cannot read or change singer identity."
+        }
+    })
+    return result
+end
+
 function handlers.delete_group_reference(payload)
     payload = requireObject(payload, "payload")
     local project, track, trackIndex, reference, _group, groupIndex = resolveReference(payload)
@@ -12135,6 +12264,7 @@ PROJECT_WRITE_ACTIONS = {
     delete_track = true,
     update_group = true,
     set_group_voice = true,
+    copy_group_voice = true,
     apply_group_tuning = true,
     delete_group_reference = true,
     add_notes = true,

@@ -211,6 +211,12 @@ const COMMAND_POLICIES: Readonly<Record<string, V3CommandPolicy>> = {
     },
   ),
   set_group_voice: projectCommand("GroupReference", GROUP_CONTEXT, "referenceLocal", GROUP_REFERENCE),
+  copy_group_voice: projectCommand(
+    "GroupReference",
+    GROUP_CONTEXT,
+    "referenceLocal",
+    GROUP_REFERENCE,
+  ),
   apply_group_tuning: projectCommand(
     ["GroupContent", "GroupReference"],
     GROUP_CONTEXT,

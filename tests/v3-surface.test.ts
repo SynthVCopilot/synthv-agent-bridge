@@ -166,6 +166,27 @@ test("v3 context expands one same-Group tuning batch", () => {
   });
 });
 
+test("v3 add_pitch_controls accepts array payloads without guard expansion", () => {
+  const controls = [
+    { kind: "point" as const, position: 0, pitch: 60 },
+  ];
+  const expanded = v2Testing.expandContext(
+    "add_pitch_controls",
+    {
+      trackIndex: 1,
+      groupIndex: 2,
+      pitchControls: controls,
+    },
+    undefined,
+    new V2ContextStore(),
+  );
+  assert.deepEqual(expanded, {
+    trackIndex: 1,
+    groupIndex: 2,
+    pitchControls: controls,
+  });
+});
+
 test("v3 expands every guarded context note for one deterministic transform", () => {
   const contexts = new V2ContextStore();
   const contextId = contexts.issue({

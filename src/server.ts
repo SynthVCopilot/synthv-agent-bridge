@@ -161,6 +161,20 @@ const groupLocatorShape = {
     .describe("Optional group UUID. When present, the bridge verifies that it matches groupIndex."),
 };
 
+const copyGroupVoiceSourceShape = {
+  sourceTrackIndex: indexSchema.describe("1-based source track storage index."),
+  sourceGroupIndex: indexSchema
+    .default(1)
+    .describe(
+      "1-based source group index. Group 1 is always the track's main group.",
+    ),
+  sourceGroupUuid: groupUuidSchema
+    .optional()
+    .describe(
+      "Optional source group UUID guard. Requires sourceTrackIndex and verifies sourceGroupIndex.",
+    ),
+};
+
 const currentOrGroupLocatorShape = {
   trackIndex: indexSchema
     .optional()
@@ -1694,6 +1708,40 @@ export function createServer(config: BridgeConfig): McpServer {
     },
     async (input) =>
       runTool(async () => client.send("set_group_voice", input)),
+  );
+
+  server.registerTool(
+    "copy_group_voice",
+    {
+      title: "Copy SynthV Group Voice",
+      description:
+        "Merge documented Group Voice parameters and Vocal Mode axes stored on the source vocal Group Reference into the target through the same guarded, one-Undo update path as set_group_voice. Target values absent from the source are preserved, including target-only Vocal Modes and omitted axes; this is not a full Voice snapshot replacement or a reset to defaults. If the selected source fields contain no stored values, the request fails without writing. This does not read or change singer or voicebank identity; select and review the target voicebank manually in SynthV. The response includes warnings about merge semantics and manual voicebank selection.",
+      inputSchema: z
+        .object({
+          ...copyGroupVoiceSourceShape,
+          ...groupLocatorShape,
+          referenceFingerprint: fingerprintSchema.describe(
+            "Latest target reference fingerprint from get_group_voice or get_track_notes.",
+          ),
+          copyParameters: z.boolean().default(true),
+          copyVocalModes: z.boolean().default(true),
+        })
+        .refine(
+          (value) => value.copyParameters || value.copyVocalModes,
+          {
+            message:
+              "At least one of copyParameters or copyVocalModes must be true.",
+          },
+        ),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (input) =>
+      runTool(async () => client.send("copy_group_voice", input)),
   );
 
   server.registerTool(

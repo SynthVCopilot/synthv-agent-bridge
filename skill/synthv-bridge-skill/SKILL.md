@@ -96,6 +96,11 @@ assign its Vocal, and then either send a screenshot of the complete singing
 style panel or type every style name exactly as shown. Do not guess names. Ask
 again after the Vocal changes; a previous Vocal's list does not carry over.
 
+The API also cannot select or read the voice/database identity itself. Ask the
+user to choose the voicebank in SynthV. Once it is selected, `copy_group_voice`
+can copy documented Voice parameters and Vocal Modes from another Group, but it
+does not change or name the voicebank.
+
 ## 5. Disabled capabilities
 
 These fail with `EXPERIMENTAL_CAPABILITY_DISABLED` after reproducible SynthV

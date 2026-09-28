@@ -661,10 +661,12 @@ function assertGuardsResolved(action: string, args: JsonRecord): void {
       { field: "fingerprint" },
     );
   }
-  const pitchControls = optionalRecord(args.pitchControls, "pitchControls");
-  if (pitchControls !== undefined) {
-    for (const field of ["edits", "deletes"] as const) {
-      assertGuardArrayResolved(pitchControls, field, "pitchControlIndex");
+  if (!Array.isArray(args.pitchControls)) {
+    const pitchControls = optionalRecord(args.pitchControls, "pitchControls");
+    if (pitchControls !== undefined) {
+      for (const field of ["edits", "deletes"] as const) {
+        assertGuardArrayResolved(pitchControls, field, "pitchControlIndex");
+      }
     }
   }
 }

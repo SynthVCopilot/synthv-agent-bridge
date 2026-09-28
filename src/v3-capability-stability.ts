@@ -59,6 +59,15 @@ const ACTION_STABILITY = new Map<string, V3CapabilityStability>([
     },
   ],
   [
+    "copy_group_voice",
+    {
+      availability: "partiallyAvailable",
+      classification: "experimental",
+      reason:
+        "copy_group_voice reuses the verified set_group_voice write path and is awaiting its own real-host Voice-copy matrix.",
+    },
+  ],
+  [
     "create_harmony_track",
     {
       availability: "experimentalDisabled",

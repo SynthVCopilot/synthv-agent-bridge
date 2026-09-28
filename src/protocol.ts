@@ -32,6 +32,7 @@ export const BRIDGE_ACTIONS = [
   "delete_track",
   "update_group",
   "set_group_voice",
+  "copy_group_voice",
   "apply_group_tuning",
   "delete_group_reference",
   "add_notes",

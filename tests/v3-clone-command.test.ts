@@ -519,3 +519,68 @@ test("sv_command exposes manual review warnings through the bounded public outco
   assert.equal("manualReviewWarnings" in result, false);
   assert.ok(JSON.stringify(result).length <= 2_048);
 });
+
+test("sv_command copy_group_voice keeps merge and voicebank warnings in its public response", async (context) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synthv-v3-copy-voice-"));
+  const config = loadConfig({
+    SYNTHV_AGENT_BRIDGE_TIMEOUT_MS: "2000",
+    SYNTHV_AGENT_BRIDGE_POLL_MS: "5",
+    SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS: "3000",
+  }, directory);
+  await writeStatus(config);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = createServer(config);
+  const client = new Client({ name: "v3-copy-voice-test", version: "1.0.0" });
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  context.after(async () => {
+    await client.close();
+    await server.close();
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  const warnings = [
+    {
+      code: "VOICE_COPY_MERGE_ONLY",
+      message: "Copies only stored source parameters and Vocal Mode axes; target values absent from the source are preserved.",
+    },
+    {
+      code: "MANUAL_VOICEBANK_SELECTION_REQUIRED",
+      message: "Select and review the target voicebank manually in SynthV; this action cannot read or change singer identity.",
+    },
+  ];
+  const bridge = serveOneCloneCommand(config, {
+    groupIndex: 2,
+    trackIndex: 3,
+    referenceFingerprint: "private-reference",
+    voicebankIdentityReadable: false,
+    manualVoicebankSelectionRequired: true,
+    manualReviewWarnings: warnings,
+  });
+  const result = toolJson(await client.callTool({
+    name: "sv_command",
+    arguments: {
+      action: "copy_group_voice",
+      args: {
+        sourceTrackIndex: 1,
+        sourceGroupIndex: 2,
+        trackIndex: 3,
+        groupIndex: 2,
+        referenceFingerprint: "fresh-target-reference",
+      },
+    },
+  }));
+  const payload = await bridge;
+  assert.equal(payload.referenceFingerprint, "fresh-target-reference");
+  assert.equal(result.action, "copy_group_voice");
+  assert.equal(result.outcome, "changed");
+  assert.deepEqual(result.warnings, warnings);
+  assert.equal("referenceFingerprint" in result, false);
+  assert.ok(Buffer.byteLength(JSON.stringify(result), "utf8") <= 2_048);
+
+  const description = toolJson(await client.callTool({
+    name: "sv_describe", arguments: { action: "copy_group_voice" },
+  }));
+  const actions = description.actions as { description: string }[];
+  assert.match(actions[0]!.description, /Target values absent from the source are preserved/u);
+  assert.match(actions[0]!.description, /not a full Voice snapshot replacement/u);
+});
