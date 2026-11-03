@@ -35,7 +35,7 @@ async function writeStatus(
     preferredProtocolVersion: 3,
     state: "running",
     updatedAtEpochMs: Date.now(),
-    bridgeVersion: "0.3.1",
+    bridgeVersion: "0.3.2",
     executorBuildId: EXECUTOR_BUILD_ID,
     host: { osType: "Windows" },
     projectFile: "session-test.svp",

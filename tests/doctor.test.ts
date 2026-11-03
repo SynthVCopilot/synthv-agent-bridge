@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -23,6 +23,7 @@ function runDoctor(
   ipcDirectory: string,
   target?: string,
   host: "core" | "profiles" | "all" = "core",
+  extraArguments: readonly string[] = [],
 ): {
   readonly status: number | null;
   readonly checks: DoctorCheck[];
@@ -35,6 +36,7 @@ function runDoctor(
       "--host",
       host,
       ...(target === undefined ? [] : ["--target", target]),
+      ...extraArguments,
     ],
     {
       cwd: process.cwd(),
@@ -73,7 +75,7 @@ test("doctor accepts a fresh MCP capability fingerprint", async () => {
       [
         "synthv-agent-bridge-sidebar-client-status-v1",
         "state=running",
-        "version=0.3.1",
+        "version=0.3.2",
         `buildFingerprint=${SERVER_BUILD_FINGERPRINT}`,
         `capabilityFingerprint=${SERVER_CAPABILITY_FINGERPRINT}`,
         `updatedAtEpochMs=${Date.now()}`,
@@ -185,7 +187,7 @@ test("doctor rejects a fresh MCP process from a different build", async () => {
       [
         "synthv-agent-bridge-sidebar-client-status-v1",
         "state=running",
-        "version=0.3.1",
+        "version=0.3.2",
         "buildFingerprint=stale-build",
         "capabilityFingerprint=stale-build",
         `updatedAtEpochMs=${Date.now()}`,
@@ -237,3 +239,104 @@ test(
     }
   },
 );
+
+const gitAvailable = spawnSync("git", ["--version"]).status === 0;
+
+function gitIn(cwd: string, ...args: string[]): void {
+  const result = spawnSync(
+    "git",
+    [
+      "-c", "user.name=Doctor Test",
+      "-c", "user.email=doctor-test@example.invalid",
+      "-c", "commit.gpgsign=false",
+      ...args,
+    ],
+    { cwd, encoding: "utf8" },
+  );
+  assert.equal(result.status, 0, result.stderr);
+}
+
+// A local repository standing in for the release remote, tagged with versions.
+async function releaseSource(directory: string, tags: readonly string[]): Promise<string> {
+  const source = path.join(directory, "releases");
+  await mkdir(source, { recursive: true });
+  gitIn(source, "init", "-b", "main");
+  await writeFile(path.join(source, "README.md"), "releases\n", "utf8");
+  gitIn(source, "add", ".");
+  gitIn(source, "commit", "-m", "release");
+  for (const tag of tags) {
+    gitIn(source, "tag", tag);
+  }
+  return source;
+}
+
+async function packageVersion(): Promise<[number, number, number]> {
+  const manifest = JSON.parse(await readFile("package.json", "utf8")) as { version: string };
+  const [major = 0, minor = 0, patch = 0] = manifest.version.split(".").map(Number);
+  return [major, minor, patch];
+}
+
+test("doctor stays offline and skips the update check by default", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "synthv-doctor-offline-"));
+  try {
+    const result = runDoctor(directory);
+    assert.equal(
+      result.checks.some((candidate) => candidate.name === "update-check"),
+      false,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("doctor --check-updates reports a newer release tag", { skip: !gitAvailable }, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "synthv-doctor-update-"));
+  try {
+    const [major, minor, patch] = await packageVersion();
+    const source = await releaseSource(directory, [
+      `v${major}.${minor}.${patch}`,
+      `v${major}.${minor + 1}.0`,
+      "not-a-release",
+    ]);
+    const result = runDoctor(directory, undefined, "core", ["--check-updates", "--update-source", source]);
+    const update = check(result.checks, "update-check") as DoctorCheck & {
+      readonly details?: { readonly latest?: string };
+    };
+    assert.equal(update.status, "warning");
+    assert.equal(update.details?.latest, `v${major}.${minor + 1}.0`);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("doctor --check-updates accepts the current release", { skip: !gitAvailable }, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "synthv-doctor-current-release-"));
+  try {
+    const [major, minor, patch] = await packageVersion();
+    const source = await releaseSource(directory, [`v${major}.${minor}.${patch}`]);
+    const result = runDoctor(directory, undefined, "core", ["--check-updates", "--update-source", source]);
+    assert.equal(check(result.checks, "update-check").status, "ok");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("doctor --check-updates warns instead of failing when the source is unreachable", { skip: !gitAvailable }, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "synthv-doctor-unreachable-"));
+  try {
+    const result = runDoctor(directory, undefined, "core", [
+      "--check-updates",
+      "--update-source",
+      path.join(directory, "missing-repository"),
+    ]);
+    assert.equal(check(result.checks, "update-check").status, "warning");
+    assert.equal(
+      result.checks.some(
+        (candidate) => candidate.name === "update-check" && candidate.status === "error",
+      ),
+      false,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

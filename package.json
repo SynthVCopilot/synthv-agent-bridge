@@ -1,7 +1,11 @@
 {
   "name": "synthv-agent-bridge",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "A reliable MCP bridge for controlling Synthesizer V Studio through its scripting API.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SynthVCopilot/synthv-agent-bridge.git"
+  },
   "private": true,
   "type": "module",
   "bin": {
@@ -41,6 +45,7 @@
     "start": "node dist/src/cli.js",
     "inspector": "npm run build && npx @modelcontextprotocol/inspector node dist/src/cli.js",
     "install:synthv": "node scripts/install-synthv-bridge.mjs",
+    "update": "node scripts/update.mjs",
     "install:sv1-legacy": "node scripts/install-sv1-legacy-bridge.mjs",
     "doctor": "node scripts/doctor.mjs"
   },

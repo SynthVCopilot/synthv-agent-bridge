@@ -134,14 +134,21 @@ Bridge 与 MCP 服务都运行后：
 
 ## 更新
 
-在干净工作区中：
+检查有没有新版本（不加这个参数时 Doctor 完全离线）：
 
 ```powershell
-git pull --ff-only
-npm install
-npm run build
-npm run install:synthv -- --target "C:\SynthV脚本目录"
+npm run doctor -- --check-updates
 ```
 
-按安装器提示重新扫描/启动 Bridge，再重新连接 MCP 宿主。编辑真实工程前重新
+然后在干净的工作区中更新：
+
+```powershell
+npm run update
+```
+
+它会依次执行 `git pull --ff-only`、`npm ci` 和 `npm run build`，再把 SynthV 脚本
+重新安装到上次安装的位置。如果工作区有未提交的修改或分支已分叉，它会直接停止，
+不做任何改动。传 `--target` 可以装到其他位置，传 `--dry-run` 可以先查看计划。
+
+之后按安装器提示重新扫描/启动 Bridge，再重新连接 MCP 宿主。编辑真实工程前重新
 运行 Doctor。

@@ -141,14 +141,22 @@ skills does not install or start this Runtime.
 
 ## Update
 
-From a clean checkout:
+Check for a new release (Doctor is offline without this flag):
 
 ```powershell
-git pull --ff-only
-npm install
-npm run build
-npm run install:synthv -- --target "C:\path\to\SynthV scripts"
+npm run doctor -- --check-updates
 ```
+
+Then update from a clean checkout:
+
+```powershell
+npm run update
+```
+
+This runs `git pull --ff-only`, `npm ci` and `npm run build`, then reinstalls the
+SynthV scripts where they were last installed. It stops without changing
+anything if the checkout has uncommitted edits or has diverged. Pass
+`--target` to install somewhere else, or `--dry-run` to see the plan first.
 
 Then rescan/restart the Bridge as requested by the installer and reconnect the
 MCP host. Re-run Doctor before editing a real project.

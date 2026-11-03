@@ -183,7 +183,7 @@ async function openClient(traceEnabled) {
     stderr: "pipe",
   });
   const client = new Client(
-    { name: "synthv-agent-stage3-stability", version: "0.3.1" },
+    { name: "synthv-agent-stage3-stability", version: "0.3.2" },
     { capabilities: {} },
   );
   await client.connect(transport);

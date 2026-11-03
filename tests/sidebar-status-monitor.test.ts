@@ -138,7 +138,7 @@ test("sidebar status reports only MCP and panel runtime health", async (context)
     [
       "synthv-agent-bridge-sidebar-runtime-v3",
       "state=running",
-      "version=0.3.1",
+      "version=0.3.2",
       `buildId=${SIDEBAR_BUILD_ID}`,
       `updatedAtEpochMs=${Date.now()}`,
       "",

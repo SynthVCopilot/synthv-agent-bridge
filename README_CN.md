@@ -15,7 +15,7 @@
 
 ## 状态
 
-**v0.3.1 · 协议 v3。** 已在 Synthesizer V Studio 2 Pro 2.2.1 和 2.3.0 上测试。
+**v0.3.2 · 协议 v3。** 已在 Synthesizer V Studio 2 Pro 2.2.1 和 2.3.0 上测试。
 全部 17 个读取动作和 9 个界面动作已在真机上验证；39 个写入动作中有 31 个
 已验证，其余 8 个中：
 
@@ -100,13 +100,33 @@ Agent 决定改什么；MCP 服务器负责校验和转发请求；Lua 脚本读
    npm run doctor -- --target "/path/to/Synthesizer V Studio 2/scripts"
    ```
 
-**更新：** 拉取代码后依次运行 `npm install`、`npm run build` 和安装器。如果安装器
-提示 Bridge 运行时有变化，就在 SynthV 中选择 **脚本 → 重新扫描**，再重新启动
-Bridge（重新扫描会停止正在运行的 Bridge）。最后重新连接 MCP 宿主，让它加载
-新的构建。
-
 《小星星》引导式演示和 Agent 的工作规则在独立的
 [`synthv-copilot` 技能插件](https://github.com/SynthVCopilot/SKILLS)里。
+
+### 更新
+
+检查有没有新版本：
+
+```bash
+npm run doctor -- --check-updates
+```
+
+不加这个参数时，Doctor 完全离线运行。
+
+一条命令更新：
+
+```bash
+npm run update
+```
+
+它会快进拉取代码、重新安装依赖、重新构建，并把 SynthV 脚本重新装到上次安装的
+位置。如果工作区有未提交的修改，它会直接停止，不做任何改动。更新完成后：
+
+1. 如果提示 Bridge 运行时有变化，在 SynthV 中选择 **脚本 → 重新扫描**，再重新
+   启动 Bridge（重新扫描会停止正在运行的 Bridge）。
+2. 重新连接 MCP 宿主，让它加载新的构建。
+
+想在 GitHub 上收到新版本通知，可以在仓库页面选择 **Watch → Custom → Releases**。
 
 ## 歌手与唱法
 

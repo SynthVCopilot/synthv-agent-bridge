@@ -93,6 +93,7 @@ npm run check
 node --check scripts/clean.mjs
 node --check scripts/install-synthv-bridge.mjs
 node --check scripts/doctor.mjs
+node --check scripts/update.mjs
 luac5.4 -p synthv/SynthVAgentBridge.lua synthv/StopSynthVAgentBridge.lua synthv/SynthVAgentSidebar.lua
 ```
 

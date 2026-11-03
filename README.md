@@ -16,7 +16,7 @@ open in **Synthesizer V Studio 2 Pro**.
 
 ## Status
 
-**v0.3.1 · protocol v3.** Tested on Synthesizer V Studio 2 Pro 2.2.1 and
+**v0.3.2 · protocol v3.** Tested on Synthesizer V Studio 2 Pro 2.2.1 and
 2.3.0. All 17 read actions and 9 UI actions are verified on a real host, as
 are 31 of 39 write actions. Of the other 8:
 
@@ -106,13 +106,35 @@ each step in detail.
    npm run doctor -- --target "/path/to/Synthesizer V Studio 2/scripts"
    ```
 
-**To update:** pull, then run `npm install`, `npm run build` and the installer
-again. If the installer says the Bridge runtime changed, choose **Scripts →
-Rescan** in SynthV, then start the Bridge again. Rescan stops a running
-Bridge. Finally reconnect your MCP host so it loads the new build.
-
 The guided *Twinkle Star* demo and the Agent's working rules are a separate
 [`synthv-copilot` skill plugin](https://github.com/SynthVCopilot/SKILLS).
+
+### Updating
+
+To check for a new release:
+
+```bash
+npm run doctor -- --check-updates
+```
+
+Doctor works offline unless you pass this flag.
+
+To update:
+
+```bash
+npm run update
+```
+
+This fast-forwards your checkout, reinstalls dependencies, rebuilds, and
+reinstalls the SynthV scripts where you last installed them. It stops without
+changing anything if you have uncommitted edits. Afterwards:
+
+1. If it says the Bridge runtime changed, choose **Scripts → Rescan** in SynthV
+   and start the Bridge again. Rescan stops a running Bridge.
+2. Reconnect your MCP host so it loads the new build.
+
+To hear about new releases on GitHub, choose **Watch → Custom → Releases** on
+the repository page.
 
 ## Singers and Vocal Modes
 

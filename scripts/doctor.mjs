@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { access, readFile, readdir, stat } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -27,6 +28,9 @@ const suppliedTarget =
   targetFlagIndex >= 0
     ? argumentsList[targetFlagIndex + 1]
     : process.env.SYNTHV_SCRIPTS_DIR;
+// Doctor stays offline unless the user asks for an update check.
+const checkUpdates = argumentsList.includes("--check-updates");
+const updateSourceFlagIndex = argumentsList.indexOf("--update-source");
 
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -180,8 +184,8 @@ async function newestMtimeMs(files) {
 
 record(
   "package-version",
-  expectedVersion === "0.3.1" ? "ok" : "error",
-  `Package version is ${expectedVersion}; this release line must remain 0.3.1.`,
+  expectedVersion === "0.3.2" ? "ok" : "error",
+  `Package version is ${expectedVersion}; this release line must remain 0.3.2.`,
 );
 
 const componentBuildIdentity = await readComponentBuildIdentity(repositoryRoot);
@@ -503,6 +507,99 @@ if (selectedHost === "profiles" || selectedHost === "all") {
         : `No usable project-scoped ${SERVER_NAME} entry was found in ${profile.id}.`,
     );
   }
+}
+
+function parseReleaseVersion(text) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)$/u.exec(text);
+  return match === null ? null : match.slice(1).map(Number);
+}
+
+function compareReleaseVersions(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+}
+
+function resolveUpdateSource() {
+  if (updateSourceFlagIndex >= 0) return argumentsList[updateSourceFlagIndex + 1];
+  const origin = spawnSync(
+    "git",
+    ["-C", repositoryRoot, "remote", "get-url", "origin"],
+    { encoding: "utf8", timeout: 5_000 },
+  );
+  const originUrl = origin.status === 0 ? origin.stdout.trim() : "";
+  const repository = packageManifest.repository;
+  return originUrl ||
+    (typeof repository === "string" ? repository : repository?.url);
+}
+
+// The only Doctor path that may use the network: it lists release tags through
+// git and never fetches into, or changes, this checkout.
+function recordUpdateCheck() {
+  const source = resolveUpdateSource();
+  if (!source) {
+    record(
+      "update-check",
+      "warning",
+      "No update source is known; pass --update-source with the repository URL.",
+    );
+    return;
+  }
+  const result = spawnSync(
+    "git",
+    ["ls-remote", "--tags", "--refs", source],
+    {
+      encoding: "utf8",
+      timeout: 20_000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    },
+  );
+  if (result.error !== undefined || result.status !== 0) {
+    record(
+      "update-check",
+      "warning",
+      `Could not read release tags from ${source}; check the network or git installation.`,
+      {
+        source,
+        cause: (result.error?.message ?? result.stderr ?? "").trim().slice(0, 300),
+      },
+    );
+    return;
+  }
+  const releases = result.stdout
+    .split(/\r?\n/u)
+    .map((line) => line.split("\t")[1]?.replace(/^refs\/tags\//u, ""))
+    .filter((tag) => tag !== undefined)
+    .map((tag) => ({ tag, version: parseReleaseVersion(tag) }))
+    .filter((release) => release.version !== null)
+    .sort((left, right) => compareReleaseVersions(right.version, left.version));
+  const currentVersion = parseReleaseVersion(expectedVersion);
+  if (releases.length === 0 || currentVersion === null) {
+    record(
+      "update-check",
+      "warning",
+      `No release tags were found at ${source}.`,
+      { source },
+    );
+    return;
+  }
+  const latest = releases[0];
+  const difference = compareReleaseVersions(latest.version, currentVersion);
+  record(
+    "update-check",
+    difference > 0 ? "warning" : "ok",
+    difference > 0
+      ? `Release ${latest.tag} is available; this checkout is ${expectedVersion}. Run npm run update.`
+      : difference === 0
+        ? `${expectedVersion} is the latest release.`
+        : `${expectedVersion} is newer than the latest release ${latest.tag}.`,
+    { source, latest: latest.tag },
+  );
+}
+
+if (checkUpdates) {
+  recordUpdateCheck();
 }
 
 try {

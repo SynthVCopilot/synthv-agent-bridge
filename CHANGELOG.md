@@ -4,8 +4,18 @@ All notable changes will be documented in this file.
 
 ## Unreleased
 
+## 0.3.2 - 2026-11-03
+
 ### Added
 
+- `npm run update` updates a git checkout in one step. It fast-forwards the
+  branch, runs `npm ci` and `npm run build`, then reinstalls the SynthV scripts
+  where they were last installed, keeping the side-panel choice. It stops
+  without changes on uncommitted edits or a diverged branch.
+- `npm run doctor -- --check-updates` compares the checkout with the latest
+  release tag. Doctor stays offline without this flag.
+- `copy_group_voice` (experimental) merges the Voice parameters and Vocal
+  Mode axes stored on a source Group into a target Group (#13).
 - SynthV 2.3.0 support for undocumented runtime methods found by
   introspection. `update_group` sets a Note Group `scale`, validated against
   `SV:scaleNotes()`/`SV:scaleTypes()`. `set_automation_points` sets
@@ -23,6 +33,8 @@ All notable changes will be documented in this file.
   on 2.3.0, which no longer allows notes in a Track's main Group.
 - `pitchAutoMode` capability detection checks for presence, because 2.3.0
   exposes host methods as callable userdata rather than Lua functions.
+- `add_pitch_controls` and `delete_pitch_controls` no longer fail with
+  `pitchControls must be an object` when sent through `sv_command` (#13).
 
 ### Security
 

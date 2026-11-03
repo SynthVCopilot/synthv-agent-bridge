@@ -34,7 +34,7 @@ async function measureToolCatalog() {
   const server = createServer(loadConfig({}, directory));
   const client = new Client({
     name: "synthv-v3-benchmark",
-    version: "0.3.1",
+    version: "0.3.2",
   });
   try {
     await Promise.all([

@@ -26,7 +26,7 @@ local function writeBridgeStatus(updatedAt, sessionToken)
     writeFile(
         prefix .. ".status.json",
         string.format(
-            '{"state":"running","updatedAtEpochMs":%d,"bridgeVersion":"0.3.1","sessionToken":"%s"}\n',
+            '{"state":"running","updatedAtEpochMs":%d,"bridgeVersion":"0.3.2","sessionToken":"%s"}\n',
             updatedAt,
             sessionToken
         )
@@ -39,7 +39,7 @@ writeFile(
     table.concat({
         "synthv-agent-bridge-sidebar-client-status-v1",
         "state=running",
-        "version=0.3.1",
+        "version=0.3.2",
         "updatedAtEpochMs=" .. tostring(now),
         ""
     }, "\n")
@@ -117,7 +117,7 @@ assert(clientInfo.type == "SidePanelSection", "side panel client type was not re
 assert(clientInfo.versionNumber == 10, "side panel version number was not updated")
 
 local state = getSidePanelSectionState()
-assert(state.title:find("0.3.1", 1, true), "side panel title has no version")
+assert(state.title:find("0.3.2", 1, true), "side panel title has no version")
 assert(#state.rows == 7, "connection-only side panel layout changed unexpectedly")
 
 local bridgeStatusWidget = state.rows[1].columns[1].value
