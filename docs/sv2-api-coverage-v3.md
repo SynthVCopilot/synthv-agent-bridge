@@ -1,6 +1,7 @@
 # Synthesizer V Studio 2 API Coverage Matrix
 
-Status: coverage classification baseline for `0.2.0-alpha`
+Status: coverage classification baseline for `0.2.0-alpha`, with a SynthV 2.3.0
+runtime delta recorded on 2026-11-03
 
 Source baseline: the
 [official scripting index](https://resource.dreamtonics.com/scripting/index.html)
@@ -12,6 +13,57 @@ capability still awaiting a supported action or real-host certification.
 
 This matrix records intended coverage, not a claim that every alpha action has
 completed real SynthV acceptance.
+
+## SynthV 2.3.0 runtime delta
+
+SynthV Studio 2 Pro 2.3.0 (2026-11-02) did not update the official scripting
+index: it is still the 2025-10-09 build and the release notes list no
+scripting changes. Lua introspection of the 2.3.0 host on 2026-11-03 still
+found new and changed members. They are recorded in `runtimeAdditions` and
+`runtimeDeviations` below, separate from the frozen official baseline.
+
+Runtime handling added for 2.3.0:
+
+- `languageOverride` accepts `korean`, `spanish`, `french`, `german`, `italian`
+  and `portuguese`, the identifiers used by SynthV's own 2.3.0 phoneme
+  reference and voice catalog. The host stores any string, so this list is
+  the only guard. The four languages new in 2.3.0 fail closed on older hosts.
+- `phonesetOverride` reads and writes the 2.3.0 `phoneset` attribute key.
+  Before this change, 2.3.0 reads returned `null` and writes failed preflight.
+- `update_group` accepts `scale: {root, type}`, validated against
+  `SV:scaleNotes()`/`SV:scaleTypes()` because `setScale` ignores bad input
+  silently. Group reads include `scale`.
+- `set_automation_points` accepts `interpolationMethod`
+  (`linear`/`cosine`/`cubic`) in the same Undo record, with read-back.
+- `get_track_mixer` returns read-only `fx` parameters.
+- `add_notes` with `grouping=target` on a main Group is rejected before Undo,
+  because 2.3.0 no longer allows notes in a Track's main Group.
+
+Live acceptance on an untitled scratch project (no voice database loaded,
+because the installed v201 voices were not listed by 2.3.0):
+
+- Every Query and UI read worked.
+- These writes all verified: note, phoneme, Automation, Group, Track, mixer,
+  tempo, selection, viewport, playback loop and seek.
+- `vf` and X-SAMPA phoneme strings are stored verbatim.
+- Automation ranges now come from the host: `tension`, `breathiness` and
+  `gender` are ±2, `loudness` is −48…24 and `toneShift` is ±800. They are read
+  fresh from `getDefinition().range`, so no Runtime change was needed.
+- Voice-dependent features (computed phonemes, Retakes, the language and
+  X-SAMPA pickers) still need a v205 voice for acceptance.
+
+Host stability on 2.3.0:
+
+- `MainEditorView:setCurrentTrack(currentTrack)` crashed the host in 2 of 2
+  runs (`0xc0000005`).
+- The same access-violation offset also appeared once during a Bridge
+  `add_notes` and once during `set_automation_points`. Three later complete
+  write batteries (about 90 verified writes, with and without the Sidebar and
+  with editor panels open) did not reproduce it. Treat it as an intermittent
+  2.3.0 host fault.
+- Scripts → Rescan stops a running Bridge. Restart it afterwards.
+- 2.3.0 runs side-panel script timers only while the Scripts panel is
+  visible, so a hidden Sidebar reports `stale`. Writes do not depend on it.
 
 ## Machine-checkable inventory
 
@@ -499,9 +551,38 @@ Actions, aggregate mismatches, blank evidence, or unknown real-host status.
     "current Vocal display name or database identity",
     "enumeration of untouched default Vocal Mode names",
     "active Retake getter and Take content enumeration",
-    "Track effect-chain objects and parameters",
+    "documented Track effect parameter ranges (2.3.0 exposes undocumented getFxParams/setFxParams only)",
     "instrumental source file path",
     "project save and audio render/export"
+  ],
+  "runtimeBaseline": "Synthesizer V Studio 2 Pro 2.3.0 (hostVersionNumber 131840), Lua runtime introspection on 2026-11-03",
+  "runtimeAdditions": [
+    {"class":"NoteGroup","member":"getScale","classification":"semantic","observed":"returns {root, type}, for example {root=\"C\", type=\"Major\"}","actions":["get_track_notes","list_note_groups","update_group"]},
+    {"class":"NoteGroup","member":"setScale","classification":"semantic","observed":"takes one {root, type} table; silently ignores unknown roots/types and may apply only the root","actions":["update_group"]},
+    {"class":"Automation","member":"setInterpolationMethod","classification":"semantic","observed":"accepts linear, cosine and cubic; any other name silently becomes linear","actions":["set_automation_points"]},
+    {"class":"TrackMixer","member":"getFxParams","classification":"semantic","observed":"returns compressor, postRoomEq (low shelf plus three filters), reverb and room parameter tables","actions":["get_track_mixer"]},
+    {"class":"TrackMixer","member":"setFxParams","classification":"intentionallyUnexposed","observed":"takes one table shaped like getFxParams()","reason":"no documented parameter ranges or reverb type list; the Runtime does not invent mixing values"},
+    {"class":"MainEditorView","member":"setCurrentTrack","classification":"intentionallyUnexposed","observed":"present at runtime","reason":"setCurrentTrack(currentTrack) crashed SynthV 2.3.0 with an access violation in 2 of 2 runs"},
+    {"class":"MainEditorView","member":"setCurrentGroup","classification":"intentionallyUnexposed","observed":"present at runtime","reason":"shares the editor-switch path of setCurrentTrack; not exercised to avoid crashing the host"},
+    {"class":"SV","member":"scaleNotes","classification":"internal","observed":"SV:scaleNotes() returns C, C#, D, D#, E, F, F#, G, G#, A, A#, B","actions":["update_group"]},
+    {"class":"SV","member":"scaleTypes","classification":"internal","observed":"SV:scaleTypes() returns 15 names from Major through Octatonic","actions":["update_group"]},
+    {"class":"SV","member":"parameterTypes","classification":"internal","observed":"SV:parameterTypes() lists nine Automation types; rapIntonation is absent from the list but still readable through getParameter"},
+    {"class":"SV","member":"pitch2Freq","classification":"internal","observed":"replaces the documented pitch2freq spelling","actions":["convert_pitch"]},
+    {"class":"SV","member":"QUARTER","classification":"internal","observed":"constant 705600000 blicks per quarter note"},
+    {"class":"PitchControlPoint","member":"isTemporary","classification":"intentionallyUnexposed","observed":"returns false for a detached point","reason":"undocumented meaning"},
+    {"class":"PitchControlPoint","member":"type","classification":"internal","observed":"class-name string field"},
+    {"class":"PitchControlCurve","member":"type","classification":"internal","observed":"class-name string field"},
+    {"class":"TrackMixer","member":"type","classification":"internal","observed":"class-name string field"}
+  ],
+  "runtimeDeviations": [
+    {"class":"Note","member":"getAttributes().phonesetOverride","observed":"2.3.0 reports the documented phonesetOverride attribute as phoneset","handling":"reads either key and writes the key the host reports; the public field stays phonesetOverride"},
+    {"class":"Note","member":"setLanguageOverride","observed":"stores any string without validation; 2.3.0 adds french, german, italian and portuguese next to korean and spanish","handling":"executor and schema accept only the identifiers from SynthV's 2.3.0 phoneme reference; the four 2.3.0 languages fail closed on older hosts"},
+    {"class":"Note","member":"setPitchAutoMode","observed":"documented but absent at runtime","handling":"pitchAutoMode writes fail closed with UNSUPPORTED_HOST_CAPABILITY"},
+    {"class":"NoteGroup","member":"addNote","observed":"2.3.0 raises 'notes cannot be added to a track's main group'","handling":"add_notes rejects grouping=target on a main Group before Undo; ensureNonMain remains the v3 default"},
+    {"class":"Automation","member":"getInterpolationMethod","observed":"returns lowercase linear/cosine/cubic instead of the documented Linear/Cosine/Cubic","handling":"interpolation comparisons are case-insensitive"},
+    {"class":"SV","member":"pitch2freq","observed":"absent; exposed as pitch2Freq","handling":"convert_pitch falls back to pitch2Freq"},
+    {"class":"NestedObject","member":"getIndexInParent","observed":"absent on Project, TimeAxis, MainEditorView, ArrangementView, CoordinateSystem, PlaybackControl and both selection states","handling":"the Runtime calls it only on nested project objects"},
+    {"class":"NestedObject","member":"method values","observed":"host methods are callable userdata, so type(method) is not \"function\"","handling":"capability probes check presence (~= nil) instead of type"}
   ],
   "actionGroups": {
     "verifiedReads": ["convert_pitch", "get_project_info", "inspect_score_file", "get_time_axis", "convert_time", "list_tracks", "list_note_groups", "get_track_notes", "get_group_voice", "get_note_phoneme_data", "get_phrase_context", "get_computed_group_data", "get_note_retakes", "get_pitch_controls", "get_automation", "sample_automation", "get_track_mixer"],
@@ -588,13 +669,13 @@ content.
 |---|---|---|---|
 | `ArrangementSelectionState` | read/clear/select/unselect Groups | callbacks, parent/index, memory methods | Real-host selection callback behavior remains advisory |
 | `ArrangementView` | arrangement selection and navigation | parent/index/memory methods | None at class boundary |
-| `Automation` | add/get/getAllPoints/getPoints/remove/removeAll/simplify, definition and interpolation reads | clone and script-data methods | Closed-range removal is verified point-by-point |
+| `Automation` | add/get/getAllPoints/getPoints/remove/removeAll/simplify, definition and interpolation reads; 2.3.0 interpolation writes | clone and script-data methods | Closed-range removal is verified point-by-point; the 2.3.0 setter silently maps unknown names to linear |
 | `CoordinateSystem` | read view ranges; set time/value viewport; coordinate conversions and snap | parent/index/memory methods | Value-axis coverage is host-capability gated |
 | `GroupSelection` | read/clear/select/unselect Groups | legacy selection abstraction plumbing | Prefer concrete arrangement/main-editor states |
-| `MainEditorView` | current Track/Group, selection, navigation | parent/index/memory methods | None at class boundary |
+| `MainEditorView` | current Track/Group, selection, navigation | parent/index/memory methods; 2.3.0 `setCurrentTrack`/`setCurrentGroup` | `setCurrentTrack(currentTrack)` crashed 2.3.0 in 2 of 2 runs |
 | `NestedObject` | none | parent/index/memory lifecycle only | Never crosses IPC |
 | `Note` | read/write lyrics, phonemes, pitch, detune, onset/duration/range, language, musical type, rap accent, pitch mode, attributes, Retakes | clone and script-data methods | V1-only or voice-specific attributes fail closed |
-| `NoteGroup` | add/remove/read Notes; add/remove/read Pitch Controls; parameters; UUID/name; isolated clone | script-data methods | All content writes enforce fresh sharing policy |
+| `NoteGroup` | add/remove/read Notes; add/remove/read Pitch Controls; parameters; UUID/name; 2.3.0 scale; isolated clone | script-data methods | All content writes, including scale, enforce fresh sharing policy |
 | `NoteGroupReference` | target, time/pitch offset, mute, range, Voice/Vocal Modes, main/instrumental state | clone used only inside explicit strategy; script-data methods | Official API cannot identify the Vocal by name |
 | `PitchControlCurve` | read/write position, pitch and points; value sampling | clone and script-data methods | Write verification required |
 | `PitchControlPoint` | read/write position and pitch | clone and script-data methods | Write verification required |
@@ -607,7 +688,7 @@ content.
 | `TimeAxis` | tempo/meter reads and edits; blick/seconds conversion | clone and script-data methods | All edits use a fresh time-axis Guard |
 | `Track` | metadata, color, bounced state, duration, mixer, references; add/remove reference; explicit clone strategies | raw `clone` hidden behind linked/isolated/shell strategies; script-data methods | Display order has no official setter |
 | `TrackInnerSelectionState` | read/clear/select/unselect Notes, Groups, Pitch Controls and points | callbacks, parent/index/memory methods | Real-host multi-kind selection acceptance remains sampled |
-| `TrackMixer` | gain, pan, mute, solo read/write | script-data and lifecycle methods | First common Command Kernel write slice |
+| `TrackMixer` | gain, pan, mute, solo read/write; 2.3.0 FX parameter reads | script-data and lifecycle methods; 2.3.0 `setFxParams` | FX writes wait for documented ranges |
 | `WidgetValue` | none through normal MCP | Sidebar widget state and callbacks | Sidebar remains optional |
 
 ## Methods intentionally not mirrored one-for-one
@@ -628,7 +709,8 @@ The Bridge cannot safely expose what the official API does not provide:
 - current Vocal display name or database identity;
 - enumeration of untouched default Vocal Mode names;
 - current active Retake getter or Retake internals;
-- Track effect-chain objects and parameters;
+- documented Track effect parameter ranges (2.3.0 adds undocumented
+  `getFxParams`/`setFxParams`; the Bridge reads FX but does not write it);
 - instrumental source file path;
 - project save, audio render/export, and several GUI-only features.
 

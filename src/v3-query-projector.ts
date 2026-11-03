@@ -542,6 +542,7 @@ const QUERY_PROJECTION_DEFINITIONS: Readonly<
       "pan",
       "muted",
       "solo",
+      "fx",
     ],
     [
       "trackIndex",
@@ -550,6 +551,7 @@ const QUERY_PROJECTION_DEFINITIONS: Readonly<
       "pan",
       "muted",
       "solo",
+      "fx",
     ],
     ["trackFingerprint", "fingerprint", "referenceFingerprint"],
   ),
@@ -621,6 +623,7 @@ const QUERY_PROJECTION_DEFINITIONS: Readonly<
     [
       "libraryIndex",
       "name",
+      "scale",
       "noteCount",
       "pitchControlCount",
       "referenceCount",

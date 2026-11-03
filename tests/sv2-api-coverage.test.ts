@@ -15,11 +15,15 @@ test("SV2 API coverage inventory is complete and matches the live v3 catalog", (
     readonly liveActionCount: number;
     readonly classifiedActionCount: number;
     readonly semanticWriteCount: number;
+    readonly runtimeAdditionCount: number;
+    readonly runtimeDeviationCount: number;
     readonly errors: readonly string[];
   };
 
   assert.deepEqual(result.errors, []);
   assert.equal(result.officialClassCount, 23);
+  assert.ok(result.runtimeAdditionCount >= 10);
+  assert.ok(result.runtimeDeviationCount >= 5);
   assert.ok(result.officialMethodCount >= 280);
   assert.equal(result.classifiedActionCount, result.liveActionCount);
   assert.ok(result.semanticWriteCount >= 30);

@@ -64,12 +64,21 @@ const displayColorSchema = z
   .describe(
     "Track color as #RRGGBB or AARRGGBB. #RRGGBB is normalized to opaque SynthV AARRGGBB.",
   );
+// Identifiers from SynthV's 2.3.0 phoneme reference and voice catalog. The
+// host stores any string, so the Lua executor re-checks this list and rejects
+// french/german/italian/portuguese on hosts older than 2.3.0.
 const languageOverrideSchema = z.enum([
   "",
   "mandarin",
   "japanese",
   "english",
   "cantonese",
+  "korean",
+  "spanish",
+  "french",
+  "german",
+  "italian",
+  "portuguese",
 ]);
 const rapAccentSchema = z.enum(["", "1", "2", "3", "4", "5"]);
 
@@ -1652,11 +1661,21 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Update SynthV Group",
       description:
-        "Rename a vocal note group or edit a vocal/instrumental reference's mute, offset, transpose, visible range, and supported voice properties.",
+        "Rename a vocal note group, set its scale, or edit a vocal/instrumental reference's mute, offset, transpose, visible range, and supported voice properties.",
       inputSchema: {
         ...groupLocatorShape,
         referenceFingerprint: fingerprintSchema.optional(),
         name: z.string().min(1).max(200).optional(),
+        scale: z
+          .object({
+            root: z.string().min(1).max(8),
+            type: z.string().min(1).max(64),
+          })
+          .strict()
+          .optional()
+          .describe(
+            "Note Group scale (SynthV 2.3.0+). root must be one of SV:scaleNotes() and type one of SV:scaleTypes(); shared Group content policy applies.",
+          ),
         muted: z.boolean().optional(),
         timeOffset: blickSchema.optional(),
         pitchOffset: z.number().int().min(-127).max(127).optional(),
@@ -2403,7 +2422,7 @@ export function createServer(config: BridgeConfig): McpServer {
     {
       title: "Set SynthV Automation Points",
       description:
-        "Add or update group-local automation points using an expected fingerprint or compact Guard Token. Optionally clear points first; compact mode omits the full resulting curve.",
+        "Add or update group-local automation points using an expected fingerprint or compact Guard Token. Optionally clear points first or set the curve interpolation; compact mode omits the full resulting curve.",
       inputSchema: {
         ...groupLocatorShape,
         parameter: z.string().min(1),
@@ -2416,7 +2435,14 @@ export function createServer(config: BridgeConfig): McpServer {
         clearMode: z.enum(["none", "all", "range"]).default("none"),
         rangeBegin: blickSchema.optional(),
         rangeEnd: blickSchema.optional(),
-        points: z.array(automationPointSchema).min(1).max(10000),
+        points: z
+          .array(automationPointSchema)
+          .max(10000)
+          .describe("At least one point unless interpolationMethod is supplied."),
+        interpolationMethod: z
+          .enum(["linear", "cosine", "cubic"])
+          .optional()
+          .describe("Curve interpolation to set in the same Undo record (SynthV 2.3.0+)."),
         responseMode: responseModeSchema,
       },
       annotations: {
@@ -2591,7 +2617,8 @@ export function createServer(config: BridgeConfig): McpServer {
     "get_track_mixer",
     {
       title: "Get SynthV Track Mixer",
-      description: "Read gain, pan, mute, and solo state for one track.",
+      description:
+        "Read gain, pan, mute, and solo state for one track, plus read-only track FX parameters (fx) on SynthV 2.3.0+.",
       inputSchema: {
         trackIndex: indexSchema,
       },

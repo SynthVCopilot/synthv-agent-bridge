@@ -322,3 +322,23 @@ test("Fake Host: postcondition fault injection fails with Undo guidance", (conte
 test("Fake Host: mutation fault injection requires one Undo recovery", (context) => {
   assertMarker(context, "mixer-mutation-failure-undo");
 });
+
+test("Fake Host: 2.3.0-only note languages fail closed on older hosts", (context) => {
+  assertMarker(context, "language-override-host-gated");
+});
+
+test("Fake Host: phoneset overrides use the attribute key the host reports", (context) => {
+  assertMarker(context, "phoneset-host-key");
+});
+
+test("Fake Host: Group scale writes validate against host scale lists", (context) => {
+  assertMarker(context, "group-scale-host-lists");
+});
+
+test("Fake Host: Automation interpolation writes are verified", (context) => {
+  assertMarker(context, "automation-interpolation-write");
+});
+
+test("Fake Host: track FX parameters are read-only and host-gated", (context) => {
+  assertMarker(context, "mixer-fx-read-only");
+});

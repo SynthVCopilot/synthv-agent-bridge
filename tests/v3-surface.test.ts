@@ -1149,6 +1149,41 @@ test("v3 field projection warns instead of returning a silent empty result", () 
   );
 });
 
+test("v3 Pitch Control arrays expand without being read as tuning objects", () => {
+  const contexts = new V2ContextStore();
+  const contextId = contexts.issue({
+    sourceAction: "get_pitch_controls",
+    targetKind: "group",
+    trackIndex: 1,
+    groupIndex: 2,
+    groupUuid: GROUP_UUID,
+    referenceFingerprint: "reference",
+    noteFingerprints: new Map(),
+    pitchControlFingerprints: new Map([[1, "pitch-1"]]),
+    automationFingerprints: new Map(),
+  });
+
+  const added = v2Testing.expandContext(
+    "add_pitch_controls",
+    { pitchControls: [{ kind: "point", position: 0, pitch: 61 }] },
+    contextId,
+    contexts,
+  );
+  assert.deepEqual(added.pitchControls, [
+    { kind: "point", position: 0, pitch: 61 },
+  ]);
+
+  const deleted = v2Testing.expandContext(
+    "delete_pitch_controls",
+    { pitchControls: [{ pitchControlIndex: 1 }] },
+    contextId,
+    contexts,
+  );
+  assert.deepEqual(deleted.pitchControls, [
+    { pitchControlIndex: 1, fingerprint: "pitch-1" },
+  ]);
+});
+
 test("v3 note guards fail closed in TypeScript without a Context", () => {
   const contexts = new V2ContextStore();
 

@@ -1500,7 +1500,7 @@ local function actionMutatesGroupContent(action, payload, reference)
         return true
     end
     if action == "update_group" then
-        return isProvided(payload.name)
+        return isProvided(payload.name) or isProvided(payload.scale)
     end
     if action == "script_data" then
         if payload.operation ~= "set" and payload.operation ~= "remove" then
@@ -1521,7 +1521,9 @@ local function validateSharedGroupWriteSafety(action, payload)
         and action ~= "script_data" then
         return
     end
-    if action == "update_group" and not isProvided(payload.name) then
+    if action == "update_group"
+        and not isProvided(payload.name)
+        and not isProvided(payload.scale) then
         return
     end
     if action == "script_data"
@@ -1601,12 +1603,185 @@ local function validateSharedGroupWriteSafety(action, payload)
     end
 end
 
+-- Adapters for SynthV 2.3.0 runtime behavior that the official index generated
+-- 2025-10-09 does not document. Grouped in one table to respect Lua's
+-- 200-local limit for the main chunk.
+local HOST_2_3 = { versionNumber = 131840 }
+
+-- Per-note language identifiers used by SynthV's 2.3.0 phoneme reference and
+-- voice catalog. Note:setLanguageOverride stores any string without
+-- validation, so this table is the only guard against persisting an unknown
+-- language. Values are the minimum hostVersionNumber that synthesizes it.
+HOST_2_3.noteLanguageOverrides = {
+    [""] = 0,
+    mandarin = 0,
+    japanese = 0,
+    english = 0,
+    cantonese = 0,
+    korean = 0,
+    spanish = 0,
+    french = HOST_2_3.versionNumber,
+    german = HOST_2_3.versionNumber,
+    italian = HOST_2_3.versionNumber,
+    portuguese = HOST_2_3.versionNumber
+}
+
+function HOST_2_3.requireNoteLanguageOverride(value, path)
+    local language = requireString(value, path, true)
+    local minimumHostVersion = HOST_2_3.noteLanguageOverrides[language]
+    if minimumHostVersion == nil then
+        raiseBridgeError("INVALID_ARGUMENT", path .. " is unsupported")
+    end
+    local hostVersion = tonumber(HOST_INFO.hostVersionNumber) or 0
+    if hostVersion < minimumHostVersion then
+        raiseBridgeError(
+            "UNSUPPORTED_HOST_CAPABILITY",
+            path .. " requires a newer SynthV host",
+            {
+                capability = "Note.languageOverride",
+                language = language,
+                minimumHostVersionNumber = minimumHostVersion,
+                hostVersionNumber = hostVersion
+            }
+        )
+    end
+    return language
+end
+
+-- SynthV 2.3.0 reports the documented phonesetOverride Note attribute as
+-- phoneset. Read either key and write back the key the host reports.
+function HOST_2_3.phonesetAttributeKey(attributes)
+    if type(attributes) == "table" and attributes.phoneset ~= nil then
+        return "phoneset"
+    end
+    return "phonesetOverride"
+end
+
+function HOST_2_3.phonesetValue(attributes)
+    if type(attributes) ~= "table" then
+        return nil
+    end
+    return attributes[HOST_2_3.phonesetAttributeKey(attributes)]
+end
+
+-- NoteGroup:getScale()/setScale({root, type}) exist from 2.3.0. Older hosts
+-- omit scale.
+function HOST_2_3.readGroupScale(group)
+    local scale = safeCall(function()
+        if group.getScale == nil then
+            return nil
+        end
+        return group:getScale()
+    end, nil)
+    if type(scale) ~= "table"
+        or type(scale.root) ~= "string"
+        or type(scale.type) ~= "string" then
+        return nil
+    end
+    return { root = scale.root, type = scale.type }
+end
+
+function HOST_2_3.listContains(list, value)
+    if type(list) ~= "table" then
+        return false
+    end
+    for index = 1, #list do
+        if list[index] == value then
+            return true
+        end
+    end
+    return false
+end
+
+-- NoteGroup:setScale silently ignores unknown roots/types and can apply only
+-- the root, so validate against the host's own SV:scaleNotes()/scaleTypes().
+function HOST_2_3.prepareGroupScale(value, group)
+    local input = requireObject(value, "scale")
+    for key, _item in pairs(input) do
+        if key ~= "root" and key ~= "type" then
+            raiseBridgeError("INVALID_ARGUMENT", "scale contains an unsupported field", {
+                field = key
+            })
+        end
+    end
+    local root = requireString(input.root, "scale.root", false)
+    local scaleType = requireString(input.type, "scale.type", false)
+    local supported = group ~= nil and safeCall(function()
+        return group.getScale ~= nil
+            and group.setScale ~= nil
+            and SV.scaleNotes ~= nil
+            and SV.scaleTypes ~= nil
+    end, false)
+    if not supported then
+        raiseBridgeError(
+            "UNSUPPORTED_HOST_CAPABILITY",
+            "This SynthV host cannot change a Note Group scale",
+            { capability = "NoteGroup.setScale" }
+        )
+    end
+    local roots = safeCall(function()
+        return SV:scaleNotes()
+    end, nil)
+    local scaleTypes = safeCall(function()
+        return SV:scaleTypes()
+    end, nil)
+    if not HOST_2_3.listContains(roots, root) then
+        raiseBridgeError("INVALID_ARGUMENT", "scale.root is not one of SV:scaleNotes()", {
+            allowed = type(roots) == "table" and roots or JSON_NULL
+        })
+    end
+    if not HOST_2_3.listContains(scaleTypes, scaleType) then
+        raiseBridgeError("INVALID_ARGUMENT", "scale.type is not one of SV:scaleTypes()", {
+            allowed = type(scaleTypes) == "table" and scaleTypes or JSON_NULL
+        })
+    end
+    return { root = root, type = scaleType }
+end
+
+-- Automation:setInterpolationMethod exists from 2.3.0. The host stores
+-- lowercase names and silently turns unknown names into "linear", so only
+-- these verified names are accepted.
+HOST_2_3.interpolationMethods = {
+    linear = true,
+    cosine = true,
+    cubic = true
+}
+
+function HOST_2_3.prepareAutomationInterpolation(automation, value)
+    if not isProvided(value) then
+        return nil
+    end
+    local method = requireString(value, "interpolationMethod", false)
+    if not HOST_2_3.interpolationMethods[method] then
+        raiseBridgeError(
+            "INVALID_ARGUMENT",
+            "interpolationMethod must be linear, cosine, or cubic"
+        )
+    end
+    local supported = safeCall(function()
+        return automation.setInterpolationMethod ~= nil
+    end, false)
+    if not supported then
+        raiseBridgeError(
+            "UNSUPPORTED_HOST_CAPABILITY",
+            "This SynthV host cannot change Automation interpolation",
+            { capability = "Automation.setInterpolationMethod" }
+        )
+    end
+    return method
+end
+
+function HOST_2_3.interpolationMatches(actual, method)
+    return type(actual) == "string" and actual:lower() == method
+end
+
 local function serializeLibraryGroup(project, group, libraryIndex)
     return {
         libraryIndex = libraryIndex,
         groupUuid = group:getUUID(),
         fingerprint = makeLibraryGroupFingerprint(group),
         name = group:getName(),
+        scale = HOST_2_3.readGroupScale(group),
         noteCount = group:getNumNotes(),
         pitchControlCount = safeCall(function()
             return group:getNumPitchControls()
@@ -1698,6 +1873,7 @@ local function serializeGroup(reference, groupIndex, offset, limit)
 
     result.groupUuid = group:getUUID()
     result.name = group:getName()
+    result.scale = HOST_2_3.readGroupScale(group)
     result.noteCount = noteCount
     result.pitchControlCount = safeCall(function()
         return group:getNumPitchControls()
@@ -2960,8 +3136,10 @@ local function applyPitchAutoMode(note, value, path)
         return
     end
 
+    -- SynthV 2.3.0 exposes host methods as callable userdata, not Lua
+    -- functions, so only presence identifies the setter.
     local setterAvailable = safeCall(function()
-        return type(note.setPitchAutoMode) == "function"
+        return note.setPitchAutoMode ~= nil
     end, false)
     if not setterAvailable then
         raiseBridgeError(
@@ -3079,18 +3257,10 @@ local function prepareNoteChanges(note, changes, path)
         prepared.detune = requireFiniteNumber(changes.detune, path .. ".detune")
     end
     if isProvided(changes.languageOverride) then
-        local languageOverride = requireString(changes.languageOverride, path .. ".languageOverride", true)
-        local allowedLanguages = {
-            [""] = true,
-            mandarin = true,
-            japanese = true,
-            english = true,
-            cantonese = true
-        }
-        if not allowedLanguages[languageOverride] then
-            raiseBridgeError("INVALID_ARGUMENT", path .. ".languageOverride is unsupported")
-        end
-        prepared.languageOverride = languageOverride
+        prepared.languageOverride = HOST_2_3.requireNoteLanguageOverride(
+            changes.languageOverride,
+            path .. ".languageOverride"
+        )
     end
     if isProvided(changes.musicalType) then
         local musicalType = requireString(changes.musicalType, path .. ".musicalType", false)
@@ -3300,7 +3470,10 @@ local function preparePhonemePropertyChanges(note, changes, path)
         if #phonesetOverride > 200 then
             raiseBridgeError("INVALID_ARGUMENT", path .. ".phonesetOverride must be at most 200 bytes")
         end
-        attributes.phonesetOverride = phonesetOverride
+        local currentAttributes = safeCall(function()
+            return note:getAttributes()
+        end, nil)
+        attributes[HOST_2_3.phonesetAttributeKey(currentAttributes)] = phonesetOverride
     end
     if isProvided(changes.evenSyllableDuration) then
         attributes.evenSyllableDuration = requireBoolean(
@@ -3343,18 +3516,10 @@ local function createNoteFromInput(input, path)
         note:setDetune(requireFiniteNumber(input.detune, path .. ".detune"))
     end
     if isProvided(input.languageOverride) then
-        local languageOverride = requireString(input.languageOverride, path .. ".languageOverride", true)
-        local allowedLanguages = {
-            [""] = true,
-            mandarin = true,
-            japanese = true,
-            english = true,
-            cantonese = true
-        }
-        if not allowedLanguages[languageOverride] then
-            raiseBridgeError("INVALID_ARGUMENT", path .. ".languageOverride is unsupported")
-        end
-        note:setLanguageOverride(languageOverride)
+        note:setLanguageOverride(HOST_2_3.requireNoteLanguageOverride(
+            input.languageOverride,
+            path .. ".languageOverride"
+        ))
     end
     if isProvided(input.musicalType) then
         local musicalType = requireString(input.musicalType, path .. ".musicalType", false)
@@ -5228,7 +5393,7 @@ function handlers.get_note_phoneme_data(payload)
             languageOverride = safeCall(function()
                 return note:getLanguageOverride()
             end, ""),
-            phonesetOverride = valueOrNull(rawAttributes.phonesetOverride),
+            phonesetOverride = valueOrNull(HOST_2_3.phonesetValue(rawAttributes)),
             evenSyllableDuration = valueOrNull(
                 rawAttributes.evenSyllableDuration
             ),
@@ -7754,12 +7919,17 @@ function handlers.update_group(payload)
             duration = requireInteger(rawRange.duration, "timeRange.duration", 1)
         }
     end
-    if name == nil and muted == nil and timeOffset == nil and pitchOffset == nil and voice == nil and timeRange == nil then
+    local scaleRequested = isProvided(payload.scale)
+    if name == nil and muted == nil and timeOffset == nil and pitchOffset == nil and voice == nil and timeRange == nil and not scaleRequested then
         raiseBridgeError("INVALID_ARGUMENT", "At least one group field must be supplied")
     end
     if reference:isInstrumental() and name ~= nil then
         raiseBridgeError("INVALID_ARGUMENT", "Instrumental references do not expose a note-group name")
     end
+    if reference:isInstrumental() and scaleRequested then
+        raiseBridgeError("INVALID_ARGUMENT", "Instrumental references do not expose a note-group scale")
+    end
+    local scale = scaleRequested and HOST_2_3.prepareGroupScale(payload.scale, group) or nil
     if reference:isInstrumental() and voice ~= nil then
         raiseBridgeError("INVALID_ARGUMENT", "Instrumental references do not expose vocal voice properties")
     end
@@ -7816,6 +7986,12 @@ function handlers.update_group(payload)
     if voice ~= nil then
         changedCount = changedCount + 1
     end
+    if scale ~= nil
+        and (before.scale == nil
+            or before.scale.root ~= scale.root
+            or before.scale.type ~= scale.type) then
+        changedCount = changedCount + 1
+    end
     if changedCount == 0 then
         return {
             trackIndex = trackIndex,
@@ -7832,12 +8008,25 @@ function handlers.update_group(payload)
     if name ~= nil and group then
         group:setName(name)
     end
+    if scale ~= nil then
+        group:setScale({ root = scale.root, type = scale.type })
+    end
     local observed = serializeGroup(reference, groupIndex, 0, 0)
     if name ~= nil and observed.name ~= name then
         raiseBridgeError(
             "HOST_POSTCONDITION_FAILED",
             "SynthV did not retain the requested Group name",
             { field = "name" }
+        )
+    end
+    if scale ~= nil
+        and (observed.scale == nil
+            or observed.scale.root ~= scale.root
+            or observed.scale.type ~= scale.type) then
+        raiseBridgeError(
+            "HOST_POSTCONDITION_FAILED",
+            "SynthV did not retain the requested Group scale",
+            { field = "scale" }
         )
     end
     if muted ~= nil and observed.muted ~= muted then
@@ -8111,6 +8300,22 @@ function handlers.add_notes(payload)
         raiseBridgeError(
             "INVALID_ARGUMENT",
             "groupName is only valid when ensureNonMain creates a group from a main-group target"
+        )
+    end
+    -- SynthV 2.3.0 raises "notes cannot be added to a track's main group" from
+    -- NoteGroup:addNote; reject before opening an empty Undo record.
+    if grouping == "target"
+        and reference:isMain()
+        and (tonumber(HOST_INFO.hostVersionNumber) or 0) >= HOST_2_3.versionNumber then
+        raiseBridgeError(
+            "UNSUPPORTED_HOST_CAPABILITY",
+            "This SynthV host does not allow notes in a track's main group; use grouping=ensureNonMain",
+            {
+                capability = "NoteGroup.addNote.mainGroup",
+                trackIndex = trackIndex,
+                groupIndex = groupIndex,
+                requiredGrouping = "ensureNonMain"
+            }
         )
     end
     local prepared = {}
@@ -10075,8 +10280,16 @@ function handlers.set_automation_points(payload)
                 "STALE_AUTOMATION",
                 "The automation curve changed after it was read"
             )
-            local points =
-                requireArray(payload.points, "points", 1, 10000)
+            local interpolationMethod = HOST_2_3.prepareAutomationInterpolation(
+                automation,
+                payload.interpolationMethod
+            )
+            local points = requireArray(
+                payload.points,
+                "points",
+                interpolationMethod and 0 or 1,
+                10000
+            )
             local clearMode =
                 optionalString(payload.clearMode, "clearMode", false)
                     or "none"
@@ -10137,6 +10350,11 @@ function handlers.set_automation_points(payload)
                     rangeEnd,
                     prepared
                 )
+            local interpolationChanged = interpolationMethod ~= nil
+                and not HOST_2_3.interpolationMatches(
+                    before.interpolation,
+                    interpolationMethod
+                )
             return {
                 project = project,
                 trackIndex = trackIndex,
@@ -10152,10 +10370,13 @@ function handlers.set_automation_points(payload)
                 rangeBegin = rangeBegin,
                 rangeEnd = rangeEnd,
                 expectedPoints = expectedPoints,
-                changed = not runtimeState.automationPointsEqual(
-                    before.points,
-                    expectedPoints
-                )
+                interpolationMethod = interpolationMethod,
+                interpolationChanged = interpolationChanged,
+                changed = interpolationChanged
+                    or not runtimeState.automationPointsEqual(
+                        before.points,
+                        expectedPoints
+                    )
             }
         end,
         preflight = function(state)
@@ -10194,6 +10415,11 @@ function handlers.set_automation_points(payload)
                     state.prepared[index].value
                 )
             end
+            if state.interpolationChanged then
+                state.automation:setInterpolationMethod(
+                    state.interpolationMethod
+                )
+            end
         end,
         verify = function(state, plan)
             local _project, _track, trackIndex, _reference, group, groupIndex =
@@ -10213,6 +10439,23 @@ function handlers.set_automation_points(payload)
                         parameter = state.parameterName,
                         expectedPointCount = #state.expectedPoints,
                         actualPointCount = serialized.pointCount
+                    }
+                )
+            end
+            if state.interpolationMethod ~= nil
+                and not HOST_2_3.interpolationMatches(
+                    serialized.interpolation,
+                    state.interpolationMethod
+                ) then
+                raiseBridgeError(
+                    "HOST_POSTCONDITION_FAILED",
+                    "SynthV did not retain the requested Automation interpolation",
+                    {
+                        trackIndex = trackIndex,
+                        groupIndex = groupIndex,
+                        parameter = state.parameterName,
+                        requestedValue = state.interpolationMethod,
+                        actualValue = valueOrNull(serialized.interpolation)
                     }
                 )
             end
@@ -11453,6 +11696,18 @@ function handlers.get_track_mixer(payload)
     payload = requireObject(payload, "payload")
     local _project, track, trackIndex = resolveTrack(payload)
     local result = serializeMixer(track)
+    -- TrackMixer:getFxParams() exists from SynthV 2.3.0 but is undocumented;
+    -- writes stay unexposed until the host documents parameter ranges.
+    local fx = safeCall(function()
+        local mixer = track:getMixer()
+        if mixer.getFxParams == nil then
+            return nil
+        end
+        return mixer:getFxParams()
+    end, nil)
+    if type(fx) == "table" then
+        result.fx = sanitizeForJson(fx)
+    end
     result.trackIndex = trackIndex
     result.trackFingerprint = makeTrackFingerprint(track)
     result.trackName = track:getName()

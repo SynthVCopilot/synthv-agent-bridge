@@ -303,6 +303,90 @@ for (const [className, methods] of semanticMethodsByClass.entries()) {
   }
 }
 
+// Host-runtime members that the frozen official index does not list. They are
+// recorded separately so the official baseline stays an exact copy.
+const officialMethodKeys = new Set();
+for (const rawClass of classes) {
+  for (const classification of METHOD_CLASSES) {
+    if (Array.isArray(rawClass?.[classification])) {
+      for (const method of rawClass[classification]) {
+        officialMethodKeys.add(`${rawClass.name}.${method}`);
+      }
+    }
+  }
+}
+const runtimeAdditions = Array.isArray(inventory.runtimeAdditions)
+  ? inventory.runtimeAdditions
+  : [];
+if (!Array.isArray(inventory.runtimeAdditions)) {
+  errors.push("runtimeAdditions must be an array");
+}
+if (
+  typeof inventory.runtimeBaseline !== "string" ||
+  inventory.runtimeBaseline.trim().length === 0
+) {
+  errors.push("runtimeBaseline must be non-empty");
+}
+const runtimeAdditionKeys = [];
+for (const [index, rawAddition] of runtimeAdditions.entries()) {
+  const addition = asObject(rawAddition, `runtimeAdditions[${index}]`, errors);
+  const key = `${addition.class}.${addition.member}`;
+  runtimeAdditionKeys.push(key);
+  if (!classNames.includes(addition.class)) {
+    errors.push(`runtimeAdditions[${index}].class is not official: ${addition.class}`);
+  }
+  if (typeof addition.member !== "string" || addition.member.length === 0) {
+    errors.push(`runtimeAdditions[${index}].member must be non-empty`);
+  }
+  if (officialMethodKeys.has(key)) {
+    errors.push(`${key} is already in the official inventory`);
+  }
+  if (!METHOD_CLASSES.includes(addition.classification)) {
+    errors.push(`${key}.classification is unknown`);
+  }
+  if (typeof addition.observed !== "string" || addition.observed.trim().length === 0) {
+    errors.push(`${key}.observed must be non-empty`);
+  }
+  const additionActions =
+    addition.actions === undefined
+      ? []
+      : asStringArray(addition.actions, `${key}.actions`, errors);
+  for (const action of additionActions) {
+    if (!liveActions.includes(action)) {
+      errors.push(`${key} names non-live Action: ${action}`);
+    }
+  }
+  if (addition.classification === "semantic" && additionActions.length === 0) {
+    errors.push(`${key} is semantic without a live Action`);
+  }
+  if (
+    addition.classification === "intentionallyUnexposed" &&
+    (typeof addition.reason !== "string" || addition.reason.trim().length === 0)
+  ) {
+    errors.push(`${key} is intentionallyUnexposed without a reason`);
+  }
+}
+for (const duplicate of duplicateValues(runtimeAdditionKeys)) {
+  errors.push(`runtime addition appears more than once: ${duplicate}`);
+}
+const runtimeDeviations = Array.isArray(inventory.runtimeDeviations)
+  ? inventory.runtimeDeviations
+  : [];
+if (!Array.isArray(inventory.runtimeDeviations)) {
+  errors.push("runtimeDeviations must be an array");
+}
+for (const [index, rawDeviation] of runtimeDeviations.entries()) {
+  const deviation = asObject(rawDeviation, `runtimeDeviations[${index}]`, errors);
+  if (!classNames.includes(deviation.class)) {
+    errors.push(`runtimeDeviations[${index}].class is not official: ${deviation.class}`);
+  }
+  for (const field of ["member", "observed", "handling"]) {
+    if (typeof deviation[field] !== "string" || deviation[field].trim().length === 0) {
+      errors.push(`runtimeDeviations[${index}].${field} must be non-empty`);
+    }
+  }
+}
+
 const actionGroups = asObject(
   inventory.actionGroups,
   "actionGroups",
@@ -426,6 +510,8 @@ const result = {
   officialMethodCount,
   semanticMethodEvidenceCount: semanticMethodEvidence.size,
   unavailableCapabilityCount: unavailableCapabilities.length,
+  runtimeAdditionCount: runtimeAdditions.length,
+  runtimeDeviationCount: runtimeDeviations.length,
   liveActionCount: liveActions.length,
   classifiedActionCount: classifiedSet.size,
   semanticWriteCount,

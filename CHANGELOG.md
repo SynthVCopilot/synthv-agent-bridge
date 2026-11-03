@@ -4,6 +4,32 @@ All notable changes will be documented in this file.
 
 ## Unreleased
 
+### Added
+
+- SynthV 2.3.0 support for undocumented runtime methods found by
+  introspection. `update_group` sets a Note Group `scale`, validated against
+  `SV:scaleNotes()`/`SV:scaleTypes()`. `set_automation_points` sets
+  `interpolationMethod` in the same Undo record. `get_track_mixer` returns
+  read-only `fx` parameters. Group reads include `scale`.
+- Per-note `languageOverride` accepts `korean`, `spanish`, `french`,
+  `german`, `italian` and `portuguese`. The four languages new in 2.3.0 fail
+  closed on older hosts.
+
+### Fixed
+
+- `phonesetOverride` reads and writes the 2.3.0 `phoneset` attribute key.
+  Before this, reads returned `null` and writes failed preflight on 2.3.0.
+- `add_notes` with `grouping=target` on a main Group is rejected before Undo
+  on 2.3.0, which no longer allows notes in a Track's main Group.
+- `pitchAutoMode` capability detection checks for presence, because 2.3.0
+  exposes host methods as callable userdata rather than Lua functions.
+
+### Documentation
+
+- Recorded the SynthV 2.3.0 runtime delta, live acceptance results and host
+  stability notes in `docs/sv2-api-coverage-v3.md`, including the
+  `setCurrentTrack` crash that keeps that method unexposed.
+
 ## 0.3.1 - 2026-08-12
 
 ### Fixed

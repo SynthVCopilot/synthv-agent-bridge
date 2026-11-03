@@ -24,6 +24,11 @@ or a replacement Session. If no new heartbeat arrives within three seconds it
 shows `B offline`. This prevents Rescan from briefly presenting a cached
 heartbeat as a live Bridge.
 
+SynthV 2.3.0 runs side-panel timers only while the Scripts panel is visible.
+While the panel is hidden, its runtime heartbeat stops and `sv_status` reports
+the Sidebar as `stale`. Reopening the panel resumes polling. Bridge writes never
+depend on the Sidebar.
+
 `M` is online while the local MCP status monitor continues writing its
 heartbeat. `sv_review` is read-only and returns these MCP/panel runtime facts;
 `sv_status` remains the authoritative Bridge connection and build-coherence

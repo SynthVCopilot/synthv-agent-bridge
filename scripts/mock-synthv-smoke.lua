@@ -2853,5 +2853,153 @@ assert(project.tracks[2].refs[1].voice.vocalModeParams.Powerful==nil,"copy_group
 print("CASE:copy-group-voice-preserves-unstored-fields")
 end
 
-assert(project.undo==87,"expected 87 undo records, got "..project.undo)
+;(function()
+    -- SynthV 2.3.0 runtime behavior: the mock reports host 2.2.0, so the
+    -- 2.3.0-only languages must fail closed while undocumented 2.3.0 methods
+    -- are attached only to the fixture objects below. A function scope keeps
+    -- these locals out of the main chunk's 200-local limit.
+    local track=project.tracks[1]
+    local group=track.refs[1].group
+    local groupUuid=group.uuid
+    local onset=200*705600000
+    local noteJson='{"onset":'..onset..',"duration":705600000,"pitch":60,"lyrics":"la","languageOverride":'
+
+    local undoBeforeLanguage=project.undo
+    callExpectError(
+        "add_notes",
+        '{"trackIndex":1,"groupIndex":1,"groupUuid":"'..groupUuid..'","notes":['..noteJson..'"french"}]}',
+        "UNSUPPORTED_HOST_CAPABILITY"
+    )
+    assert(project.undo==undoBeforeLanguage,"host-gated language created an undo record")
+    callExpectError(
+        "add_notes",
+        '{"trackIndex":1,"groupIndex":1,"groupUuid":"'..groupUuid..'","notes":['..noteJson..'"klingon"}]}',
+        "INVALID_ARGUMENT"
+    )
+    callWrite(
+        "add_notes",
+        '{"trackIndex":1,"groupIndex":1,"groupUuid":"'..groupUuid..'","notes":['..noteJson..'"korean"}]}'
+    )
+    local noteIndex=nil
+    for index,note in ipairs(group.notes) do
+        if note.onset==onset and note.languageOverride=="korean" then noteIndex=index end
+    end
+    assert(noteIndex,"korean language override note was not added")
+    print("CASE:language-override-host-gated")
+
+    group.notes[noteIndex].attrs={phoneset=""}
+    local phonemeRead=call(
+        "get_note_phoneme_data",
+        '{"trackIndex":1,"groupIndex":1,"groupUuid":"'..groupUuid..'","noteIndices":['..noteIndex..']}'
+    )
+    callWrite(
+        "set_note_phoneme_properties",
+        '{"trackIndex":1,"groupIndex":1,"groupUuid":"'..groupUuid..'","edits":[{"noteIndex":'..noteIndex..
+            ',"fingerprint":"'..escape(extractJsonString(phonemeRead,"fingerprint"))..'","changes":{"phonesetOverride":"xsampa"}}]}'
+    )
+    assert(group.notes[noteIndex].attrs.phoneset=="xsampa","2.3 phoneset attribute was not written")
+    assert(group.notes[noteIndex].attrs.phonesetOverride==nil,"legacy phonesetOverride key was written on a 2.3 host")
+    phonemeRead=call(
+        "get_note_phoneme_data",
+        '{"trackIndex":1,"groupIndex":1,"groupUuid":"'..groupUuid..'","noteIndices":['..noteIndex..']}'
+    )
+    assert(phonemeRead:find('"phonesetOverride":"xsampa"',1,true),"2.3 phoneset attribute was not read back")
+    print("CASE:phoneset-host-key")
+
+    function SV:scaleNotes() return {"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"} end
+    function SV:scaleTypes() return {"Major","NaturalMinor","Dorian"} end
+    group.scaleRoot="C"
+    group.scaleType="Major"
+    function group:getScale() return {root=self.scaleRoot,type=self.scaleType} end
+    function group:setScale(scale)
+        -- 2.3.0 ignores unknown values instead of raising.
+        if scale.type=="Major" or scale.type=="NaturalMinor" or scale.type=="Dorian" then
+            self.scaleType=scale.type
+        end
+        if scale.root and #scale.root<=2 and not scale.root:find("b",1,true) then
+            self.scaleRoot=scale.root
+        end
+    end
+    local trackNotes=call("get_track_notes",'{"trackIndex":1,"groupIndex":1,"limit":1}')
+    assert(trackNotes:find('"scale":{',1,true),"2.3 Group scale was not serialized")
+    local undoBeforeScale=project.undo
+    callExpectError(
+        "update_group",
+        '{"trackIndex":1,"groupIndex":1,"groupUuid":"'..groupUuid..'","scale":{"root":"Bb","type":"Major"}}',
+        "INVALID_ARGUMENT"
+    )
+    callExpectError(
+        "update_group",
+        '{"trackIndex":1,"groupIndex":1,"groupUuid":"'..groupUuid..'","scale":{"root":"D","type":"Minor"}}',
+        "INVALID_ARGUMENT"
+    )
+    assert(project.undo==undoBeforeScale,"invalid scale created an undo record")
+    callWrite(
+        "update_group",
+        '{"trackIndex":1,"groupIndex":1,"groupUuid":"'..groupUuid..'","scale":{"root":"D","type":"Dorian"}}'
+    )
+    assert(group.scaleRoot=="D" and group.scaleType=="Dorian","Group scale was not applied")
+    local scaleNoop=call(
+        "update_group",
+        '{"trackIndex":1,"groupIndex":1,"groupUuid":"'..groupUuid..'","scale":{"root":"D","type":"Dorian"}}'
+    )
+    assert(scaleNoop:find('"changedCount":0',1,true),"already-satisfied scale did not report zero changes")
+    group.getScale=nil
+    group.setScale=nil
+    callExpectError(
+        "update_group",
+        '{"trackIndex":1,"groupIndex":1,"groupUuid":"'..groupUuid..'","scale":{"root":"E","type":"Major"}}',
+        "UNSUPPORTED_HOST_CAPABILITY"
+    )
+    assert(project.undo==undoBeforeScale+1,"scale validation did not keep one undo boundary")
+    print("CASE:group-scale-host-lists")
+
+    local automation=group:getParameter("tension")
+    automation.interp="cubic"
+    function automation:getInterpolationMethod() return self.interp end
+    function automation:setInterpolationMethod(value)
+        local known={linear=true,cosine=true,cubic=true}
+        self.interp=known[value] and value or "linear"
+    end
+    local undoBeforeInterpolation=project.undo
+    callExpectError(
+        "set_automation_points",
+        '{"trackIndex":1,"groupIndex":1,"parameter":"tension","points":[],"interpolationMethod":"none"}',
+        "INVALID_ARGUMENT"
+    )
+    callExpectError(
+        "set_automation_points",
+        '{"trackIndex":1,"groupIndex":1,"parameter":"tension","points":[]}',
+        "INVALID_ARGUMENT"
+    )
+    callExpectError(
+        "set_automation_points",
+        '{"trackIndex":1,"groupIndex":1,"parameter":"loudness","points":[],"interpolationMethod":"cosine"}',
+        "UNSUPPORTED_HOST_CAPABILITY"
+    )
+    assert(project.undo==undoBeforeInterpolation,"rejected interpolation created an undo record")
+    local interpolationWrite=callWrite(
+        "set_automation_points",
+        '{"trackIndex":1,"groupIndex":1,"parameter":"tension","points":[],"interpolationMethod":"cosine"}'
+    )
+    assert(automation.interp=="cosine","Automation interpolation was not applied")
+    assert(interpolationWrite:find('"interpolation":"cosine"',1,true),"Automation interpolation was not read back")
+    local interpolationNoop=call(
+        "set_automation_points",
+        '{"trackIndex":1,"groupIndex":1,"parameter":"tension","points":[],"interpolationMethod":"cosine"}'
+    )
+    assert(interpolationNoop:find('"undoRecordCount":0',1,true),"already-satisfied interpolation reported an undo")
+    print("CASE:automation-interpolation-write")
+
+    function track.mixer:getFxParams()
+        return {reverb={enabled=false,type="clean",decay=1},compressor={enabled=false,ratio=4}}
+    end
+    local fxRead=call("get_track_mixer",'{"trackIndex":1}')
+    assert(fxRead:find('"fx":{',1,true),"2.3 track FX parameters were not read")
+    assert(fxRead:find('"type":"clean"',1,true),"2.3 reverb type was not serialized")
+    assert(not call("get_track_mixer",'{"trackIndex":2}'):find('"fx":',1,true),"FX was serialized for a host mixer without getFxParams")
+    print("CASE:mixer-fx-read-only")
+end)()
+
+assert(project.undo==91,"expected 91 undo records, got "..project.undo)
 print("Mock SynthV smoke test passed")
