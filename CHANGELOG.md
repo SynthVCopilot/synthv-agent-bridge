@@ -4,19 +4,6 @@ All notable changes will be documented in this file.
 
 ## Unreleased
 
-### Documentation
-
-- Updated the bundled `skill/synthv-bridge-skill` docs for SynthV 2.3.0:
-  - new languages, Group scale, Automation interpolation and read-only track FX;
-  - the main-Group note rule and the 39-write catalog;
-  - undocumented runtime members, `UNSUPPORTED_HOST_CAPABILITY` and
-    `npm run update`.
-- Corrected stale values in those docs: `musicalType` is `sing`/`rap`, the
-  `playback` operations include `play`, and the Automation parameters include
-  `mouthOpening` and `rapIntonation`.
-- Corrected the expired-Context error codes to `UNKNOWN_CONTEXT` and
-  `UNKNOWN_GUARD_TOKEN` in those docs and in `docs/errors-v3.md`.
-
 ## 0.3.2 - 2026-11-03
 
 ### Added
@@ -70,6 +57,16 @@ All notable changes will be documented in this file.
   live actions and marks the 7 disabled ones and experimental
   `copy_group_voice`. Agent working rules are left to
   the `synthv-copilot` skill plugin.
+- Updated the bundled `skill/synthv-bridge-skill` docs for SynthV 2.3.0:
+  - new languages, Group scale, Automation interpolation and read-only track FX;
+  - the main-Group note rule and the 39-write catalog;
+  - undocumented runtime members, `UNSUPPORTED_HOST_CAPABILITY` and
+    `npm run update`.
+- Corrected stale values in those docs: `musicalType` is `sing`/`rap`, the
+  `playback` operations include `play`, and the Automation parameters include
+  `mouthOpening` and `rapIntonation`.
+- Corrected the expired-Context error codes to `UNKNOWN_CONTEXT` and
+  `UNKNOWN_GUARD_TOKEN` in those docs and in `docs/errors-v3.md`.
 
 ## 0.3.1 - 2026-08-12
 
