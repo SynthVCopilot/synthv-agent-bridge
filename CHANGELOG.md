@@ -29,6 +29,12 @@ All notable changes will be documented in this file.
 - Recorded the SynthV 2.3.0 runtime delta, live acceptance results and host
   stability notes in `docs/sv2-api-coverage-v3.md`, including the
   `setCurrentTrack` crash that keeps that method unexposed.
+- Rewrote `README.md` and `README_CN.md` as short landing pages. The action
+  catalog, Context/Guard rules, paging and host notes moved to
+  `docs/actions.md` and `docs/actions_cn.md`. The catalog now lists the 65
+  live actions and marks the 7 disabled ones and experimental
+  `copy_group_voice`. Agent working rules are left to
+  the `synthv-copilot` skill plugin.
 
 ## 0.3.1 - 2026-08-12
 

@@ -3,671 +3,249 @@
 [English](README.md) | [简体中文](README_CN.md)
 
 这是一个本地 [Model Context Protocol（MCP）](https://modelcontextprotocol.io/)
-服务器，让兼容的 AI 客户端可以检查和控制当前在
+服务器，让 Codex、Claude Code 等 AI 客户端读取和编辑当前在
 **Synthesizer V Studio 2 Pro** 中打开的工程。
 
-Bridge 使用 Synthesizer V 公开的 Lua 脚本 API。它**不会**解析或重写
-`.svp` 文件，不会打开网络端口，也不会自行调用 AI API。
+- 只通过 SynthV 公开的 Lua 脚本 API 工作，从不解析或改写 `.svp` 文件。
+- 完全本地运行：不开网络端口，也不调用任何 AI API。
+- 出错即停：每次写入都会先核对最新的工程状态，只产生一条 SynthV 撤销记录，
+  写完再读回校验。
 
-**视频演示：** [在哔哩哔哩观看 SynthV Agent Bridge 演示](https://www.bilibili.com/video/BV1kU3P6LEoF)
+**视频演示：** [在哔哩哔哩观看](https://www.bilibili.com/video/BV1kU3P6LEoF)
 
-> 第一次使用？请参阅宿主中立的[中文快速开始](docs/quickstart_cn.md)，再选择
-> [Codex](docs/hosts/codex.md) 或
-> [Claude Code](docs/hosts/claude-code.md) 项目配置。环境检查、依赖与 Node.js
-> 安装、构建、SynthV 脚本安装和核心诊断都不依赖具体 Agent 宿主。
-> English users: see the host-neutral [Quickstart](docs/quickstart.md).
+## 状态
 
-> [!TIP]
-> 可选《小星星》引导式 Demo 与 Agent 操作规则已迁移到独立的
-> [`synthv-copilot` 技能插件](https://github.com/SynthVCopilot/SKILLS)。
-> Runtime 仓库不再携带启动提示或强制 Agent 工作流。
+**v0.3.1 · 协议 v3。** 已在 Synthesizer V Studio 2 Pro 2.2.1 和 2.3.0 上测试。
+全部 17 个读取动作和 9 个界面动作已在真机上验证；39 个写入动作中有 31 个
+已验证，其余 8 个中：
 
-> [!IMPORTANT]
-> 由于 SynthV 官方脚本 API 无法读取当前 Vocal 身份，也无法枚举从未调整、
-> 仍保持默认值的唱法名称和参数，开始调音前请先选择一个音符组，再为该
-> 音符组选择要使用的 Vocal（歌手/声库），然后截图完整唱法（Vocal Mode）
-> 面板，或按照面板中的原始拼写和大小写准确输入该 Vocal 的全部唱法；没有
-> 选择歌手时不会出现唱法名称。如果没有合适的音符组或暂时看不到
-> 唱法面板，可由用户或 Agent 先在工程任意安全位置创建一个临时音符和
-> 一个临时非主音符组，再选中该音符组并选择歌手，使唱法参数显示出来；
-> 随后截图完整唱法面板，再继续调音。更换 Vocal 后，必须重新截图新 Vocal
-> 的完整唱法面板，或重新输入它的全部唱法名称，不能沿用上一个 Vocal 的
-> 列表。
+- 7 个已禁用，见[当前限制](#当前限制)；
+- `copy_group_voice` 可以使用，但还在等待它自己的真机验收。
 
-> 状态：**v0.3.1／协议 v3（收缩后的稳定能力面）**。本版把宿主中立 Runtime
-> 与可移植 Agent 技能拆开，同时保持六工具语义入口、类型化 Query
-> Context、紧凑 Command 结果、组件构建一致性检查、统一命令内核和全部
-> 私有操作迁移已经完成。发布验证已有 17/17 Query、9/9 UI
-> 和 31/39 写 Action 已有当前构建真机证据；8 条写 Action 仍为 experimental：
-> 7 条发生原生宿主风险的 clone/transaction/harmony 路径在工程 IPC 前禁用，
-> 新增的 `copy_group_voice` 复用已验证的 Voice 写入路径，等待独立真机矩阵，
-> 已无 pending 写 Action；人工听感、Stage 3 功能写入/Undo 矩阵，以及用户批准的
-> 一小时长稳（200 writes、3,400 reads、10 reloads）均已通过。用户明确豁免了修复后
-> 资源监控重跑；该项作为后续风险记录，不记为通过。工程写入只能在已保存的工作副本上测试。
-
-参阅 [v3 架构](docs/architecture-v3.md)、
-[开发计划](docs/v3-development-plan.md)和
-[SV2 API 覆盖矩阵](docs/sv2-api-coverage-v3.md)。
+请在已保存的工程副本上测试写入。
 
 ## 功能
 
 | 领域 | 能力 |
 |---|---|
-| 工程检查 | 读取工程元数据、轨道、库 Group、音符、选区、速度/拍号图、计算音素与音高、自动化、混音器状态和编辑器上下文。 |
-| 音符与歌词 | 添加、编辑、删除、克隆、移调或人性化受保护音符；匹配歌词，并编辑语言、歌唱/说唱类型、时值、微调和音符属性。 |
-| Voice 与音素 | 读取和编辑 Group Voice、唱法（Vocal Mode）轴、实验性 Unison 字段、音素集覆盖、音节时值、发音，以及单音素时值或强度。 |
-| 音高与表情 | 调整音高过渡和音高曲线；管理 Smart Pitch 控制和 AI Retake；应用 Scoop、Falloff、Vibrato、Crescendo 或 Breathiness 预设。 |
-| 自动化 | 读取、添加、替换、采样、简化或清除音高偏差、响度、张力、气声、发声、性别和唱法（Vocal Mode）曲线。 |
-| 轨道、Group 与和声 | 创建、克隆、复用、更新或删除库 Group、Group 引用和轨道；创建宿主克隆 Vocal 上下文的空白模板轨；并创建受音域约束的和声轨。共享 Group 内容写入默认安全失败，除非明确确认要影响全部引用。 |
-| 本地曲谱导入 | 检查明确提供的本地 MusicXML（`.xml`、`.musicxml`、`.mxl`）或 SMF MIDI（`.mid`、`.midi`），再通过受保护音符写入路径导入一个已确认权利的单旋律声部。不接受 URL 或 `.svp`。 |
-| 时序、编辑器与播放 | 转换秒、四分音符和 blick；编辑速度/拍号；控制选区、视口、剪贴板、网格吸附、坐标、混音器和播放。 |
-| 安全编辑 | 使用最新指纹、带类型/作用域的 `contextId` 和 Guard Token 保护写入；完整预检独立事务步骤，按需解析正向依赖；创建一个 SynthV 撤销记录，并可选保留受保护回滚计划。 |
-| 连接与本地隐私 | 在可选原生侧边栏中监视 Bridge/MCP 心跳并热重载在线 Bridge。文件 IPC 保持本地：Bridge 不解析 `.svp` 文件、不打开网络端口，也不调用 AI API。 |
+| 工程读取 | 轨道、音符组、音符、选区、速度与拍号、计算音素与音高、自动化、混音器和编辑器状态。 |
+| 音符与歌词 | 添加、编辑、删除、移调和人性化音符；匹配歌词；设置语言、演唱/说唱类型、微调音高和音符属性。 |
+| 歌声与音素 | 音符组的歌声参数与唱法（Vocal Mode）、在音符组之间复制已存储的歌声设置、音素序列、音素集（X-SAMPA）覆盖、音节时值和单个音素的强度。 |
+| 音高与表情 | Smart Pitch 控制点、AI 重唱，以及滑入、滑出、颤音、渐强和气声预设。 |
+| 自动化 | 读取、添加、采样、简化和清除参数曲线（包括唱法曲线）；在 SynthV 2.3.0+ 上设置曲线插值方式。 |
+| 轨道与音符组 | 创建、修改和删除轨道、库音符组和关联引用；在 SynthV 2.3.0+ 上设置音符组的调式。 |
+| 乐谱导入 | 预览本地 MusicXML 或 MIDI 文件，并导入一条你有权使用的单声部旋律。 |
+| 编辑器与播放 | 选区、视图、网格吸附、坐标和时间换算、剪贴板、对话框和播放控制。 |
 
-> 当前稳定能力面为避免已复现的 SynthV 2.2.1 原生崩溃，在工程 IPC 前禁用
-> isolated Group clone、Note Group/Track/Track-shell clone、和声轨以及
-> transaction apply/rollback；上表描述完整设计能力，不表示这些实验路径在
-> 当前构建可用。linked Group reference clone 仍可用。
-
-## 责任边界
-
-Bridge 将音乐判断与确定性执行分开：Agent 决定**为什么改、改哪里、改多少**；
-MCP 和 Lua 根据 SynthV 的当前状态，紧凑、安全地执行这个明确决定；
-SynthV 保存结果，用户负责最终听感判断。
-
-| 工作 | 负责人 | 原因 |
-|---|---|---|
-| 理解用户意图、歌词情感、演唱风格 | Agent | 需要语言和音乐语义判断 |
-| 决定哪些字加强、减弱、拖长或增加音高过渡 | Agent | 属于艺术决策 |
-| 询问当前歌手、全部唱法名称 | Agent＋用户 | 官方接口无法读取歌手身份或枚举未调整的默认唱法 |
-| 决定先调一小段还是更大范围 | Agent | 需要结合用户目标、审核成本和 token 成本 |
-| 把温柔、明亮、克制等要求转换成明确参数 | Agent | Bridge 不应自行解释艺术语言 |
-| 选择新鲜目标范围和明确的批量数值变换 | Agent | 目标和音乐数值属于当前任务决策 |
-| 选择合法本地曲谱并确认有权导入 | Agent＋用户 | Bridge 无法判断版权或许可权限 |
-| 提供当前 Group、音符、Voice 和自动化数据 | Lua Bridge | SynthV 实时对象模型才是权威数据源 |
-| 缓存并展开带类型/作用域的 `contextId` 和 Guard 数据 | TypeScript MCP | 避免重复传输大型指纹，同时对不兼容作用域安全失败 |
-| 检查并转换明确提供的本地 MusicXML/MIDI 声部 | TypeScript MCP | 在 SynthV 外有界本地解析，但不代表用户有权使用文件 |
-| 压缩读取结果和写入确认 | TypeScript MCP | 避免无关宿主数据进入模型上下文 |
-| 检测 SynthV 重启或 Bridge 重载 | TypeScript MCP | 再次写入前必须清除旧 Context 和 Guard |
-| 校验请求结构、路由、索引和稳定协议范围 | TypeScript MCP | 在文件 IPC 前拒绝错误请求 |
-| 读取当前 Automation `definition.range` | Lua Bridge | 范围可能随宿主、歌手和参数变化 |
-| 展开确定性音符变换和其他批处理机械计算 | Lua Bridge | 机械计算应集中、可复现 |
-| 校验指纹和完整的预备批次 | Lua Bridge | 防止覆盖用户修改或只执行部分无效请求 |
-| 阻止意外修改有多个引用的 Note Group 内容 | Lua Bridge | 即使引用位于不同轨道，Group 内容仍然共享 |
-| 创建一个撤销记录并验证宿主写入结果 | Lua Bridge＋SynthV | 提供一个恢复边界并避免假成功 |
-| 保存、试听、撤销并确认最终效果 | 用户＋SynthV | 用户是最终艺术判断者 |
-
-详细的代码分层规则与批处理准入条件请参阅
-[Agent / MCP 责任边界](docs/responsibility-boundaries_cn.md)。
-
-## 首次 MCP 连接：用户提示
-
-在一次对话中第一次修改工程前，Agent 必须简短告知用户：
-
-- 可以选择运行引导式 Demo。回复 `运行《小星星》Demo。` 后，Agent 会在
-  不修改原有内容的前提下创建并调音独立示例；执行时打印五个简短进度
-  小标题，并因官方 API 限制在选择 Vocal、提供全部唱法时暂停一次。
-- 在 AI 编辑前保存重要工作；Bridge 写入期间不要同时修改同一个目标。
-- 如果用户撤销或手动修改了 Agent 即将处理的音符、Group、Voice 或
-  唱法（Vocal Mode），Agent 会只重新读取该目标。无关修改不需要重新读取。
-- SynthV 脚本 API 不公开当前歌手身份，也无法枚举仍保持默认值、从未调整
-  过的唱法（Vocal Mode）名称和参数。只有请求会使用或修改唱法时，
-  Agent 才要求用户选择目标音符组和 Vocal，并提供完整面板截图或全部准确
-  唱法名称；不依赖唱法的明确机械编辑不需要这一步。更换 Vocal 后，下一次
-  涉及唱法的写入前必须重新提供新 Vocal 的信息。
-- Agent 不再显示固定的 **How to use** 或调音前 Checklist。它只询问当前
-  请求仍缺少的用户决策，简短建议保存工作副本，并在写入前展示小型预览。
-  最新读取、Guard、预检和独立验证属于内部机制；只有实际结果返回
-  `undoRequired: true` 时才显示撤销指导。
-- 用户可以要求使用**节省 token 模式**。普通写入返回 `verified: true` 后，
-  Agent 会跳过额外的独立写后查询；写入前的目标读取，以及 Bridge 内部的
-  校验、预检和宿主写后条件验证仍会执行。恢复流程、后续步骤依赖的新鲜读取、
-  UI 实际状态读取和 Demo 最终验证不会被跳过。
-
-需要唱法信息时，用户可以提供如下简短提示：
+## 工作原理
 
 ```text
-当前歌手的唱法（Vocal Mode）：Airy、Bright、Cool、Dark、Emotional、Power、
-Solid、Sweet。
+MCP 宿主（Codex、Claude Code 等）
+        │  stdio 上的 MCP
+        ▼
+TypeScript MCP 服务器 ── node dist/src/cli.js
+        │  共享本地目录中的 JSON 请求/响应文件
+        ▼
+SynthVAgentBridge.lua ── 在 SynthV 内常驻运行的脚本
+        │  SynthV 脚本 API
+        ▼
+Synthesizer V Studio 2 Pro 中打开的工程
 ```
 
-也可以提供一张清楚显示完整唱法（Vocal Mode）面板的截图。
+Agent 决定改什么；MCP 服务器负责校验和转发请求；Lua 脚本读取实时状态、
+核对守卫、在一条撤销记录内写入，并校验 SynthV 实际保存的结果；最后由你来
+试听和确认。详见[职责边界](docs/responsibility-boundaries_cn.md)和
+[架构说明](docs/architecture.md)。
 
-## 架构
+## 环境要求
 
-```text
-Codex / Claude Code / 其他本地 stdio MCP 宿主
-                    │
-                    │ 基于 stdio 的 MCP
-                    ▼
-           TypeScript MCP 服务器
-                    │
-                    │ 关联式 JSON 文件 IPC
-                    ▼
-       SynthVAgentBridge.lua（常驻）
-                    │
-                    │ SynthV 脚本 API
-                    ▼
-          已打开的 SynthV 工程
-```
-
-第一版有意采用文件 IPC，因为它可在 SynthV 文档规定的 Lua 环境中工作，
-并且便于检查和恢复。参阅 [docs/architecture.md](docs/architecture.md)。
-
-本地曲谱检查是 Node 服务器单纯转发工程数据职责的有界例外：它只读取明确
-提供的绝对 MusicXML/MIDI 路径。检查留在 Node；获准导入后，转换出的音符
-仍通过受保护 Lua `add_notes` 路径写入。它绝不解析 `.svp`。
-
-## 要求
-
-- Synthesizer V Studio **2 Pro 2.1.2 或更高版本**。
+- Synthesizer V Studio **2 Pro 2.1.2 或更高版本**（Basic 版没有脚本功能）。
 - Node.js **20.10 或更高版本**。
-- 支持本地 stdio 服务器的 MCP 宿主；仓库同时维护 Codex 与 Claude Code 项目配置。
+- 支持启动本地 stdio 服务器的 MCP 宿主。
 
-本项目面向 Synthesizer V Studio 2 Pro 的脚本环境，不支持 Basic 版。
+## 快速开始
 
-## 安装
+每一步的详细说明见[快速开始](docs/quickstart_cn.md)（[English](docs/quickstart.md)）。
 
-新用户可以按照完整的[中文快速开始](docs/quickstart_cn.md)操作；英文版见
-[Quickstart](docs/quickstart.md)。其中包含拉取仓库、配置 Node.js、安装脚本、
-按宿主注册 MCP 和验证连接。Agent 技能与引导式音乐工作流从
-[`SynthVCopilot/SKILLS`](https://github.com/SynthVCopilot/SKILLS) 单独安装。
+1. **构建服务器。**
 
-### 1. 构建 MCP 服务器
+   ```bash
+   git clone https://github.com/SynthVCopilot/synthv-agent-bridge.git
+   cd synthv-agent-bridge
+   npm install
+   npm run build
+   ```
 
-```bash
-git clone https://github.com/SynthVCopilot/synthv-agent-bridge.git
-cd synthv-agent-bridge
-npm install
-npm run build
-```
+2. **安装 SynthV 脚本。** 在 SynthV 中选择 **脚本 → 打开脚本文件夹**，把这个
+   文件夹传给安装器：
 
-### 2. 安装 SynthV 脚本
+   ```bash
+   npm run install:synthv -- --target "/path/to/Synthesizer V Studio 2/scripts"
+   ```
 
-在 Synthesizer V Studio 中选择 **脚本 → 打开脚本文件夹**，然后把该目录
-传给安装器：
+   安装器会在其中创建 `SynthV Agent Bridge` 子文件夹。加上
+   `--without-sidebar` 可以跳过可选的状态侧栏。
 
-```bash
-npm run install:synthv -- --target "/Synthesizer V Studio 2/脚本目录"
-```
+3. **启动 Bridge。** 在 SynthV 中选择 **脚本 → SynthV Agent Bridge →
+   Start SynthV Agent Bridge**，它会一直在后台运行。
 
-安装器会把以下文件复制到所选目录下的 `SynthV Agent Bridge` 子文件夹：
+4. **连接 MCP 宿主。** 本仓库自带 [Codex](docs/hosts/codex.md)
+   （`.codex/config.toml`）和 [Claude Code](docs/hosts/claude-code.md)
+   （`.mcp.json`）的项目配置；其他 stdio 宿主运行 `node dist/src/cli.js` 即可。
 
-- `SynthVAgentBridge.lua`
-- `StopSynthVAgentBridge.lua`
-- `SynthVAgentSidebar.lua`（可选）
+5. **检查连接。** 让 Agent 调用 `sv_status`，正常时会返回
+   `"connected": true` 和 `"fresh": true`。也可以在本地运行：
 
-也可以在运行 `npm run install:synthv` 前，把 `SYNTHV_SCRIPTS_DIR` 设置为
-脚本目录。安装器会创建 `SynthV Agent Bridge` 子文件夹。侧边栏文件发生
-变化时，请关闭并重新打开 SynthV，让它重新加载 **SynthV Agent** 自定义
-侧边栏区域。单独执行 **脚本 → 重新扫描** 可能会保留已经绘制的旧布局。
-重新打开后，需要再次运行一次 **Start SynthV Agent Bridge**。
+   ```bash
+   npm run doctor -- --target "/path/to/Synthesizer V Studio 2/scripts"
+   ```
 
-Bridge 和所有普通 MCP 读写工具都不依赖侧边栏。如果只需核心安装，可
-添加 `--without-sidebar`；它会跳过可选侧边栏，但不会删除已有安装：
+**更新：** 拉取代码后依次运行 `npm install`、`npm run build` 和安装器。如果安装器
+提示 Bridge 运行时有变化，就在 SynthV 中选择 **脚本 → 重新扫描**，再重新启动
+Bridge（重新扫描会停止正在运行的 Bridge）。最后重新连接 MCP 宿主，让它加载
+新的构建。
 
-```bash
-npm run install:synthv -- --target "/脚本目录" --without-sidebar
-```
+《小星星》引导式演示和 Agent 的工作规则在独立的
+[`synthv-copilot` 技能插件](https://github.com/SynthVCopilot/SKILLS)里。
 
-如果支持热重载的 Bridge 会话正在运行，安装器会请求它加载复制后的 Lua
-文件，并等待新的会话心跳。此流程使用 Bridge 的文件 IPC 和 Lua
-`loadfile()`，不使用 UI 自动化或 Hook。使用 `--no-reload` 可以只复制而
-不请求重载。首次安装支持热重载的版本时，仍需手动启动一次。侧边栏布局
-发生变化时，需要关闭并重新打开 SynthV，因此也要再次手动启动 Bridge。工程或
-应用重启后，SynthV 可能复用缓存的菜单脚本代码；所以 Bridge 运行时本身
-发生变化时，安装器也会要求在下次手动启动前执行一次
-**脚本 → 重新扫描**。在此之前，热重载会保持当前会话可用。
+## 歌手与唱法
 
-### 3. 启动编辑器内 Bridge
+SynthV 的脚本 API 读不出音符组用的是哪个歌手，也列不出从未调整过的唱法
+（Vocal Mode）。在 Agent 编辑唱法之前：
 
-在 Synthesizer V Studio 中运行：
+1. 在 SynthV 中选中这个音符组，并为它选好歌手。
+2. 把唱法面板上显示的全部唱法名称原样告诉 Agent，或者附上完整唱法面板的截图。
 
 ```text
-脚本 → SynthV Agent Bridge → Start SynthV Agent Bridge
+当前歌手的唱法：Airy, Bright, Cool, Dark, Emotional, Power, Solid, Sweet。
 ```
 
-SynthV 运行期间，该脚本会保持活动并写入心跳。只停止 Bridge 时，请运行
-**Stop SynthV Agent Bridge**；侧边栏会继续运行并显示 B 离线。SynthV 的
-**中止所有正在运行的脚本**也会终止侧边栏本身，所以残留面板会冻结，状态和
-按钮都无法再更新；发生这种情况后请重新打开 SynthV。
+换了歌手以后需要再提供一次。不涉及唱法的编辑不需要这一步。
 
-### 4. 连接 MCP 宿主
+## 使用方式
 
-两个正式适配都启动同一份 `node dist/src/cli.js` Runtime，并把注册限制在
-当前项目：
-
-- [Codex 配置](docs/hosts/codex.md)：`.codex/config.toml`
-- [Claude Code 配置](docs/hosts/claude-code.md)：`.mcp.json`
-
-其它支持 **STDIO** 的本地 MCP 宿主也可使用同一命令。安装器和 Doctor
-都不会写入用户全局宿主配置。
-
-### 可选的原生连接面板
-
-侧边栏分行显示 Bridge（`B`）和 MCP（`M`）连接状态，并提供整行的
-**重启 Bridge** 按钮。
-它不再接收指令、展示变更预览或执行写入。面板只有观察到新心跳后才会把
-`B` 显示为在线；重启按钮会等待新的 Session。面板会固定提示：中止所有
-运行脚本后，状态会停留在最后一次结果，状态不可信；建议使用 Stop SynthV
-Agent Bridge 单独停止 Bridge。离线 Bridge 仍需从脚本菜单运行 Start。参阅
-[docs/sidebar.md](docs/sidebar.md)。
-
-### 5. 验证连接
-
-打开启用了 MCP 的对话，让它调用 `sv_status`，然后通过 `sv_query` 调用
-`action: "get_project_info"`，并设置 `contextMode: "readOnly"`。正常状态包含：
-
-```json
-{
-  "connected": true,
-  "fresh": true
-}
-```
-
-## MCP v3 工具
-
-公共 MCP 表面提供六个稳定工具。各个 SynthV 操作及其完整 Schema 由
-`sv_describe` 按需返回，而不是把所有操作 Schema 都放进模型上下文。
+服务器只暴露 6 个 MCP 工具，65 个具体的 SynthV 动作都藏在它们后面；Agent
+需要时才用 `sv_describe` 获取某个动作的参数结构。
 
 | 工具 | 用途 |
 |---|---|
-| `sv_status` | 读取连接、Session、能力、Trace 和组件构建状态。 |
-| `sv_describe` | 列出操作，或返回一个紧凑 Query／Command／UI／Review Schema。 |
-| `sv_query` | 执行读取投影，并创建 `readOnly` 或 `writeIntent` Context。 |
-| `sv_command` | 执行经过验证的编辑、删除、复制、导入或有界批处理。 |
-| `sv_ui` | 控制选区、视口、剪贴板、对话框、吸附、坐标或播放。 |
-| `sv_review` | 读取可选侧边栏的连接和运行状态。 |
+| `sv_status` | 连接、会话、宿主版本和构建一致性检查。 |
+| `sv_describe` | 列出动作，或返回某个动作的参数结构。 |
+| `sv_query` | 读取工程状态；`writeIntent` 读取会返回供写入使用的 `contextId`。 |
+| `sv_command` | 带守卫、单条撤销记录和结果校验的编辑、删除与导入。 |
+| `sv_ui` | 选区、视图、剪贴板、对话框、吸附、坐标和播放。 |
+| `sv_review` | 可选侧栏的状态。 |
 
-正常调音顺序：
+每次写入都遵循同样的流程：
 
-1. 对不熟悉的操作调用 `sv_describe`。
-2. 使用 `sv_query` 读取当前状态；工程写入前使用
-   `contextMode: "writeIntent"`。
-3. 在一次 `sv_command` 中复用返回的 `contextId`。
-4. 遇到未知 Context、Session 变化或任何 `STALE_*` 结果后重新读取。
+1. 用 `sv_query` 加 `contextMode: "writeIntent"` 读取目标。
+2. 带上返回的 `contextId`，发送一次 `sv_command`。
+3. 如果结果是 `STALE_*` 或 `SYNTHV_SESSION_CHANGED`，重新读取，不要猜。
 
-`contextId` 只在有界的 Node 内存中保存定位器和并发保护。每个句柄都绑定
-目标类型和来源作用域；把它用于不兼容操作，或同时提供互相冲突的显式定位器/
-Guard，会安全失败，而不会静默改换目标。`readOnly` Context 不能授权写入；
-`writeIntent` Context 只能由新鲜宿主读取创建。SynthV 在创建撤销记录前仍会
-检查 Bridge 内部保存的完整指纹。
-
-乐句读取支持对 `notes`、`voice`、`automation`、`analysis`、
-`recommendations`、`pitchAnalysis`、`selection` 和 `diagnostics` 进行
-`include` 投影。v3 默认包含 `notes`、`voice` 和 `analysis`。当结果至少
-包含 24 个音符且 `dense: "auto"` 时，会使用列/行表示；普通对象可使用
-`dense: "never"`。V3 音符行会省略可推导的绝对结束位置；当绝对音高和
-局部音高相同时，会通过 `noteDefaults.absolutePitch: "pitch"` 表示省略。
-
-### SynthV 操作目录
-
-这些操作由六个 MCP v3 工具在内部路由，不会注册为独立 MCP 工具。仅在
-需要时通过 `sv_describe` 获取其当前 Schema。
-
-| 操作 | 权限 | 用途 |
-|---|---:|---|
-| `bridge_status` | 读取 | 无需往返即可读取心跳。 |
-| `sidebar_status` | 读取 | 读取 MCP 心跳和可选原生侧边栏运行状态。 |
-| `ping` | 读取 | 测试完整的 Node → Lua → Node 链路。 |
-| `reload_bridge` | 控制 | 在当前脚本会话中重载已安装的 Lua Bridge。 |
-| `get_host_info` | 读取 | 读取 SynthV 宿主版本、操作系统、语言、工程和 IPC 信息。 |
-| `host_clipboard` | 控制 | 通过 SynthV 宿主剪贴板 API 读取或写入文本。 |
-| `show_dialog` | 控制 | 显示消息、输入、确认或自定义表单对话框。 |
-| `convert_pitch` | 读取 | 转换 MIDI 音高和频率，并识别黑键。 |
-| `get_project_info` | 读取 | 读取工程、时序、播放、宿主和当前编辑器位置。 |
-| `inspect_score_file` | 读取 | 在 Node 中检查明确提供的本地 MusicXML 或 SMF MIDI，返回 SHA-256 文件保护和可选 part/voice/staff 或 track/channel，并在不修改 SynthV 的前提下预览有界单旋律声部。 |
-| `get_time_axis` | 读取 | 读取全部速度/拍号标记及安全写入指纹。 |
-| `convert_time` | 读取 | 通过当前速度图转换秒、四分音符或 blick，并可按 Blick 网格取整。 |
-| `set_time_axis` | 破坏性 | 添加、替换或删除速度/拍号标记。 |
-| `list_tracks` | 读取 | 读取轨道摘要、Group 数量、音符数量和混音器状态。 |
-| `list_note_groups` | 读取 | 读取可复用库 Group、UUID、指纹和引用数。 |
-| `create_note_group` | 写入 | 创建可选包含音符的可复用库 Group。 |
-| `clone_note_group` | 写入 | 把轨道或库 Group 深度克隆到库中。 |
-| `delete_note_group` | 破坏性 | 删除一个库 Group 及其所有引用。 |
-| `add_group_reference` | 写入 | 在轨道上放置库 Group。 |
-| `clone_group_reference` | 写入 | 在另一轨道上创建链接或深度复制的引用。 |
-| `get_track_notes` | 读取 | 读取 Group、UUID、音符、属性、偏移和安全写入指纹。 |
-| `get_group_voice` | 读取 | 读取类型化 Group Voice 默认值、唱法（Vocal Mode）、实验性 Unison 字段和目标选区上下文。 |
-| `get_note_phoneme_data` | 读取 | 读取用户/计算音素、音素集覆盖、单音素属性和音符选区状态，可选紧凑音符索引或秒范围过滤。 |
-| `get_phrase_context` | 读取 | 一次紧凑、可直接写入的选中/范围乐句读取，包含音符与自动化 Guard Token、Voice/唱法（Vocal Mode）、诊断和仅供建议的审核目标。 |
-| `get_selection` | 读取 | 读取选中的 Group、音符、Smart Pitch 控制和指定自动化点。 |
-| `set_selection` | 控制 | 替换、添加、删除或清空编辑器选区，并返回 SynthV 实际报告的选区。 |
-| `get_computed_group_data` | 读取 | 读取计算音素/说唱属性和可选音高采样。 |
-| `add_track` | 写入 | 创建轨道并返回其主 Group 定位器。 |
-| `update_track` | 写入 | 重命名、重新着色或修改 Render Panel 包含状态。 |
-| `clone_track` | 写入 | 通过宿主克隆继承轨道主 Vocal 上下文，可选清空或移调。含非主人声 Group 的源轨默认被拒绝；`nonMainGroupPolicy=detach` 可使其 Group 内容独立，但必须人工核对这些非主 Group 的 Vocal 身份。 |
-| `clone_track_shell` | 写入 | 通过宿主克隆把源轨主 Group 的 Vocal 上下文带到一条已验证为空的轨道，同时移除音符、Smart Pitch、已知自动化、非主 Group，并默认重置混音器。API 无法读取或命名继承到的 Vocal 身份。 |
-| `delete_track` | 破坏性 | 删除经过指纹验证且不是最后一条的轨道。 |
-| `update_group` | 写入 | 修改人声/乐器引用状态和受支持的人声属性。 |
-| `set_group_voice` | 写入 | 使用指纹验证更新类型化 Voice、唱法（Vocal Mode）和经宿主验证的实验性 Unison，可选当前 Group 保护。 |
-| `copy_group_voice` | 写入 | 将源组已存储的文档化 Voice 参数和唱法轴合并到目标组。目标独有唱法及源中未存储的值保持不变；不替换完整 Voice 快照，也不重置默认值。选定的源字段没有已存储值时拒绝写入。返回结果会提示：歌手/声库身份仍不可读取，需在 SynthV 中手动选择。 |
-| `apply_group_tuning` | 破坏性 | 完整预检后，在一个撤销记录中应用同一 Group 的 Voice/唱法、音符/音素及多条自动化调音；若宿主在执行期意外失败，重试前必须先在 SynthV 中撤销一次。 |
-| `delete_group_reference` | 破坏性 | 删除非主人声或乐器引用。 |
-| `import_monophonic_score` | 写入 | 通过受保护 `add_notes` 从刚检查且已确认使用权的本地 MusicXML/MIDI 单旋律声部导入最多 512 个音符；SHA-256 必须仍匹配，源速度只返回审核而不自动应用。 |
-| `add_notes` | 写入 | 向目标 Group 添加音符。V2 默认为 `grouping=ensureNonMain`：目标为轨道主 Group 时创建可复用的非主 Group/引用；使用 `grouping=target` 可写入准确目标 Group。 |
-| `edit_notes` | 写入 | 编辑经过指纹验证的音符。 |
-| `transform_notes` | 破坏性 | 对受保护音符批量应用明确的起音偏移、时值缩放/偏移或音高偏移。V2 可直接变换新鲜 Context 中的全部音符，无需重复索引。 |
-| `set_note_phoneme_properties` | 写入 | 编辑经过指纹/Guard 验证的音素、音素集、音节、时值和强度属性，可选紧凑确认及当前 Group/选中音符保护。 |
-| `delete_notes` | 破坏性 | 删除经过指纹验证的音符。 |
-| `get_note_retakes` | 读取 | 读取 Take 数量和 Bridge 跟踪的 Take ID。 |
-| `generate_note_retake` | 写入 | 生成时值、音高或音色变化。 |
-| `activate_note_retake` | 写入 | 激活默认 Take 或 Bridge 跟踪的 Take。 |
-| `delete_note_retake` | 破坏性 | 删除 Bridge 跟踪的非默认 Take。 |
-| `get_pitch_controls` | 读取 | 读取点/曲线 Smart Pitch 对象及其指纹。 |
-| `add_pitch_controls` | 写入 | 添加点或曲线 Smart Pitch 对象。 |
-| `edit_pitch_controls` | 写入 | 编辑经过指纹验证的 Smart Pitch 对象。 |
-| `delete_pitch_controls` | 破坏性 | 删除经过指纹验证的 Smart Pitch 对象。 |
-| `get_automation` | 读取 | 读取参数定义和控制点，可返回紧凑 Guard Token 代替冗长曲线指纹。 |
-| `sample_automation` | 读取 | 在指定位置采样原生或线性曲线值。 |
-| `simplify_automation` | 破坏性 | 删除曲线范围内不重要的点。 |
-| `set_automation_points` | 写入 | 添加/更新经过指纹或 Guard 验证的点，可先清除全部或一个范围，并返回紧凑确认。 |
-| `clear_automation` | 破坏性 | 清除完整曲线或选中范围。 |
-| `get_editor_view` | 读取 | 读取编辑器时间/数值范围和像素比例。 |
-| `set_editor_view` | 控制 | 移动或缩放主编辑器/编曲视口，并返回宿主最终的导航状态。 |
-| `snap_position` | 读取 | 使用当前编辑器网格设置吸附位置。 |
-| `convert_editor_coordinates` | 读取 | 转换时间/数值与 x/y 编辑器坐标。 |
-| `script_data` | 读/写 | 管理 SynthV 对象上具有命名空间的 Bridge JSON 元数据。 |
-| `get_track_mixer` | 读取 | 读取增益、声像、静音和独奏。 |
-| `set_track_mixer` | 写入 | 修改增益、声像、静音和独奏。 |
-| `apply_transaction` | 破坏性 | 在一个撤销记录中应用最多 32 个写入。独立步骤会完整预检；后续步骤可用 `$result` 取得前一步结果，并在执行前即时预检。它提供单次撤销恢复边界，不是自动回滚。 |
-| `rollback_transaction` | 破坏性 | 在一个新的撤销记录中应用已保存的受保护事务反向步骤。 |
-| `create_harmony_track` | 写入 | 克隆受保护人声轨、移调、把可选音域适配到八度，并设置混音器。 |
-| `humanize_notes` | 破坏性 | 对起音/时值应用确定性的指纹保护变化，可选保留和弦对齐。 |
-| `apply_expression_preset` | 破坏性 | 通过音符属性或自动化应用 Scoop、Falloff、Vibrato、Crescendo 或 Breathiness。 |
-| `fit_lyrics` | 破坏性 | 把音节和可选音素分配到经过指纹验证的音符。 |
-| `playback` | 控制 | 读取状态、播放、暂停、停止、定位或循环，并返回宿主实际状态和播放头。 |
-
-所有轨道、Group 和音符索引均从 **1 开始**，与 SynthV Lua API 一致。
-除非返回字段明确标记为 `absolute`，音符和自动化坐标均为 Group 局部 blick。
-播放位置使用秒。
-
-### 紧凑调音响应
-
-`get_note_phoneme_data`、`get_automation` 和 `sample_automation` 接受
-`responseMode: "compact"`。完整模式仍为默认值。
-
-- `get_track_notes` 在 `sv_query` 投影路径上会压缩嵌套的 `groups[].notes`：
-  丢弃同一位置的 blick/四分音符重复字段（`absoluteOnset`、`absoluteEnd`、
-  `absoluteEndSeconds`、`endPosition`、`onsetQuarters`、`durationQuarters`），
-  保留 Group 内的 `onset`/`duration` 与 `absoluteOnsetSeconds`/
-  `absoluteDurationSeconds`；单个 Group 达到 24 个音符时以 `{columns, rows}`
-  返回并标记 `noteFormat: "rows"`。音符守卫在投影前已捕获，`contextId` 仍然有效。
-- `sv_query.fields` 只过滤结果根对象的顶层 key。`groups[].notes` 这类嵌套集合
-  不参与列投影；传入音符字段名只会得到信封字段，外加一条 `projectionWarning`
-  列出根对象实际可用的 key。
-
-- 乐句调音前优先使用 `get_phrase_context`。没有显式作用域时，它可以在
-  无需先读取选区的情况下定位当前钢琴卷帘 Group，并优先使用选中音符；
-  一次请求即可组合紧凑音高/时值/音素音符、Group Voice/唱法（Vocal Mode）和
-  有界自动化摘要。嵌套音符与自动化指纹会变成短 Guard Token。
-- 乐句诊断会识别时值重叠、大音程跳进、长音、适合换气的间隙和密集短音，
-  不会编辑工程。`pitchAnalysisFrames` 可选汇总计算轮廓，而不返回原始帧。
-- 乐句音符的秒数取整到 0.1 ms。空值/默认音素覆盖、零微调和 false 选中
-  标记会省略；非默认值保留，并在响应中报告 `noteDefaultsOmitted` 和
-  `secondsPrecision`。
-- 绝对范围默认为 `rangeMatch: "overlap"`，可保留跨越范围起点的长音。
-  只有能接受仅覆盖起音时才使用 `rangeMatch: "onset"`；它会在排序后的
-  Group 中进行二分查找，并报告 `coverage: "onset_only"` 及
-  `mayExcludeEarlierSustains: true`。
-- 无作用域乐句分页在仍有音符时返回不透明的 `page.cursorToken`。再次传入
-  `cursorToken`，无需重复 Group 定位器和数字偏移。服务器会拒绝过期
-  Token；如果边界音符发生变化，SynthV 会返回 `STALE_RANGE_CURSOR`。
-- `get_phrase_context.ranges` 接受最多 32 个绝对范围。执行器只扫描 Group
-  一次，每个匹配音符只序列化一次，并返回共享 `notes` 数组；每个范围通过
-  `noteIndices` 引用音符，并拥有自己的诊断、自动化摘要和可选音高摘要。
-- 音素读取可按准确 `noteIndices` 和/或重叠的绝对
-  `startSeconds`/`endSeconds` 范围过滤。紧凑音符包含时值、歌词、计算
-  音素、用户覆盖和短 `guardToken`；除非明确请求，否则省略大型原始与
-  计算属性对象。
-- 精确索引和普通分页读取只获取返回的音符页。时间范围只转换两次边界，
-  并在第一个更晚的音符后停止扫描。仅刷新 Guard Token 或用户覆盖时，
-  可设置 `includeComputedPhonemes: false`，避免整个 Group 的宿主计算。
-- 可把音符 `guardToken` 传给 `set_note_phoneme_properties`，代替冗长的
-  `fingerprint`。
-- 紧凑自动化读取返回 `guardToken`；把它作为 `expectedGuardToken` 传给
-  `set_automation_points`。
-- 这些 Guard Token 也可用于 `apply_transaction` 步骤；请求到达文件 IPC
-  前会先完成解析。
-- 紧凑写入响应返回数量和替换后的 Guard Token，而不是完整音符或自动化
-  曲线。
-
-Guard Token 是不透明的，并且只存在于当前 MCP 服务器进程。MCP v3 会自动
-检测 SynthV/Bridge 会话 Token 变化，并清除全部缓存 Context 和 Guard
-Token。此后的写入会返回 `SYNTHV_SESSION_CHANGED`；请重新读取目标，并用
-新 Context 构建写入。无旧 Context 的新读取可以直接继续，并返回
-`sessionReset`。淘汰或 `UNKNOWN_GUARD_TOKEN` 同样需要重新读取。服务器会在
-MCP 发起热重载时等待新会话 Token，并在 `sv_status` 返回前清除这些缓存，
-从而关闭“先确认重载、后发布新心跳”的时序窗口。服务器会在
-请求到达 SynthV 前把 Token 解析为原始完整指纹，因此陈旧写入保护不变。
-
-音素写入会先在分离的克隆上验证，再创建撤销记录，之后还会在工程音符上
-再次验证。如果宿主或较旧 Voice 对请求值进行量化或忽略，会返回
-`HOST_POSTCONDITION_FAILED`。稳定音素范围会直接校验：位置/活跃度
-`0..1`、强度 `-1..1`，`leftOffset` 为有限秒数且 Bridge 不额外设限。
-启动或首次使用时不再执行范围探测。
-
-### 轨道颜色
-
-轨道写入工具接受向后兼容的 `#RRGGBB` 格式或原生 `AARRGGBB` 值。Bridge
-会在调用 SynthV 前把 `#RRGGBB` 转换为不透明的 `ffRRGGBB`，并验证宿主
-保留的值。轨道读取保留 SynthV 的原始 `displayColor`；可识别时还会返回
-标准化的 `displayColorArgb` 和 `displayColorRgb`。
-
-SynthV 编辑器提供少量预设色板，但公开脚本 API 只把该值定义为十六进制
-字符串。因此 Bridge 会验证编码，但不会把调用方限制在未记录的色板常量。
-
-### 宿主能力差异
-
-部分 SynthV 宿主公开 `Note:getPitchAutoMode()`，但没有公开或无法执行
-`Note:setPitchAutoMode()`。如果请求值已经与音符一致，Bridge 会安全跳过
-Setter。在不兼容宿主上真正修改模式，会在创建撤销记录前返回
-`UNSUPPORTED_HOST_CAPABILITY`。
-
-时间轴替换会在被占用位置执行先删除后添加。每个成功的 `set_time_axis`
-响应都有 `verified: true`；如果宿主没有保留请求的标记，会返回
-`HOST_POSTCONDITION_FAILED`，而不会假报成功。
-
-## 安全编辑工作流
-
-任何 Agent 宿主执行受保护写入时都应按以下顺序：
-
-1. 乐句调音时，在编辑前立即调用 `get_phrase_context`。对于 Group Voice
-   或唱法（Vocal Mode），调用不带定位器的 `get_group_voice`，以当前钢琴卷帘
-   Group 为目标。V2 默认只返回参数、唱法、目标索引和 `contextId`；
-   只有诊断时才请求完整字段。其他工作只读取拥有预期变更的对象。
-2. 展示或在内部构建一个小型、便于审核的变更。
-3. 沿用该次读取返回的 `contextId`（`contextMode: "writeIntent"`）。
-   Runtime 会从这个 Context 填入 Group/引用 UUID 和指纹、轨道指纹、
-   自动化/时间轴指纹以及音符或 Smart Pitch 守卫，因此一次音符编辑只需要
-   `noteIndex` 和 `changes`。只有在不带 `contextId` 写入时才需要手工复制
-   指纹；手工值与 Context 不一致会返回 `CONTEXT_SCOPE_MISMATCH`。
-4. 调用能完成目标的最小写入工具。Group 内容写入默认拒绝有多个引用的
-   Note Group。只有确实要修改全部链接位置时，才使用
-   `sharedGroupPolicy=allowAllReferences`，并同时提供刚读取的
-   `expectedReferenceCount`。同一次调音会修改同一 Group 的
-   Voice/唱法、音符/音素或多条自动化时，优先使用
-   `apply_group_tuning`；有界的多对象批处理使用 `apply_transaction`。
-   独立步骤在写入前预检；依赖前一步 `$result` 的步骤只能在执行前即时检查。
-5. SynthV 返回任何 `STALE_*` 错误时重新读取，不进行猜测。
-
-一次紧凑读取应支持一批完整的相关变更。如果只修改了 Group Voice，不要
-通过读取整个选区或整首歌曲来刷新 `contextId`。
-
-大批量编辑要分批，而不是一次拉满。`edit_notes` 和 `delete_notes` 每次调用
-最多接受 512 项，但这个上限只是协议边界：SynthV 2.2.1 在大批量音符写入下
-很脆弱，因此每次调用建议不超过约 60 项。
-
-一个 `writeIntent` `contextId` 可以服务多批写入。Context 对每个音符单独签发
-守卫，因此只要该批目标音符仍与读取时的指纹一致，写入就会成功。做法是：一次
-读取覆盖全部目标音符的页，然后用同一个 `contextId` 发送互不重叠的多批。
-
-以下两种情况必须重新读取：
-
-- Context 已经改过的音符会以 `STALE_NOTE` 和 `retry: query_again` 被拒绝，
-  再次修改同一个音符需要新的读取；
-- `add_notes` 或 `delete_notes` 会移动编辑位置之后的音符索引，所有被移动的
-  音符在旧 Context 下都会 `STALE_NOTE`。
-
-两种情况都在写入前失败，所以过于乐观的复用只会浪费一次调用，不会造成错误编辑。
-
-音符指纹包含 Group UUID、音符索引、起点、时值、音高、微调、歌词、音素、
-语言、音乐类型、音高模式、说唱重音、Retake 数量和音符属性。这可以防止
-Agent 把旧计划应用到用户已经修改的音符。
+索引从 1 开始，音符位置是音符组内的 blick，播放时间以秒为单位。全部动作，
+以及 Context、守卫令牌、分页和紧凑响应的说明，见[动作参考](docs/actions_cn.md)。
 
 ## 请求示例
 
 ```text
-读取 SynthV 当前选中的音符。先展示修改计划，然后只把最后一个音符延长
-半个四分音符。使用最新读取返回的指纹。
+读取选中的音符，先展示计划修改的内容，然后只把最后一个音符延长半拍。
 ```
 
 ```text
-读取当前 Group 的响度自动化。在选中乐句上添加柔和的 3 dB 渐强，不要
-删除乐句范围外的控制点。
+读取当前音符组的响度曲线，在选中的乐句上加一个平缓的 3 dB 渐强，不要动乐句以外的点。
 ```
 
 ```text
-读取轨道 1，并在选中音符下方创建低小三度和声轨。在列出最终音高并警告
-任何超出 MIDI 0–127 的音符前，不要应用修改。
+把当前音符组的调式设为 D Dorian。
 ```
 
 ```text
-读取轨道 1，然后将其克隆为“和声 -3st”，transposeSemitones 设为 -3。
-使用最新轨道指纹。如果它包含非主人声 Group，除非我明确同意分离其内容并
-人工核对这些 Vocal，否则停止。
-```
-
-```text
-检查 D:\scores\melody.musicxml，但不要修改 SynthV。列出可选的
-part/voice/staff、重叠状态、SHA-256 保护和音符预览。只有在我确认有权使用
-该文件后，才导入选定的单旋律声部。
+在不修改 SynthV 的前提下预览 D:\scores\melody.musicxml，列出声部、重叠情况和音符预览；
+等我确认有使用权后，再导入其中一条旋律。
 ```
 
 更多示例见 [examples/prompts.md](examples/prompts.md)。
 
 ## 配置
 
-Node 服务器和 SynthV 脚本必须解析到**同一个物理 IPC 目录**。
+MCP 服务器和 SynthV 脚本必须使用**同一个 IPC 目录**。
 
 | 变量 | 默认值 | 含义 |
 |---|---:|---|
-| `SYNTHV_AGENT_BRIDGE_DIR` | 操作系统临时目录 | 共享 IPC 目录。 |
-| `SYNTHV_AGENT_BRIDGE_TIMEOUT_MS` | `30000` | 最大响应等待时间。默认值为冷启动的 SynthV 宿主处理首个请求留出余量。 |
-| `SYNTHV_AGENT_BRIDGE_POLL_MS` | `10` | Node 响应轮询间隔。 |
-| `SYNTHV_AGENT_BRIDGE_LOCK_WAIT_MS` | `1000` | 客户端等待单写者锁多久后报 `BRIDGE_BUSY`，取值不超过响应超时。 |
-| `SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS` | `60000` | 可恢复废弃请求文件和锁的时间阈值，必须大于响应超时。 |
-| `SYNTHV_AGENT_BRIDGE_STATUS_STALE_MS` | `5000` | 仍视为已连接的最大心跳年龄。 |
+| `SYNTHV_AGENT_BRIDGE_DIR` | 系统临时目录 | 共享 IPC 目录；请在启动 SynthV 脚本前创建好。 |
+| `SYNTHV_AGENT_BRIDGE_TIMEOUT_MS` | `30000` | 等待响应的最长时间。 |
+| `SYNTHV_AGENT_BRIDGE_POLL_MS` | `10` | 轮询响应的间隔。 |
+| `SYNTHV_AGENT_BRIDGE_LOCK_WAIT_MS` | `1000` | 等待单写入锁的时间，超时后返回 `BRIDGE_BUSY`。 |
+| `SYNTHV_AGENT_BRIDGE_STALE_REQUEST_MS` | `60000` | 超过这个时长的遗留请求和锁会被回收，必须大于超时时间。 |
+| `SYNTHV_AGENT_BRIDGE_STATUS_STALE_MS` | `5000` | 心跳在多长时间内视为已连接。 |
 
-使用自定义 IPC 目录时，请在启动 SynthV 脚本前创建它。Node 进程也会创建
-该目录，但文档规定的启动顺序会先启动 SynthV。
+**Windows 搭配 WSL：** 最简单的做法是用 Windows 版 Node.js 运行 MCP 服务器。
+如果服务器跑在 WSL 里，SynthV 一侧不要设置这个变量（它会使用 `%TEMP%`），
+服务器一侧设置 `SYNTHV_AGENT_BRIDGE_DIR=/mnt/c/Users/<你的用户名>/AppData/Local/Temp`。
 
-### Windows 和 WSL
+## 当前限制
 
-SynthV 在 Windows 上运行时，最简单的配置是让 MCP 服务器使用
-**Windows Node.js**。MCP 宿主在 WSL 中运行时，请把 Node 指向 SynthV 默认
-使用的现有 Windows 临时目录：
+- **为稳定性禁用：** 下面这 7 个动作曾导致 SynthV 2.2.1 崩溃，会在到达 SynthV
+  之前被拒绝：
+  - 隔离式音符组克隆和音符组克隆；
+  - 轨道克隆、轨道外壳克隆，以及和声轨；
+  - 事务的应用和回滚。
 
-- SynthV/Windows：不设置 `SYNTHV_AGENT_BRIDGE_DIR`，使脚本使用 `%TEMP%`。
-- Node/WSL：设置
-  `SYNTHV_AGENT_BRIDGE_DIR=/mnt/c/Users/you/AppData/Local/Temp`。
+  关联式音符组引用克隆可以正常使用。
+- **脚本 API 不支持：** 保存工程、渲染音频、读取或选择歌手，以及列出未调整过
+  的唱法。
+- **SynthV 2.3.0：**
+  - 不能再往轨道的主音符组里添加音符，Bridge 默认会把新音符放进单独的音符组；
+  - 轨道效果器参数只读；
+  - 详见 [2.3.0 运行时说明](docs/sv2-api-coverage-v3.md#synthv-230-runtime-delta)。
+- **一次只处理一个请求：** 第二个客户端会短暂等待，然后收到 `BRIDGE_BUSY`。
+- **超时不代表失败：** 超时的写入可能已经在 SynthV 中完成，Agent 会先重新读取
+  再决定是否重试。
+- **部分写入后的恢复：** 失败结果报告 `undoRequired: true` 时，先在 SynthV 中
+  执行一次 **编辑 → 撤销**，再做别的操作。
+- **乐谱导入有上限：** 每次最多从本地文件的一条单声部旋律导入 512 个音符；
+  源文件的速度只会报告，不会自动应用。
 
-如果使用专用子目录，请先创建目录，并为两个进程设置等价的 Windows 和
-WSL 路径写法。SynthV GUI 必须继承 Windows 环境变量，所以修改后需要重启
-SynthV。MCP 服务器可以通过宿主项目 MCP 配置中的环境变量表接收自己的值。
+完整的 SynthV API 覆盖情况见 [API 覆盖矩阵](docs/sv2-api-coverage-v3.md)，
+后续计划见[路线图](docs/roadmap.md)。
 
 ## 开发
 
 ```bash
-npm run typecheck
-npm test
-npm run check
-npm run inspector
-```
-
-可以使用以下命令检查 Lua 语法：
-
-```bash
+npm run check          # 类型检查、构建并运行全部测试
+npm run doctor         # 检查本地 Runtime、Bridge 和 MCP 状态
+npm run inspector      # 打开 MCP Inspector
 luac5.4 -p synthv/SynthVAgentBridge.lua synthv/StopSynthVAgentBridge.lua synthv/SynthVAgentSidebar.lua
 ```
 
-CI 会在 Node 20 和 22 上运行 TypeScript 测试，使用 Lua 5.4 解析三个生产
-Lua 文件，并通过模拟 SynthV 集成框架测试常驻 Bridge 和侧边栏。
+CI 会在 Node 20 和 22 上运行 TypeScript 测试，用 Lua 5.4 解析 Lua 脚本，并在
+模拟的 SynthV 宿主上运行 Bridge 和侧栏。另见 [CONTRIBUTING.md](CONTRIBUTING.md)
+和 [AGENTS.md](AGENTS.md)。
 
-运行以下命令可获取本地安装和连接报告：
+## 文档
 
-```bash
-npm run doctor -- --target "/Synthesizer V Studio 2/脚本目录"
-```
-
-Doctor 默认只检查宿主中立 Runtime 状态：源码/安装版本、脚本准确内容、
-MCP 构建新鲜度、运行中能力指纹、Bridge/MCP 心跳、解析后的 IPC 目录和残留
-处理/控制文件。用 `--host profiles` 才会发现并检查仓库内的全部项目配置；
-添加 `--json` 可获得机器可读输出。Doctor 不读取或写入用户全局宿主设置，
-也不修改 SynthV 工程或安装文件。
-
-## 当前限制
-
-- 同一时间只能有一个请求进行中。第二个客户端会等待单写者锁最多
-  `SYNTHV_AGENT_BRIDGE_LOCK_WAIT_MS`（默认 1 秒），超时后返回 `BRIDGE_BUSY`。
-  两个宿主长期并行驱动 Bridge 仍不受支持。
-- 客户端超时具有不确定性：SynthV 可能仍会完成操作。处理标记会保留到
-  Lua 宿主执行结束；Agent 应先读取当前工程，再决定是否重试写入。
-- 当前构建将 isolated Group clone、Note Group/Track/Track-shell clone、
-  和声轨和 transaction apply/rollback 标记为 experimental，并在工程 IPC
-  前拒绝。linked Group reference clone 仍可用。
-- 侧边栏同一时间只保存一个待处理预览；指向上述实验路径的预览同样在工程
-  IPC 前拒绝。
-- 通用事务 schema 和 Fake Host 实现保留用于诊断：它会拒绝冲突作用域，
-  支持完整字段 `$result`，并对独立/依赖步骤分别执行完整/即时预检；但当前
-  公共 transaction apply/rollback 不可运行。
-- `atomicity: "singleUndoRecord"` 表示一个 SynthV 恢复边界，不表示自动
-  回滚。独立预检失败不会修改工程；依赖预检或宿主执行失败可能发生在前面
-  步骤已经写入之后。
-  错误返回 `undoRequired` 时，重新读取或重试前请立即执行一次
-  **编辑 → 撤销**。
-- 回滚计划设计仍绑定当前工程/会话；当前 `rollback_transaction` 与 apply
-  一起处于实验性禁用状态。
-- 可选侧边栏仅显示连接状态。请求、审核和撤销指导都留在 Agent 对话与
-  SynthV 编辑器中。
-- SynthV 公开脚本 API 不支持工程保存、音频渲染、按显示名称选择已安装
-  歌手数据库、读取 Vocal 身份或 Voice Panel 音阶/模式设置。
-  `clone_track_shell` 的 schema 描述宿主克隆 Vocal 上下文语义，但当前宿主
-  clone 路径因原生崩溃风险被禁用，也无法命名该 Vocal。
-- 本地曲谱支持有意限定为有界导入。它只接受绝对本地 `.xml`、`.musicxml`、
-  `.mxl`、`.mid` 或 `.midi` 路径，并要求先检查、再确认使用权；URL、
-  `.svp`、XML `DOCTYPE`/`ENTITY`、含歧义或复调的声部、已变化的文件哈希，
-  以及超过 512 个音符的导入都会被拒绝。源速度会返回供审核，但不会静默
-  应用到工程。
-- SynthV 2.2.1 会返回 `singers` 和 `spacing`，但公开 `getVoice` 字段列表
-  没有记录它们。因此类型化 Unison 表面属于实验性功能；只有宿主在克隆
-  引用上返回并保留请求字段时才允许写入。
-- Retake API 不会枚举 Take ID，也不公开当前活动 Take ID。因此 Bridge
-  只激活和删除默认 Take，或由自身生成并保存的 ID。
-- 表情预设是有意保持小型的构建块，不是乐句分析或发音质量评分工具。
-- Bridge 尚未在每一个 SynthV 2.x 补丁版本和每一个声库上验证。
-- 只有能够启动可信本地 stdio 进程的聊天/Agent 界面才能直接连接；远程接入
-  需要另行设计带身份验证的传输适配器。
-
-参阅 [docs/roadmap.md](docs/roadmap.md)。
+| 主题 | 文档 |
+|---|---|
+| 安装配置 | [快速开始](docs/quickstart_cn.md) · [Quickstart](docs/quickstart.md) · [Codex](docs/hosts/codex.md) · [Claude Code](docs/hosts/claude-code.md) |
+| 使用 | [动作参考](docs/actions_cn.md) · [错误码](docs/errors-v3.md) · [请求示例](examples/prompts.md) |
+| 设计 | [架构](docs/architecture.md) · [v3 架构](docs/architecture-v3.md) · [协议](docs/protocol.md) · [职责边界](docs/responsibility-boundaries_cn.md) · [架构决策记录](docs/adr/README.md) |
+| 侧栏 | [原生连接面板](docs/sidebar.md) |
+| 覆盖与进度 | [SynthV API 覆盖](docs/sv2-api-coverage-v3.md) · [路线图](docs/roadmap.md) · [更新日志](CHANGELOG.md) |
 
 ## 安全与隐私
 
-这是一个本地控制 Bridge，不会上传工程数据。但任何已连接的 MCP 宿主都
-可以接收工程元数据并请求编辑，因此只应连接可信客户端，并审核破坏性
-工具调用。参阅 [SECURITY.md](SECURITY.md)。
+Bridge 不会上传任何数据。但你连接的任何 MCP 宿主都能读取工程并发起修改，
+所以只连接你信任的客户端，并留意具有破坏性的修改。详见 [SECURITY.md](SECURITY.md)。
 
 ## 致谢
 
-本项目的架构受到 Haruki Okada 概念验证项目
-[`ocadaruma/mcp-svstudio`](https://github.com/ocadaruma/mcp-svstudio)
-启发。该项目证明了本地 MCP 服务器和常驻 SynthV Lua 脚本可以通过文件
-通信。本仓库围绕请求关联、验证、陈旧上下文保护、撤销记录、跨平台路径、
-测试和更广泛的工具表面重新实现了 Bridge。
+本项目的设计受到 Haruki Okada 的概念验证项目
+[`ocadaruma/mcp-svstudio`](https://github.com/ocadaruma/mcp-svstudio) 启发，它证明了
+MCP 服务器可以和常驻的 SynthV Lua 脚本通过文件通信。
 
-Synthesizer V 和 Synthesizer V Studio 是 Dreamtonics 的产品和商标。
-本独立项目与 Dreamtonics 没有关联，也未获得其认可。
+Synthesizer V 和 Synthesizer V Studio 是 Dreamtonics 的产品和商标。本项目是独立
+项目，与 Dreamtonics 没有关联，也未获其认可。
 
 ## 许可证
 
-Apache License 2.0。参阅 [LICENSE](LICENSE)。
+Apache License 2.0，详见 [LICENSE](LICENSE)。
