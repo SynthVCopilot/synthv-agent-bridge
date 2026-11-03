@@ -9,7 +9,7 @@ raw fingerprint, lyrics, phoneme text, complete note list, or curve array.
 | Family and examples | Stage | Project write | Caller action |
 |---|---|---:|---|
 | `INVALID_ARGUMENT`, `CONTEXT_INCOMPATIBLE`, `CONTEXT_SCOPE_MISMATCH` | accepted/contextResolved | No | Correct schema or obtain a matching Context |
-| `SYNTHV_SESSION_CHANGED`, `CONTEXT_NOT_FOUND`, `GUARD_TOKEN_NOT_FOUND` | contextResolved | No | Reread; never reuse the old Context |
+| `SYNTHV_SESSION_CHANGED`, `UNKNOWN_CONTEXT`, `UNKNOWN_GUARD_TOKEN` | contextResolved | No | Reread; never reuse the old Context |
 | `PROJECT_UNAVAILABLE`, `TRACK_NOT_FOUND`, `GROUP_NOT_FOUND`, `SELECTION_UNAVAILABLE` | freshRead | No | Open or reselect the intended target |
 | `STALE_NOTE`, `STALE_AUTOMATION`, `STALE_TRACK`, `STALE_GROUP`, `STALE_TIME_AXIS` | guarded | No | Deliberately reread; do not auto-retry |
 | `SHARED_GROUP_WRITE`, `STALE_GROUP_REFERENCE_COUNT` | guarded | No | Choose explicit all-reference intent with fresh count or isolate |

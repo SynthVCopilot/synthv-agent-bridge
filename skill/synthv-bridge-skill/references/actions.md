@@ -19,24 +19,24 @@ Call `sv_describe` with an action name to get its exact schema before using it.
 | `convert_time` | Blick ↔ second ↔ quarter conversion at the current timeline |
 | `convert_pitch` | MIDI pitch ↔ frequency |
 | `list_tracks` | Tracks, paged with `offset` / `limit` |
-| `list_note_groups` | Library Groups, paged with `offset` / `limit` |
-| `get_track_notes` | Notes in a Group, with guards |
+| `list_note_groups` | Library Groups, paged with `offset` / `limit`; includes `scale` on SynthV 2.3.0+ |
+| `get_track_notes` | Notes in a Group, with guards; includes the Group `scale` on 2.3.0+ |
 | `get_phrase_context` | The bounded phrase read to use before a tuning edit |
 | `get_group_voice` | Group Vocal parameters and discoverable Vocal Modes |
 | `get_note_phoneme_data` | Per-note phonemes and attributes |
 | `get_computed_group_data` | Computed pitch and phonemes, asynchronous |
 | `get_note_retakes` | Retake list for a note |
 | `get_pitch_controls` | Smart Pitch control points |
-| `get_automation` | Automation points and `definition.range` |
+| `get_automation` | Automation points, `interpolation` and `definition.range` |
 | `sample_automation` | Values at explicit positions |
-| `get_track_mixer` | Gain, pan, mute, solo |
+| `get_track_mixer` | Gain, pan, mute, solo; read-only `fx` (compressor, EQ, reverb, room) on 2.3.0+ |
 | `inspect_score_file` | Read-only inspection of a local MusicXML/MIDI path |
 
 `inspect_score_file` runs in Node, not in SynthV. It takes an absolute local
 `.xml`, `.musicxml`, `.mxl`, `.mid`, or `.midi` path — never a URL, never
 `.svp` — and is capped at 512 monophonic notes.
 
-## sv_command — 38 writes
+## sv_command — 39 writes
 
 Timeline
 
@@ -44,7 +44,9 @@ Timeline
 
 Note Groups and References
 
-- `create_note_group`, `delete_note_group`, `update_group`
+- `create_note_group`, `delete_note_group`
+- `update_group` — name, reference state, and on SynthV 2.3.0+ the Group
+  `scale` (`{root, type}` from the host's own scale lists)
 - `add_group_reference`, `delete_group_reference`
 - `clone_group_reference` — `cloneIntent: "linked"` only
 - `clone_note_group` — **disabled**
@@ -57,12 +59,15 @@ Tracks
 Voice
 
 - `set_group_voice`, `apply_group_tuning`
-- `copy_group_voice` — copies documented Voice parameters and Vocal Modes
-  between Group References; it does not change or identify the voicebank
+- `copy_group_voice` (experimental) — copies documented Voice parameters and
+  Vocal Modes between Group References; it does not change or identify the
+  voicebank
 
 Notes
 
-- `add_notes`, `edit_notes`, `transform_notes`, `delete_notes`
+- `add_notes` — defaults to `grouping: "ensureNonMain"`; SynthV 2.3.0 rejects
+  notes in a Track's main Group
+- `edit_notes`, `transform_notes`, `delete_notes`
 - `set_note_phoneme_properties`
 - `humanize_notes`, `apply_expression_preset`, `fit_lyrics`
 - `import_monophonic_score`
@@ -74,7 +79,9 @@ Retakes
 Pitch and automation
 
 - `add_pitch_controls`, `edit_pitch_controls`, `delete_pitch_controls`
-- `set_automation_points`, `simplify_automation`, `clear_automation`
+- `set_automation_points` — also sets `interpolationMethod` (`linear`,
+  `cosine`, `cubic`) on SynthV 2.3.0+
+- `simplify_automation`, `clear_automation`
 
 Project script data
 
@@ -97,7 +104,7 @@ Note edits and deletes additionally need each note's current `fingerprint`.
 | `convert_editor_coordinates` | Pixel ↔ musical coordinates |
 | `host_clipboard` | Read or write the host clipboard |
 | `show_dialog` | Show a host dialog |
-| `playback` | `status`, `pause`, `stop`, `seek`, `loop` |
+| `playback` | `status`, `play`, `pause`, `stop`, `seek`, `loop` |
 
 UI actions change host state, not project data, and create no Undo record.
 

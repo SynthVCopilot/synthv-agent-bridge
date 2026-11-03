@@ -62,7 +62,8 @@ A note:
 | `lyrics` | string | Lyric text |
 | `phonemes` | string | Phoneme override; empty means automatic |
 | `detune` | int | Fine tune in cents |
-| `musicalType` | string | `singing` or `rap` |
+| `languageOverride` | string | Empty for the Group default, or `mandarin`, `japanese`, `english`, `cantonese`, `korean`, `spanish`; SynthV 2.3.0+ adds `french`, `german`, `italian`, `portuguese` |
+| `musicalType` | string | `sing` or `rap` |
 | `noteIndex` | int | 1-based position in the Group |
 | `fingerprint` | string | Guard value; required for edits and deletes |
 | `absoluteOnset` / `absolutePitch` | int | Same values with the Reference's offsets applied |
@@ -78,8 +79,11 @@ An automation curve:
 ```
 
 Parameter names are `pitchDelta`, `vibratoEnv`, `loudness`, `tension`,
-`breathiness`, `voicing`, `gender`, `toneShift`. Read `definition.range` from
-`get_automation` before writing values; ranges differ per parameter.
+`breathiness`, `voicing`, `gender`, `toneShift`, `mouthOpening` and
+`rapIntonation`. Read `definition.range` from `get_automation` before writing
+values; ranges differ per parameter and per SynthV version (for example,
+`tension` is ±2 on 2.3.0). On SynthV 2.3.0+, `set_automation_points` can also
+set `interpolationMethod` to `linear`, `cosine` or `cubic`.
 
 These names and units match the SV Harmony API's `.svp`-mirroring export. Only
 the point representation differs — see [harmony-alignment](../../docs/harmony-alignment.md)
@@ -110,18 +114,40 @@ These fail with `EXPERIMENTAL_CAPABILITY_DISABLED` after reproducible SynthV
 - `apply_transaction`, `rollback_transaction`
 - `clone_group_reference` with `cloneIntent: "isolated"` — linked clone works
 
-## 6. Errors
+## 6. SynthV 2.3.0 differences
+
+Check the host version with `sv_status` (`operation: "host"`) when a request
+depends on these:
+
+- **Main Group.** A Track's main Group can no longer hold notes. `add_notes`
+  defaults to `grouping: "ensureNonMain"`, which creates a separate Group.
+  Do not pass `grouping: "target"` for a main Group.
+- **Scale.** Note Groups have a `scale` (`{root, type}`), returned by Group
+  reads and set with `update_group`. Use roots `C`…`B` with sharps only
+  (`C#`, not `Db`), and types such as `Major`, `NaturalMinor` or `Dorian`.
+  It is Group content, so the shared-Group rules apply.
+- **Phonemes.** SynthV 2.3.0 redesigned its phoneme symbols and added X-SAMPA
+  and the `vf` (vocal fry) phoneme. Phoneme strings are passed through
+  unchanged; take symbols from SynthV's phoneme tables, not memory.
+  `phonesetOverride` maps to the X-SAMPA switch.
+- **Track FX.** `get_track_mixer` returns read-only `fx` parameters
+  (compressor, EQ, reverb, room). There is no write action.
+- **Pitch auto mode.** It can be read but not changed; a change fails with
+  `UNSUPPORTED_HOST_CAPABILITY`.
+
+## 7. Errors
 
 | Result | What it means | Do |
 |---|---|---|
 | `STALE_*` | The target changed since the read | Read that target again |
-| `SYNTHV_SESSION_CHANGED`, `CONTEXT_NOT_FOUND` | Contexts were cleared | Read again; never reuse the old context |
+| `SYNTHV_SESSION_CHANGED`, `UNKNOWN_CONTEXT`, `UNKNOWN_GUARD_TOKEN` | Contexts or Guard Tokens were cleared | Read again; never reuse the old context |
 | `SHARED_GROUP_WRITE` | The Group content is shared by several References | Get explicit all-reference intent, or isolate first |
 | `QUERY_RESPONSE_BUDGET_EXCEEDED` | The read was too large | Narrower range, smaller page, or fewer `include` fields |
 | `HOST_POSTCONDITION_FAILED` | The host did not keep the requested change | If `undoRequired`, one Undo, then read again |
-| `BUILD_MISMATCH`, `PROTOCOL_MISMATCH` | Node and Lua components disagree | Reinstall the whole component set and restart the Bridge |
+| `UNSUPPORTED_HOST_CAPABILITY` | This SynthV version lacks the feature | Do not retry; tell the user what their version cannot do |
+| `BUILD_MISMATCH`, `PROTOCOL_MISMATCH` | Node and Lua components disagree | Ask the user to run `npm run update` (or reinstall the scripts), Rescan in SynthV, restart the Bridge and reconnect the MCP host |
 
-## 7. Working with the user
+## 8. Working with the user
 
 - Ask only for what the current request is missing: the target, the intended
   effect, anything that must not change, and Vocal Mode names when relevant.

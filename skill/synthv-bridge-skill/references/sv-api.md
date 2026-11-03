@@ -17,7 +17,12 @@ at its own protocol boundary for the same reason.
 ## Global `SV`
 
 Conversions: `blick2Quarter`, `blick2Seconds`, `quarter2Blick`, `seconds2Blick`,
-`blickRoundDiv`, `blickRoundTo`, `freq2Pitch`, `pitch2freq`, `blackKey`.
+`blickRoundDiv`, `blickRoundTo`, `freq2Pitch`, `pitch2freq`, `blackKey`. Real
+hosts expose `pitch2freq` as `pitch2Freq`.
+
+Undocumented in 2.3.0: `SV:scaleNotes()` (12 roots, sharps only),
+`SV:scaleTypes()` (15 scale names such as `Major`, `NaturalMinor`, `Dorian`),
+`SV:parameterTypes()` and the `SV.QUARTER` constant.
 
 Access: `getProject`, `getMainEditor`, `getArrangement`, `getPlayback`,
 `getHostInfo`, `getHostClipboard`, `setHostClipboard`.
@@ -69,8 +74,14 @@ changes every one of them — the origin of `SHARED_GROUP_WRITE`.
 `removeNote`, `getParameter(id)`, `getNumPitchControls`, `getPitchControl(i)`,
 `addPitchControl`, `removePitchControl`, `clone`.
 
+SynthV 2.3.0 adds undocumented `getScale`/`setScale` with a `{root, type}`
+table. `setScale` silently ignores unknown values, so the bridge checks them
+against `SV:scaleNotes()`/`SV:scaleTypes()` first. On 2.3.0, `addNote` rejects
+a Track's main Group.
+
 Parameter ids: `pitchDelta`, `vibratoEnv`, `loudness`, `tension`,
-`breathiness`, `voicing`, `gender`, `toneShift`.
+`breathiness`, `voicing`, `gender`, `toneShift`, `mouthOpening`,
+`rapIntonation`.
 
 ## Note
 
@@ -81,6 +92,13 @@ Parameter ids: `pitchDelta`, `vibratoEnv`, `loudness`, `tension`,
 `setPitchAutoMode`, `getRapAccent`, `setRapAccent`, `getAttributes`,
 `setAttributes`, `getRetakes`, `clone`, `getScriptData`, `setScriptData`.
 
+Runtime differences:
+
+- `setPitchAutoMode` is documented but missing on some hosts, including 2.3.0.
+- `setLanguageOverride` stores any string without validation, so the bridge
+  accepts only known language identifiers.
+- On 2.3.0, the `phonesetOverride` attribute is reported as `phoneset`.
+
 ## Automation
 
 `getDefinition`, `getType`, `getInterpolationMethod`, `getAllPoints`,
@@ -90,6 +108,10 @@ Parameter ids: `pitchDelta`, `vibratoEnv`, `loudness`, `tension`,
 `getAllPoints` returns a flat `[blick, value, ...]` array. The bridge reshapes it
 into `[{position, value}]`; `getDefinition` supplies the `range` you should read
 before writing values.
+
+`getInterpolationMethod` returns lowercase `linear`, `cosine` or `cubic` on
+2.3.0, which also adds an undocumented `setInterpolationMethod`. Unknown names
+silently become `linear`.
 
 ## TimeAxis
 
@@ -106,6 +128,9 @@ timeline, never a remembered one.
 `getGainDecibel`, `setGainDecibel`, `getPan`, `setPan`, `isMuted`, `setMuted`,
 `isSolo`, `setSolo`.
 
+SynthV 2.3.0 adds undocumented `getFxParams`/`setFxParams` for the compressor,
+EQ, reverb and room. The bridge only reads them; their ranges are undocumented.
+
 ## PlaybackControl
 
 `getStatus`, `getPlayhead`, `play`, `pause`, `stop`, `seek`, `loop`.
@@ -113,7 +138,9 @@ timeline, never a remembered one.
 ## Views and selection
 
 `MainEditorView`: `getCurrentGroup`, `getCurrentTrack`, `getNavigation`,
-`getSelection`.
+`getSelection`. SynthV 2.3.0 also has undocumented `setCurrentTrack` and
+`setCurrentGroup`. The bridge never calls them, because
+`setCurrentTrack(currentTrack)` crashed the host in 2 of 2 runs.
 
 Selection state: `getSelectedNotes`, `selectNote`, `unselectNote`, `clearNotes`,
 `getSelectedGroups`, `hasSelectedContent`, `hasUnfinishedEdits`.
@@ -129,5 +156,9 @@ Selection state: `getSelectedNotes`, `selectNote`, `unselectNote`, `clearNotes`,
   pending on the first read.
 - **No `.svp` access.** Everything goes through the live project object graph.
 - **Native crash risk.** SynthV 2.2.1 terminates on some clone and transaction
-  paths, which is why those actions are disabled.
+  paths, which is why those actions are disabled. SynthV 2.3.0 also crashed
+  intermittently during script edits in testing.
+- **Undocumented 2.3.0 members.** The official index has not changed since
+  2025-10-09. The bridge's API coverage document records what 2.3.0 adds or
+  behaves differently at runtime.
 - **Modal dialogs block.** They must not be called from a polling loop.
