@@ -24,6 +24,16 @@ All notable changes will be documented in this file.
 - `pitchAutoMode` capability detection checks for presence, because 2.3.0
   exposes host methods as callable userdata rather than Lua functions.
 
+### Security
+
+- Cleared new `npm audit` advisories that failed CI:
+  - `@modelcontextprotocol/sdk` 1.29.0 → 1.32.2;
+  - `zod` 4.4.3 → 4.6.7;
+  - the `@hono/node-server` override 2.0.12 → 2.1.6;
+  - `hono`, `body-parser` and `fast-uri` refreshed in the lockfile.
+
+  Action schemas returned by `sv_describe` are unchanged.
+
 ### Documentation
 
 - Recorded the SynthV 2.3.0 runtime delta, live acceptance results and host
